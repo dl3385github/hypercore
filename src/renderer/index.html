@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>P2P Chat with Hypercore</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <div id="login-screen" class="login-screen">
+      <h1>P2P Chat</h1>
+      <div class="login-form">
+        <input 
+          type="text" 
+          id="username-input" 
+          placeholder="Enter your username" 
+          maxlength="20"
+        >
+        <input 
+          type="text" 
+          id="room-input" 
+          placeholder="Enter room ID (or create new)" 
+          maxlength="30"
+        >
+        <button id="join-btn">Join Chat</button>
+      </div>
+    </div>
+
+    <div id="chat-screen" class="chat-screen hidden">
+      <div class="chat-header">
+        <h2>Hypercore P2P Chat</h2>
+        <div class="connection-info">
+          <span class="room-display">Room: <span id="current-room">default</span></span>
+          <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
+        </div>
+      </div>
+      
+      <div id="messages-container" class="messages-container">
+        <div id="messages" class="messages"></div>
+      </div>
+
+      <div class="message-input-container">
+        <input 
+          type="text" 
+          id="message-input" 
+          placeholder="Type your message..." 
+          maxlength="500"
+        >
+        <button id="send-btn">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html> 

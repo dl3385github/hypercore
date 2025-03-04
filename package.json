@@ -1,0 +1,20 @@
+{
+  "name": "hypercore-p2p-chat",
+  "version": "1.0.0",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["p2p", "chat", "hypercore", "electron"],
+  "author": "",
+  "license": "ISC",
+  "description": "P2P chat application using Hypercore protocol",
+  "dependencies": {
+    "electron": "^28.1.0",
+    "hyperswarm": "^4.6.1",
+    "b4a": "^1.6.4",
+    "hypercore": "^10.18.1",
+    "corestore": "^6.15.13"
+  }
+}
