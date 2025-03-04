@@ -113,15 +113,16 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Handle transcription results
   window.electronAPI.onTranscriptionResult((result) => {
-    const { speaker, text } = result;
-    if (text) {
-      updateTranscription(speaker, text);
+    console.log(`Transcription received for ${result.speaker}: ${result.text}`);
+    if (result.text && result.text.trim()) {
+      updateTranscription(result.speaker, result.text);
     }
   });
   
   // Handle network errors
   window.electronAPI.onNetworkError((error) => {
-    addSystemMessage(`Network error: ${error.message}`);
+    console.error('Network error:', error);
+    addSystemMessage(`⚠️ Network Error: ${error.message || 'Unknown error'}`);
   });
   
   // Listen for summary request
@@ -590,16 +591,23 @@ function handleDataChannelMessage(peerId, message) {
     updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
   } else if (message.type === 'transcript') {
     // Handle transcript message from peer
-    const username = message.username || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
-    console.log(`Received transcript message for ${username}: "${message.text}"`);
+    // Get the speaker from the message or use the peer's username
+    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
     
     // Make sure we store this username for the peer if we don't have it already
-    if (!peerUsernames.has(peerId) && username !== `Peer ${peerId.substring(0, 6)}`) {
-      peerUsernames.set(peerId, username);
+    if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
+      peerUsernames.set(peerId, speaker);
+    }
+    
+    // Skip empty or very short transcriptions
+    if (!message.text || message.text.trim().length < 3) {
+      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
+      return;
     }
     
     // Update UI with the transcript
-    updateTranscription(username, message.text);
+    updateTranscription(speaker, message.text);
   }
 }
 
@@ -900,70 +908,99 @@ async function processIceCandidate(peerId, connection, candidate) {
   }
 }
 
-// Add a remote stream to the UI
+// Add remote stream to video grid
 function addRemoteStream(peerId, stream) {
-  console.log(`Adding remote stream from ${peerId} to UI`);
-  
-  // Create a container for the remote video if it doesn't exist
-  let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-  
-  if (!remoteContainer) {
-    // Clone the template
-    console.log('Creating new remote video container');
-    const template = remoteVideoTemplate.content.cloneNode(true);
-    remoteContainer = template.querySelector('.remote-video-container');
-    remoteContainer.setAttribute('data-peer-id', peerId);
+  try {
+    console.log(`Adding remote stream for peer ${peerId}`);
     
-    // Set the participant name (using username if available, or peerId as fallback)
-    const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
-    remoteContainer.querySelector('.participant-name').textContent = peerUsername;
+    // Create video container if it doesn't exist
+    let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
     
-    // Store username for future reference if not already stored and not a placeholder
-    if (!peerUsernames.has(peerId) && !peerUsername.includes('Peer')) {
-      peerUsernames.set(peerId, peerUsername);
-      console.log(`Stored username "${peerUsername}" for peer ${peerId}`);
+    if (!remoteContainer) {
+      console.log(`Creating new remote container for peer ${peerId}`);
+      
+      // Get the peer's username
+      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+      
+      // Create a new container for this peer
+      remoteContainer = document.createElement('div');
+      remoteContainer.className = 'remote-video-container';
+      remoteContainer.setAttribute('data-peer-id', peerId);
+      
+      // Create video wrapper for aspect ratio
+      const videoWrapper = document.createElement('div');
+      videoWrapper.className = 'video-wrapper';
+      remoteContainer.appendChild(videoWrapper);
+      
+      // Add video element
+      const remoteVideo = document.createElement('video');
+      remoteVideo.className = 'remote-video';
+      remoteVideo.autoplay = true;
+      remoteVideo.playsInline = true;
+      videoWrapper.appendChild(remoteVideo);
+      
+      // Add transcript overlay container inside video wrapper
+      const transcriptOverlay = document.createElement('div');
+      transcriptOverlay.className = 'transcript-overlay hidden';
+      transcriptOverlay.id = `transcript-overlay-${peerId}`;
+      videoWrapper.appendChild(transcriptOverlay);
+      
+      // Add participant name
+      const nameElement = document.createElement('div');
+      nameElement.className = 'participant-name';
+      nameElement.textContent = peerName;
+      remoteContainer.appendChild(nameElement);
+      
+      // Store the username in our map if it's not a placeholder
+      if (peerName !== `Peer ${peerId.substring(0, 6)}`) {
+        peerUsernames.set(peerId, peerName);
+      }
+      
+      // Add video off indicator
+      const videoOffIndicator = document.createElement('div');
+      videoOffIndicator.className = 'video-off-indicator hidden';
+      videoOffIndicator.innerHTML = '📷❌';
+      videoWrapper.appendChild(videoOffIndicator);
+      
+      // Add audio off indicator
+      const audioOffIndicator = document.createElement('div');
+      audioOffIndicator.className = 'audio-off-indicator hidden';
+      audioOffIndicator.innerHTML = '🔇';
+      videoWrapper.appendChild(audioOffIndicator);
+      
+      // Add the container to the video grid
+      remoteVideosContainer.appendChild(remoteContainer);
+      
+      console.log(`Remote container for ${peerName} (${peerId}) added to DOM with transcript overlay`);
     }
     
-    // Add the container to the remote videos section
-    remoteVideosContainer.appendChild(remoteContainer);
-  }
-  
-  // Add the stream to the video element
-  const videoElement = remoteContainer.querySelector('.remote-video');
-  
-  // Only set stream if it's different
-  if (videoElement.srcObject !== stream) {
-    console.log(`Setting video element source for peer ${peerId}`);
-    videoElement.srcObject = stream;
+    // Find the video element
+    const remoteVideo = remoteContainer.querySelector('.remote-video');
     
-    // Add event listeners for video
-    videoElement.onloadedmetadata = () => {
-      console.log(`Remote video metadata loaded for ${peerId}`);
-      videoElement.play().catch(e => {
-        console.error(`Error playing remote video for ${peerId}:`, e);
-      });
-    };
+    // Set the srcObject to display the stream
+    remoteVideo.srcObject = stream;
     
-    videoElement.onerror = (e) => {
-      console.error(`Error with remote video element for ${peerId}:`, e);
-    };
+    // Log active tracks
+    console.log(`Remote stream has ${stream.getTracks().length} tracks:`);
+    stream.getTracks().forEach(track => {
+      console.log(`- ${track.kind} track (${track.id}): enabled=${track.enabled}, readyState=${track.readyState}`);
+    });
     
-    // Ensure the video plays
-    if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA or higher
-      videoElement.play().catch(e => {
-        console.error(`Error playing remote video for ${peerId}:`, e);
-      });
+    // Ensure the container is visible
+    remoteContainer.classList.remove('hidden');
+    
+    // Update connection count
+    updateConnectionCount();
+    
+    // Setup transcription for audio tracks
+    if (stream.getAudioTracks().length > 0) {
+      setupRemoteTranscription(peerId, stream);
     }
-  }
-  
-  // Store the stream in our connections map
-  if (peerConnections.has(peerId)) {
-    peerConnections.get(peerId).stream = stream;
-  }
-  
-  // Set up transcription for this stream if it has audio tracks
-  if (stream.getAudioTracks().length > 0) {
-    setupRemoteTranscription(peerId, stream);
+    
+    return remoteContainer;
+  } catch (error) {
+    console.error(`Error adding remote stream for ${peerId}:`, error);
+    return null;
   }
 }
 
@@ -1116,9 +1153,9 @@ function setupRemoteTranscription(peerId, stream) {
         const buffer = Array.from(uint8Array);
         
         const result = await window.electronAPI.transcribeAudio(buffer, peerUsername);
-        if (result.success) {
+        if (result.success && result.transcription && result.transcription.trim().length >= 3) {
           // Transcription will come back through the onTranscriptionResult listener
-          console.log(`Remote transcription for ${peerUsername} sent for processing`);
+          console.log(`Remote transcription for ${peerUsername}: "${result.transcription}"`);
           
           // Check if dataChannel exists for this peer
           const dataChannel = dataChannels.get(peerId);
@@ -1126,11 +1163,14 @@ function setupRemoteTranscription(peerId, stream) {
             // Share transcript with other peers
             const transcriptMessage = {
               type: 'transcript',
-              username: peerUsername,
-              text: result.transcription
+              speaker: peerUsername,
+              text: result.transcription,
+              timestamp: new Date().toISOString()
             };
             dataChannel.send(JSON.stringify(transcriptMessage));
           }
+        } else if (result.success) {
+          console.log(`Ignoring empty or short remote transcription for ${peerUsername}`);
         }
       } catch (error) {
         console.error(`Error transcribing remote audio from ${peerId}:`, error);
@@ -1158,8 +1198,7 @@ function setupRemoteTranscription(peerId, stream) {
 function updateTranscription(speaker, text) {
   if (!text || text.trim() === '') return;
   
-  let transcriptContainer;
-  let overlayContainer;
+  let overlayContainer = null;
   
   // Store transcript entry
   if (!transcripts.has(speaker)) {
@@ -1172,43 +1211,53 @@ function updateTranscription(speaker, text) {
     text
   });
   
+  console.log(`Updating transcription for ${speaker}: "${text}"`);
+  
   if (speaker === usernameInput.value.trim()) {
     // Local user's transcript
-    transcriptContainer = localTranscriptContainer;
     overlayContainer = document.getElementById('local-overlay-transcript');
+    console.log(`Using local overlay for ${speaker}`);
   } else {
-    // Find the right remote transcript container
-    const containers = document.querySelectorAll('.remote-video-container');
+    // Find the peer ID for this username
+    let targetPeerId = null;
     
-    for (const container of containers) {
-      const nameElement = container.querySelector('.participant-name');
-      if (nameElement && nameElement.textContent === speaker) {
-        transcriptContainer = container.querySelector('.transcript-content');
-        overlayContainer = container.querySelector('.transcript-overlay');
+    // Search through the peerUsernames map
+    for (const [peerId, username] of peerUsernames.entries()) {
+      if (username === speaker) {
+        targetPeerId = peerId;
         break;
+      }
+    }
+    
+    if (targetPeerId) {
+      // Try to find the overlay using the ID format
+      overlayContainer = document.getElementById(`transcript-overlay-${targetPeerId}`);
+      console.log(`Found overlay by ID for ${speaker} (${targetPeerId}): ${overlayContainer ? 'yes' : 'no'}`);
+    }
+    
+    // If not found by ID, try to find by container and name
+    if (!overlayContainer) {
+      const containers = document.querySelectorAll('.remote-video-container');
+      
+      for (const container of containers) {
+        const nameElement = container.querySelector('.participant-name');
+        if (nameElement && nameElement.textContent === speaker) {
+          overlayContainer = container.querySelector('.transcript-overlay');
+          console.log(`Found overlay by name search for ${speaker}`);
+          break;
+        }
       }
     }
     
     if (!overlayContainer) {
       console.warn(`Could not find overlay container for speaker: ${speaker}`);
       // Additional logging to help troubleshoot
-      console.log(`Available remote containers: ${containers.length}`);
-      containers.forEach(c => {
-        const name = c.querySelector('.participant-name').textContent;
-        console.log(`- Container for: "${name}"`);
+      console.log(`Available remote containers: ${document.querySelectorAll('.remote-video-container').length}`);
+      document.querySelectorAll('.remote-video-container').forEach(c => {
+        const name = c.querySelector('.participant-name')?.textContent || 'unknown';
+        const peerId = c.getAttribute('data-peer-id') || 'unknown';
+        console.log(`- Container for: "${name}" (${peerId})`);
       });
-    }
-  }
-  
-  if (transcriptContainer) {
-    // Add the new transcription to the permanent transcript
-    const transcriptEntry = document.createElement('div');
-    transcriptEntry.textContent = `${text}`;
-    transcriptContainer.appendChild(transcriptEntry);
-    
-    // Only keep the last 5 entries to avoid long scrolling text
-    while (transcriptContainer.childNodes.length > 5) {
-      transcriptContainer.removeChild(transcriptContainer.firstChild);
     }
   }
   
@@ -1217,29 +1266,19 @@ function updateTranscription(speaker, text) {
     overlayContainer.textContent = text;
     overlayContainer.classList.remove('hidden');
     
-    // Hide the overlay after 3 seconds of inactivity
+    // Make overlay more visible
+    overlayContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    overlayContainer.style.color = 'white';
+    overlayContainer.style.padding = '8px';
+    overlayContainer.style.borderRadius = '4px';
+    overlayContainer.style.maxHeight = '60px';
+    overlayContainer.style.overflow = 'auto';
+    
+    // Hide the overlay after 5 seconds of inactivity
     clearTimeout(overlayContainer.fadeTimeout);
     overlayContainer.fadeTimeout = setTimeout(() => {
       overlayContainer.classList.add('hidden');
-    }, 3000);
-  }
-  
-  // If we're using a data channel, also send to peers
-  if (speaker === usernameInput.value.trim()) {
-    // Send our transcript to all connected peers
-    dataChannels.forEach((channel, peerId) => {
-      if (channel.readyState === 'open') {
-        try {
-          channel.send(JSON.stringify({
-            type: 'transcript',
-            username: speaker,
-            text: text
-          }));
-        } catch (error) {
-          console.error(`Error sending transcript to peer ${peerId}:`, error);
-        }
-      }
-    });
+    }, 5000);
   }
 }
 
@@ -1410,4 +1449,39 @@ async function generateCallSummary() {
   } catch (error) {
     console.error('Error generating call summary:', error);
   }
-} 
+}
+
+// Function to handle application exit
+async function handleAppExit() {
+  try {
+    // Ask user if they want to save summary before quitting
+    if (transcripts.size > 0) {
+      const wantToSave = confirm('Would you like to save a summary of this call before quitting?');
+      if (wantToSave) {
+        await generateCallSummary();
+      }
+    }
+    
+    // Clean up connections
+    for (const peerId of Object.keys(peerConnections)) {
+      cleanupPeerConnection(peerId);
+    }
+    
+    // Stop local media
+    stopLocalMedia();
+    
+    // Close the window
+    window.electronAPI.quitApp();
+    
+  } catch (error) {
+    console.error('Error during application exit:', error);
+    window.electronAPI.quitApp(); // Force quit if there's an error
+  }
+}
+
+// Handle window close event
+window.addEventListener('beforeunload', (event) => {
+  // The event is handled by the main process
+  event.preventDefault();
+  handleAppExit();
+}); 

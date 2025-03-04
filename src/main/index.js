@@ -124,19 +124,24 @@ function setupIpcHandlers() {
   ipcMain.handle('set-username', (event, name) => {
     username = name;
     console.log(`Username set to: ${username}`);
-    return true;
+    return { success: true };
   });
   
   // Handle room joining
   ipcMain.handle('join-room', async (event, roomId) => {
     try {
       console.log(`Joining room: ${roomId}`);
+      currentRoom = roomId;
       
-      // Leave current room if any
-      await leaveRoom();
+      // Close previous connections if any
+      if (activeSwarm) {
+        leaveCurrentRoom();
+      }
       
       // Join the new room
-      return await joinRoom(roomId);
+      await joinRoom(roomId);
+      
+      return { success: true };
     } catch (error) {
       console.error('Error joining room:', error);
       return { 
@@ -153,6 +158,13 @@ function setupIpcHandlers() {
     }
     
     return activeSwarm.keyPair.publicKey.toString('hex');
+  });
+
+  // Handle application quit request
+  ipcMain.handle('quit-app', (event) => {
+    console.log('Quit application requested by renderer');
+    app.quit();
+    return { success: true };
   });
 
   // Handle sending messages
@@ -374,8 +386,15 @@ async function transcribeWithWhisper(audioFilePath) {
       language: "en",
     });
     
-    console.log('Transcription received:', transcription.text);
-    return transcription.text;
+    // Filter out empty or very short transcriptions
+    const text = transcription.text.trim();
+    if (!text || text.length < 3) {
+      console.log('Transcription ignored (too short):', text);
+      return '';  // Return empty string to indicate no useful transcription
+    }
+    
+    console.log('Transcription received:', text);
+    return text;
   } catch (error) {
     console.error('Error using Whisper API:', error);
     throw new Error(`Whisper API error: ${error.message}`);

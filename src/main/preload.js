@@ -52,6 +52,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('get-own-id');
   },
   
+  // Quit the application
+  quitApp: () => {
+    logEvent('quitApp', 'Application exit requested');
+    return ipcRenderer.invoke('quit-app');
+  },
+  
   // Receive new messages
   onNewMessage: (callback) => {
     console.log('[Preload] Setting up onNewMessage listener');
