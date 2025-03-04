@@ -18,16 +18,18 @@ const saveTranscriptButton = document.getElementById('save-transcript-btn');
 
 // State variables
 let peers = new Set();
-let currentRoom = '';
+let currentRoom = null;
 let localStream = null;
-let isVideoEnabled = true;
-let isAudioEnabled = true;
-let peerConnections = new Map(); // Key: peerId, Value: {connection, stream}
-let transcriptionIntervals = new Map(); // Tracking transcription timers for each peer
+let isVideoEnabled = false;
+let isAudioEnabled = false;
+let peerConnections = new Map(); // Map of peer ID to connection object
+let transcriptionIntervals = new Map(); // Map of peer ID to transcription interval
 let localTranscriptContainer = document.querySelector('#local-transcript .transcript-content');
 // Store transcripts by participant for later saving
 let transcripts = new Map(); // Key: username, Value: Array of transcript entries
-let dataChannels = new Map(); // Key: peerId, Value: RTCDataChannel
+let dataChannels = new Map(); // Map of peer ID to data channel
+let localTranscriptionInterval = null;
+let pendingIceCandidates = new Map(); // Map of peer ID to array of pending ICE candidates
 
 // Media recording
 let mediaRecorder = null;
@@ -750,41 +752,51 @@ async function handleSignalReceived(peerId, from, signal) {
       try {
         await connection.setRemoteDescription(rtcSessionDescription);
         console.log(`Successfully set remote description (offer) for ${peerId}`);
+        
+        // Process any pending ICE candidates now that we have a remote description
+        if (pendingIceCandidates.has(peerId)) {
+          console.log(`Processing ${pendingIceCandidates.get(peerId).length} pending ICE candidates for ${peerId}`);
+          const candidates = pendingIceCandidates.get(peerId);
+          for (const candidate of candidates) {
+            await processIceCandidate(peerId, connection, candidate);
+          }
+          pendingIceCandidates.delete(peerId);
+        }
+        
+        // Create and send answer
+        console.log(`Creating answer for ${peerId}`);
+        const answer = await connection.createAnswer();
+        await connection.setLocalDescription(answer);
+        
+        // Wait a moment to ensure the local description is fully set
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Ensure we have a valid local description before sending
+        if (!connection.localDescription) {
+          console.error(`No local description available for answer to ${peerId}`);
+          return;
+        }
+        
+        console.log(`Sending answer to ${peerId}`);
+        window.electronAPI.sendSignal(peerId, {
+          type: 'answer',
+          sdp: {
+            type: connection.localDescription.type,
+            sdp: connection.localDescription.sdp
+          }
+        }).then(result => {
+          if (!result.success) {
+            console.error(`Failed to send answer to ${peerId}:`, result.error);
+          } else {
+            console.log(`Successfully sent answer to ${peerId}`);
+          }
+        }).catch(err => {
+          console.error(`Error sending answer to ${peerId}:`, err);
+        });
       } catch (error) {
         console.error(`Failed to set remote description (offer) for ${peerId}:`, error);
         return;
       }
-      
-      // Create and send answer
-      console.log(`Creating answer for ${peerId}`);
-      const answer = await connection.createAnswer();
-      await connection.setLocalDescription(answer);
-      
-      // Wait a moment to ensure the local description is fully set
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Ensure we have a valid local description before sending
-      if (!connection.localDescription) {
-        console.error(`No local description available for answer to ${peerId}`);
-        return;
-      }
-      
-      console.log(`Sending answer to ${peerId}`);
-      window.electronAPI.sendSignal(peerId, {
-        type: 'answer',
-        sdp: {
-          type: connection.localDescription.type,
-          sdp: connection.localDescription.sdp
-        }
-      }).then(result => {
-        if (!result.success) {
-          console.error(`Failed to send answer to ${peerId}:`, result.error);
-        } else {
-          console.log(`Successfully sent answer to ${peerId}`);
-        }
-      }).catch(err => {
-        console.error(`Error sending answer to ${peerId}:`, err);
-      });
       
     } else if (signal.type === 'answer') {
       // Make sure we have a valid SDP object
@@ -803,6 +815,16 @@ async function handleSignalReceived(peerId, from, signal) {
       try {
         await connection.setRemoteDescription(rtcSessionDescription);
         console.log(`Successfully set remote description (answer) for ${peerId}`);
+        
+        // Process any pending ICE candidates now that we have a remote description
+        if (pendingIceCandidates.has(peerId)) {
+          console.log(`Processing ${pendingIceCandidates.get(peerId).length} pending ICE candidates for ${peerId}`);
+          const candidates = pendingIceCandidates.get(peerId);
+          for (const candidate of candidates) {
+            await processIceCandidate(peerId, connection, candidate);
+          }
+          pendingIceCandidates.delete(peerId);
+        }
       } catch (error) {
         console.error(`Failed to set remote description (answer) for ${peerId}:`, error);
         return;
@@ -814,38 +836,54 @@ async function handleSignalReceived(peerId, from, signal) {
         return;
       }
       
-      console.log(`Processing ICE candidate from ${peerId}`, signal.candidate);
-      try {
-        // Check if the ICE candidate has required fields before adding
-        if (signal.candidate.sdpMid !== null || signal.candidate.sdpMLineIndex !== null) {
-          // Create a proper RTCIceCandidate object from the serialized data
-          const candidate = new RTCIceCandidate({
-            candidate: signal.candidate.candidate,
-            sdpMid: signal.candidate.sdpMid,
-            sdpMLineIndex: signal.candidate.sdpMLineIndex,
-            usernameFragment: signal.candidate.usernameFragment
-          });
-          
-          console.log(`Created RTCIceCandidate object:`, candidate);
-          
-          try {
-            await connection.addIceCandidate(candidate);
-            console.log(`Successfully added ICE candidate from ${peerId}`);
-          } catch (err) {
-            console.error(`Error adding ICE candidate from ${peerId}:`, err);
-          }
-        } else {
-          console.warn(`Skipping invalid ICE candidate from ${peerId}: missing sdpMid or sdpMLineIndex`);
+      // If we don't have a remote description yet, buffer the ICE candidate
+      if (!connection.remoteDescription || !connection.remoteDescription.type) {
+        console.log(`Buffering ICE candidate for ${peerId} until remote description is set`);
+        if (!pendingIceCandidates.has(peerId)) {
+          pendingIceCandidates.set(peerId, []);
         }
-      } catch (err) {
-        // Only log error if connection hasn't failed
-        if (connection.iceConnectionState !== 'failed') {
-          console.error(`Error adding ICE candidate from ${peerId}:`, err);
-        }
+        pendingIceCandidates.get(peerId).push(signal.candidate);
+        return;
       }
+      
+      // Process the ICE candidate
+      await processIceCandidate(peerId, connection, signal.candidate);
     }
   } catch (error) {
     console.error(`Error handling signal from ${peerId}:`, error);
+  }
+}
+
+// Process an ICE candidate
+async function processIceCandidate(peerId, connection, candidate) {
+  console.log(`Processing ICE candidate for ${peerId}`, candidate);
+  try {
+    // Check if the ICE candidate has required fields before adding
+    if (candidate.sdpMid !== null || candidate.sdpMLineIndex !== null) {
+      // Create a proper RTCIceCandidate object from the serialized data
+      const iceCandidate = new RTCIceCandidate({
+        candidate: candidate.candidate,
+        sdpMid: candidate.sdpMid,
+        sdpMLineIndex: candidate.sdpMLineIndex,
+        usernameFragment: candidate.usernameFragment
+      });
+      
+      console.log(`Created RTCIceCandidate object:`, iceCandidate);
+      
+      try {
+        await connection.addIceCandidate(iceCandidate);
+        console.log(`Successfully added ICE candidate for ${peerId}`);
+      } catch (err) {
+        console.error(`Error adding ICE candidate for ${peerId}:`, err);
+      }
+    } else {
+      console.warn(`Skipping invalid ICE candidate for ${peerId}: missing sdpMid or sdpMLineIndex`, candidate);
+    }
+  } catch (err) {
+    // Only log error if connection hasn't failed
+    if (connection.iceConnectionState !== 'failed') {
+      console.error(`Error processing ICE candidate for ${peerId}:`, err);
+    }
   }
 }
 
