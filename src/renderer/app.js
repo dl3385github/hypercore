@@ -14,7 +14,7 @@ const remoteVideosContainer = document.getElementById('remote-videos');
 const toggleVideoButton = document.getElementById('toggle-video');
 const toggleAudioButton = document.getElementById('toggle-audio');
 const remoteVideoTemplate = document.getElementById('remote-video-template');
-const saveTranscriptButton = document.getElementById('save-transcript-btn');
+const saveTranscriptButton = document.getElementById('save-raw-transcript-btn');
 const saveAllTranscriptsButton = document.getElementById('save-all-transcripts-btn');
 const chatContainer = document.querySelector('.chat-container');
 
@@ -81,8 +81,8 @@ document.addEventListener('DOMContentLoaded', () => {
   toggleAudioButton.addEventListener('click', toggleAudio);
   
   // Set up save transcript buttons
-  saveTranscriptButton.addEventListener('click', () => saveTranscript(usernameInput.value.trim()));
-  saveAllTranscriptsButton.addEventListener('click', saveAllTranscripts);
+  saveTranscriptButton.addEventListener('click', () => saveAllTranscripts(false));
+  saveAllTranscriptsButton.addEventListener('click', () => saveAllTranscripts(true));
   
   // Ensure chat container stays visible
   // Create a MutationObserver to watch for style changes
@@ -158,6 +158,17 @@ document.addEventListener('DOMContentLoaded', () => {
       addSystemMessage(`Failed to generate call summary: ${result.error}`);
     }
   });
+  
+  // Update button text and ID
+  if (saveTranscriptButton) {
+    saveTranscriptButton.textContent = 'Save Raw Transcript';
+    saveTranscriptButton.id = 'save-raw-transcript-btn';
+  }
+  
+  const saveAllTranscriptsButton = document.getElementById('save-all-transcripts-btn');
+  if (saveAllTranscriptsButton) {
+    saveAllTranscriptsButton.textContent = 'Save Summary';
+  }
 });
 
 // Generate a random room ID if none provided
@@ -928,72 +939,59 @@ async function processIceCandidate(peerId, connection, candidate) {
 
 // Add a remote stream to the UI
 function addRemoteStream(peerId, stream) {
-  console.log(`Adding remote stream from ${peerId} to UI`);
-  
-  // Create a container for the remote video if it doesn't exist
-  let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-  
-  if (!remoteContainer) {
-    // Clone the template
-    console.log('Creating new remote video container');
-    const template = remoteVideoTemplate.content.cloneNode(true);
-    remoteContainer = template.querySelector('.remote-video-container');
-    remoteContainer.setAttribute('data-peer-id', peerId);
+  try {
+    console.log(`Adding remote stream from peer ${peerId}`);
     
-    // Set the participant name (using peerId for now)
-    const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
-    remoteContainer.querySelector('.participant-name').textContent = peerUsername;
+    // Check if there's already a container for this peer
+    let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
     
-    // Initialize transcript container
-    const transcriptContainer = remoteContainer.querySelector('.transcript-container');
-    transcriptContainer.setAttribute('id', `transcript-${peerId}`);
-    
-    // Add the container to the remote videos section
-    remoteVideosContainer.appendChild(remoteContainer);
-    
-    // Setup remote transcription with proper labels
-    if (stream.getAudioTracks().length > 0) {
-      setupRemoteTranscription(peerId, stream);
+    if (!remoteContainer) {
+      // Clone the template
+      const template = document.getElementById('remote-video-template');
+      const clone = document.importNode(template.content, true);
+      remoteContainer = clone.querySelector('.remote-video-container');
+      
+      // Set peer ID as a data attribute
+      remoteContainer.setAttribute('data-peer-id', peerId);
+      
+      // Get and set username
+      const peerUsername = getPeerUsername(peerId);
+      if (peerUsername) {
+        remoteContainer.setAttribute('data-username', peerUsername);
+        const nameElement = remoteContainer.querySelector('.participant-name');
+        if (nameElement) {
+          nameElement.textContent = peerUsername;
+        }
+      }
+      
+      // Add to the DOM
+      document.getElementById('remote-videos').appendChild(remoteContainer);
     }
-  }
-  
-  // Add the stream to the video element
-  const videoElement = remoteContainer.querySelector('.remote-video');
-  
-  // Only set stream if it's different
-  if (videoElement.srcObject !== stream) {
-    console.log(`Setting video element source for peer ${peerId}`);
-    videoElement.srcObject = stream;
     
-    // Add event listeners for video
-    videoElement.onloadedmetadata = () => {
-      console.log(`Remote video metadata loaded for ${peerId}`);
-      videoElement.play().catch(e => {
-        console.error(`Error playing remote video for ${peerId}:`, e);
-      });
-    };
-    
-    videoElement.onerror = (e) => {
-      console.error(`Error with remote video element for ${peerId}:`, e);
-    };
-    
-    // Ensure the video plays
-    if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA or higher
-      videoElement.play().catch(e => {
-        console.error(`Error playing remote video that was already loaded for ${peerId}:`, e);
-      });
+    const videoElement = remoteContainer.querySelector('.remote-video');
+    if (videoElement) {
+      videoElement.srcObject = stream;
+      
+      videoElement.onloadedmetadata = () => {
+        videoElement.play().catch(error => {
+          console.error(`Error playing remote video: ${error.message}`);
+        });
+      };
     }
+    
+    // Update media state indicators
+    updateRemoteMediaState(
+      peerId, 
+      getPeerUsername(peerId),
+      peerMediaStates[peerId]?.videoEnabled ?? true,
+      peerMediaStates[peerId]?.audioEnabled ?? true
+    );
+    
+    return remoteContainer;
+  } catch (error) {
+    console.error(`Error adding remote stream: ${error.message}`);
+    return null;
   }
-  
-  // Update UI for this peer
-  updateRemoteMediaState(
-    peerId,
-    getPeerUsername(peerId),
-    peerMediaStates[peerId]?.videoEnabled ?? true,
-    peerMediaStates[peerId]?.audioEnabled ?? true
-  );
-  
-  return remoteContainer;
 }
 
 // Get a username for a peer based on peerId
@@ -1184,57 +1182,77 @@ function setupRemoteTranscription(peerId, stream) {
 
 // Update transcription display
 function updateTranscription(speaker, text) {
+  console.log(`Updating transcription for ${speaker}: ${text}`);
+  
   if (!text || text.trim() === '') return;
   
   let transcriptContainer;
-  let transcriptWrapper;
+  let transcriptContent;
   
   // Store transcript entry
   if (!transcripts.has(speaker)) {
     transcripts.set(speaker, []);
   }
   
-  const timestamp = new Date().toISOString();
   transcripts.get(speaker).push({
-    timestamp,
-    text
+    timestamp: new Date().toISOString(),
+    text: text
   });
   
+  // Find local or remote container
   if (speaker === usernameInput.value.trim()) {
-    // Local user's transcript
-    transcriptContainer = document.querySelector('#local-transcript .transcript-content');
-    transcriptWrapper = document.querySelector('#local-transcript');
+    // Local user transcript
+    transcriptContainer = document.querySelector('#local-transcript');
+    if (transcriptContainer) {
+      transcriptContent = transcriptContainer.querySelector('.transcript-content');
+    }
   } else {
-    // Find the right remote transcript container
-    const containers = document.querySelectorAll('.remote-video-container');
+    // Find remote container by username attribute
+    const remoteContainer = document.querySelector(`.remote-video-container[data-username="${speaker}"]`);
     
-    for (const container of containers) {
-      const nameElement = container.querySelector('.participant-name');
-      if (nameElement && nameElement.textContent === speaker) {
-        transcriptContainer = container.querySelector('.transcript-content');
-        transcriptWrapper = container.querySelector('.transcript-container');
-        break;
+    if (!remoteContainer) {
+      // Try to find by peer ID (fallback)
+      const containers = document.querySelectorAll('.remote-video-container');
+      for (const container of containers) {
+        const nameElement = container.querySelector('.participant-name');
+        if (nameElement && nameElement.textContent === speaker) {
+          transcriptContainer = container.querySelector('.transcript-container');
+          if (transcriptContainer) {
+            transcriptContent = transcriptContainer.querySelector('.transcript-content');
+          }
+          break;
+        }
+      }
+    } else {
+      transcriptContainer = remoteContainer.querySelector('.transcript-container');
+      if (transcriptContainer) {
+        transcriptContent = transcriptContainer.querySelector('.transcript-content');
       }
     }
   }
   
-  if (transcriptContainer && transcriptWrapper) {
-    // Clear previous content and add the new transcription
-    transcriptContainer.innerHTML = ''; // Clear previous text
-    const transcriptEntry = document.createElement('div');
-    transcriptEntry.textContent = text;
-    transcriptContainer.appendChild(transcriptEntry);
+  if (transcriptContent) {
+    const transcriptLine = document.createElement('div');
+    transcriptLine.textContent = text;
+    transcriptContent.appendChild(transcriptLine);
     
-    // Show the transcript container with animation
-    transcriptWrapper.classList.add('active');
+    // Auto-scroll to the latest transcript
+    transcriptContent.scrollTop = transcriptContent.scrollHeight;
     
-    // Set a timeout to hide the transcript after 5 seconds
-    if (transcriptWrapper.fadeOutTimer) {
-      clearTimeout(transcriptWrapper.fadeOutTimer);
-    }
-    
-    transcriptWrapper.fadeOutTimer = setTimeout(() => {
-      transcriptWrapper.classList.remove('active');
+    // Show the transcript container
+    showTranscriptContainer(transcriptContainer);
+  } else {
+    console.warn(`Transcript container for ${speaker} not found`);
+  }
+}
+
+// Add this function to ensure remote transcripts are displayed properly
+function showTranscriptContainer(transcriptContainer) {
+  if (transcriptContainer) {
+    transcriptContainer.classList.add('active');
+    // Auto-hide transcript after 5 seconds if no new content is added
+    setTimeout(() => {
+      transcriptContainer.classList.remove('active');
     }, 5000);
   }
 }
@@ -1310,72 +1328,67 @@ function saveTranscript(username) {
 }
 
 // Save all transcripts
-function saveAllTranscripts() {
+function saveAllTranscripts(generateSummary = true) {
   if (transcripts.size === 0) {
-    addSystemMessage('No transcripts available to save');
+    addSystemMessage('No transcripts available to save.');
     return;
   }
-  
+
   try {
-    // Generate a combined transcript with all speakers, chronologically sorted
-    const allEntries = [];
-    
+    // Combine all transcripts from different speakers
+    const allTranscriptEntries = [];
     transcripts.forEach((entries, speaker) => {
       entries.forEach(entry => {
-        allEntries.push({
-          speaker,
-          timestamp: new Date(entry.timestamp),
+        allTranscriptEntries.push({
+          timestamp: entry.timestamp,
+          speaker: speaker,
           text: entry.text
         });
       });
     });
     
     // Sort by timestamp
-    allEntries.sort((a, b) => a.timestamp - b.timestamp);
+    allTranscriptEntries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     
     // Format as markdown
-    let content = `# Complete Conversation Transcript - ${new Date().toLocaleString()}\n\n`;
-    
-    allEntries.forEach(entry => {
-      const time = entry.timestamp.toLocaleTimeString();
-      content += `[${time}] ${entry.speaker}: ${entry.text}\n`;
+    let markdownContent = '# Conversation Transcript\n\n';
+    allTranscriptEntries.forEach(entry => {
+      const time = new Date(entry.timestamp).toLocaleTimeString();
+      markdownContent += `**${entry.speaker}** (${time}): ${entry.text}\n\n`;
     });
     
     // Create a blob and download link
-    const blob = new Blob([content], { type: 'text/markdown' });
+    const blob = new Blob([markdownContent], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `complete_transcript_${Date.now()}.md`;
-    document.body.appendChild(a);
+    a.download = `transcript_${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
     a.click();
     
-    // Clean up
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 100);
-    
-    // Generate summary using the same transcript data
-    const transcriptData = {};
-    transcripts.forEach((entries, speaker) => {
-      transcriptData[speaker] = entries;
-    });
-    
-    // Send to main process for summary generation
-    window.electronAPI.generateSummary(transcriptData)
-      .then(result => {
-        console.log('Summary generation initiated:', result);
-        addSystemMessage('Generating call summary...');
-      })
-      .catch(error => {
-        console.error('Error initiating summary generation:', error);
+    // If generate summary flag is true, send the transcript data to generate a summary
+    if (generateSummary) {
+      console.log('Initiating summary generation...');
+      
+      // Convert transcripts Map to an object suitable for IPC transport
+      const transcriptData = {};
+      transcripts.forEach((entries, speaker) => {
+        transcriptData[speaker] = entries;
       });
+      
+      try {
+        window.electronAPI.generateSummary(transcriptData);
+        addSystemMessage('Summary generation initiated. It will be saved when ready.');
+      } catch (error) {
+        console.error('Error requesting summary generation:', error);
+        addSystemMessage('Failed to initiate summary generation.');
+      }
+    } else {
+      addSystemMessage('Raw transcript saved successfully.');
+    }
     
-    addSystemMessage('All transcripts saved successfully');
   } catch (error) {
     console.error('Error saving all transcripts:', error);
-    addSystemMessage(`Error saving transcripts: ${error.message}`);
+    addSystemMessage('Failed to save transcripts.');
   }
 }
 

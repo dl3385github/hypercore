@@ -6,22 +6,22 @@
 }
 
 body {
-  background-color: #1a1a2e;
+  background-color: #f5f5f5;
   height: 100vh;
   display: flex;
   justify-content: center;
   align-items: center;
-  color: #f5f5f5;
+  color: #333;
 }
 
 .app-container {
   width: 100%;
   max-width: 1400px;
   height: 95vh;
-  background-color: #16213e;
+  background-color: #ffffff;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
 }
@@ -33,34 +33,34 @@ body {
   justify-content: center;
   align-items: center;
   height: 100%;
-  background-color: #0f3460;
+  background-color: #f0f2f5;
   padding: 20px;
   border-radius: 8px;
 }
 
 .login-form {
-  background-color: #16213e;
+  background-color: #ffffff;
   padding: 30px;
   border-radius: 8px;
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
 }
 
 .login-form input {
   width: 100%;
   padding: 12px;
   margin-bottom: 15px;
-  border: 1px solid #2a3e6a;
+  border: 1px solid #ddd;
   border-radius: 6px;
-  background-color: #1a1a2e;
-  color: #f5f5f5;
+  background-color: #f9f9f9;
+  color: #333;
 }
 
 .login-form button {
   width: 100%;
   padding: 12px;
-  background-color: #e94560;
+  background-color: #4a89dc;
   color: white;
   border: none;
   border-radius: 6px;
@@ -70,7 +70,7 @@ body {
 }
 
 .login-form button:hover {
-  background-color: #cf3651;
+  background-color: #3a70c2;
   transform: translateY(-2px);
 }
 
@@ -86,8 +86,9 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 15px 20px;
-  background-color: #0f3460;
-  border-bottom: 1px solid #2a3e6a;
+  background-color: #4a89dc;
+  border-bottom: 1px solid #ddd;
+  color: white;
 }
 
 .connection-status {
@@ -101,7 +102,7 @@ body {
 }
 
 .action-btn {
-  background-color: #e94560;
+  background-color: #4a89dc;
   color: white;
   border: none;
   border-radius: 6px;
@@ -112,7 +113,7 @@ body {
 }
 
 .action-btn:hover {
-  background-color: #cf3651;
+  background-color: #3a70c2;
 }
 
 .room-display {
@@ -136,14 +137,15 @@ body {
   padding: 15px;
   overflow: hidden;
   position: relative;
+  background-color: #f0f2f5;
 }
 
 .chat-container {
   flex: 3;
   display: flex;
   flex-direction: column;
-  background-color: #1a1a2e;
-  border-left: 1px solid #2a3e6a;
+  background-color: #ffffff;
+  border-left: 1px solid #ddd;
   min-width: 300px;
 }
 
@@ -167,12 +169,13 @@ body {
 }
 
 .message-incoming {
-  background-color: #2a3e6a;
+  background-color: #f0f2f5;
   align-self: flex-start;
 }
 
 .message-outgoing {
-  background-color: #e94560;
+  background-color: #4a89dc;
+  color: white;
   align-self: flex-end;
 }
 
@@ -185,22 +188,22 @@ body {
 .message-input-container {
   display: flex;
   padding: 15px;
-  background-color: #16213e;
-  border-top: 1px solid #2a3e6a;
+  background-color: #ffffff;
+  border-top: 1px solid #ddd;
 }
 
 .message-input-container input {
   flex: 1;
   padding: 12px;
-  border: 1px solid #2a3e6a;
+  border: 1px solid #ddd;
   border-radius: 6px;
-  background-color: #1a1a2e;
-  color: #f5f5f5;
+  background-color: #f9f9f9;
+  color: #333;
   margin-right: 10px;
 }
 
 .message-input-container button {
-  background-color: #e94560;
+  background-color: #4a89dc;
   color: white;
   border: none;
   border-radius: 6px;
@@ -210,7 +213,7 @@ body {
 }
 
 .message-input-container button:hover {
-  background-color: #cf3651;
+  background-color: #3a70c2;
 }
 
 .hidden {
@@ -219,45 +222,39 @@ body {
 
 .system-message {
   padding: 8px 12px;
-  background-color: rgba(58, 83, 155, 0.5);
+  background-color: rgba(74, 137, 220, 0.1);
   border-radius: 6px;
   margin: 8px 0;
   font-style: italic;
   text-align: center;
   font-size: 14px;
+  color: #666;
 }
 
 /* Video styling */
 .videos {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 15px;
   height: 100%;
+  width: 100%;
 }
 
 .video-item {
   position: relative;
-  background-color: #0f3460;
+  background-color: #eee;
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  aspect-ratio: 16 / 9;
 }
 
 .local-video-container {
-  height: 25%;
-  min-height: 180px;
-  border-radius: 8px;
-  overflow: hidden;
-  margin-bottom: 15px;
+  width: 100%;
 }
 
 .remote-videos {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 15px;
-  flex: 1;
-  overflow-y: auto;
-  padding-right: 10px;
+  display: contents;
 }
 
 .video-wrapper {
@@ -266,7 +263,7 @@ body {
   height: 100%;
   border-radius: 8px;
   overflow: hidden;
-  background-color: #0f3460;
+  background-color: #eee;
 }
 
 video {
@@ -274,7 +271,7 @@ video {
   height: 100%;
   object-fit: cover;
   border-radius: 8px;
-  background-color: #0f3460;
+  background-color: #eee;
 }
 
 .video-controls {
@@ -284,7 +281,7 @@ video {
   transform: translateX(-50%);
   display: flex;
   gap: 10px;
-  background-color: rgba(26, 26, 46, 0.7);
+  background-color: rgba(255, 255, 255, 0.8);
   padding: 8px;
   border-radius: 30px;
   z-index: 10;
@@ -294,7 +291,7 @@ video {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background-color: #e94560;
+  background-color: #4a89dc;
   color: white;
   border: none;
   cursor: pointer;
@@ -305,30 +302,31 @@ video {
 }
 
 .control-btn:hover {
-  background-color: #cf3651;
+  background-color: #3a70c2;
 }
 
 .control-btn.muted .icon,
 .control-btn.video-off .icon {
-  color: #f5f5f5;
+  color: #e74c3c;
 }
 
 .video-status {
   position: absolute;
   top: 10px;
   right: 10px;
-  background-color: rgba(26, 26, 46, 0.7);
+  background-color: rgba(255, 255, 255, 0.8);
   padding: 5px 10px;
   border-radius: 4px;
   font-size: 12px;
   z-index: 5;
+  color: #333;
 }
 
 .audio-off-indicator {
   position: absolute;
   top: 10px;
   left: 10px;
-  background-color: rgba(233, 69, 96, 0.7);
+  background-color: rgba(231, 76, 60, 0.8);
   color: white;
   padding: 5px 10px;
   border-radius: 4px;
@@ -336,18 +334,16 @@ video {
   z-index: 5;
 }
 
-.participant-info {
+.participant-name {
   position: absolute;
   bottom: 55px;
   left: 10px;
-  z-index: 5;
-}
-
-.participant-name {
-  background-color: rgba(26, 26, 46, 0.7);
+  background-color: rgba(255, 255, 255, 0.8);
   padding: 5px 10px;
   border-radius: 4px;
   font-size: 14px;
+  z-index: 5;
+  color: #333;
 }
 
 .transcript-container {
@@ -355,7 +351,7 @@ video {
   bottom: 10px;
   left: 10px;
   right: 10px;
-  background-color: rgba(26, 26, 46, 0.7);
+  background-color: rgba(255, 255, 255, 0.8);
   border-radius: 8px;
   padding: 10px;
   z-index: 5;
@@ -363,22 +359,16 @@ video {
   overflow-y: auto;
   transition: opacity 0.3s ease;
   opacity: 0;
+  color: #333;
 }
 
 .transcript-container.active {
   opacity: 1;
 }
 
-.transcript-title {
-  font-size: 12px;
-  font-weight: bold;
-  margin-bottom: 5px;
-  color: #e94560;
-}
-
 .transcript-content {
   font-size: 14px;
-  color: #f5f5f5;
+  color: #333;
   max-height: 70px;
   overflow-y: auto;
 }
@@ -409,21 +399,12 @@ video {
     height: 30vh;
     min-width: unset;
     border-left: none;
-    border-top: 1px solid #2a3e6a;
-  }
-  
-  .remote-videos {
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    border-top: 1px solid #ddd;
   }
 }
 
 @media (max-width: 768px) {
-  .local-video-container {
-    height: 25%;
-    min-height: 120px;
-  }
-  
-  .remote-videos {
+  .videos {
     grid-template-columns: 1fr;
   }
 } 
