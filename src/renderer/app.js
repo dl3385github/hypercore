@@ -15,6 +15,10 @@ const toggleVideoButton = document.getElementById('toggle-video');
 const toggleAudioButton = document.getElementById('toggle-audio');
 const remoteVideoTemplate = document.getElementById('remote-video-template');
 const saveTranscriptButton = document.getElementById('save-transcript-btn');
+const transcriptPopup = document.getElementById('transcript-popup');
+const transcriptPopupContent = document.querySelector('.transcript-popup-content');
+const toggleTranscriptPopupBtn = document.getElementById('toggle-transcript-popup-btn');
+const closeTranscriptPopupBtn = document.getElementById('close-transcript-popup');
 
 // State variables
 let peers = new Set();
@@ -40,6 +44,15 @@ let transcriptionInterval = null;
 
 // Store remote audio recorders for transcription
 let remoteRecorders = new Map();
+
+// Variable to track if we're already closing the app
+let isClosingApp = false;
+
+// Track if summary generation is in progress
+let isSummaryGenerating = false;
+
+// Store volume levels for remote peers
+const peerVolumes = new Map();
 
 // Initialize UI
 document.addEventListener('DOMContentLoaded', () => {
@@ -128,6 +141,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Listen for summary request
   window.electronAPI.onGenerateSummary(() => {
     generateCallSummary();
+  });
+  
+  // Add event listeners for transcript popup
+  toggleTranscriptPopupBtn.addEventListener('click', toggleTranscriptPopup);
+  closeTranscriptPopupBtn.addEventListener('click', () => {
+    transcriptPopup.classList.add('hidden');
+  });
+  
+  // Set up beforeunload event to handle app exit
+  window.addEventListener('beforeunload', (e) => {
+    e.preventDefault();
+    e.returnValue = '';
+    handleAppExit();
+    return '';
   });
 });
 
@@ -980,6 +1007,40 @@ function addRemoteStream(peerId, stream) {
       audioOffIndicator.innerHTML = '🔇';
       videoWrapper.appendChild(audioOffIndicator);
       
+      // Add volume control
+      const volumeControl = document.createElement('div');
+      volumeControl.className = 'volume-control';
+      
+      const volumeLabel = document.createElement('label');
+      volumeLabel.textContent = 'Volume:';
+      volumeControl.appendChild(volumeLabel);
+      
+      const volumeSlider = document.createElement('input');
+      volumeSlider.type = 'range';
+      volumeSlider.min = '0';
+      volumeSlider.max = '2';
+      volumeSlider.step = '0.1';
+      volumeSlider.value = '1';
+      volumeSlider.className = 'volume-slider';
+      volumeControl.appendChild(volumeSlider);
+      
+      // Set initial volume
+      peerVolumes.set(peerId, 1.0);
+      
+      // Add event listener for volume change
+      volumeSlider.addEventListener('input', (e) => {
+        const volume = parseFloat(e.target.value);
+        peerVolumes.set(peerId, volume);
+        
+        // Find the audio element and adjust its volume
+        const videoElement = remoteContainer.querySelector('video');
+        if (videoElement) {
+          videoElement.volume = volume;
+        }
+      });
+      
+      remoteContainer.appendChild(volumeControl);
+      
       // Add the container to the video grid
       remoteVideosContainer.appendChild(remoteContainer);
       
@@ -991,6 +1052,11 @@ function addRemoteStream(peerId, stream) {
     
     // Set the srcObject to display the stream
     remoteVideo.srcObject = stream;
+    
+    // Set the volume based on stored preference
+    if (peerVolumes.has(peerId)) {
+      remoteVideo.volume = peerVolumes.get(peerId);
+    }
     
     // Log active tracks
     console.log(`Remote stream has ${stream.getTracks().length} tracks:`);
@@ -1206,6 +1272,11 @@ function setupRemoteTranscription(peerId, stream) {
   }
 }
 
+// Toggle transcript popup visibility
+function toggleTranscriptPopup() {
+  transcriptPopup.classList.toggle('hidden');
+}
+
 // Update transcription display
 function updateTranscription(speaker, text) {
   if (!text || text.trim() === '') return;
@@ -1292,6 +1363,45 @@ function updateTranscription(speaker, text) {
       overlayContainer.classList.add('hidden');
     }, 5000);
   }
+  
+  // Add to transcript popup
+  addTranscriptToPopup(speaker, text, timestamp);
+}
+
+// Add transcript to popup
+function addTranscriptToPopup(speaker, text, timestamp) {
+  // Create transcript entry
+  const entry = document.createElement('div');
+  entry.className = 'transcript-entry';
+  
+  // Add speaker name
+  const speakerElement = document.createElement('div');
+  speakerElement.className = 'transcript-speaker';
+  speakerElement.textContent = speaker;
+  entry.appendChild(speakerElement);
+  
+  // Add transcript text
+  const textElement = document.createElement('div');
+  textElement.className = 'transcript-text';
+  textElement.textContent = text;
+  entry.appendChild(textElement);
+  
+  // Add timestamp
+  const timeElement = document.createElement('div');
+  timeElement.className = 'transcript-time';
+  
+  // Format timestamp
+  const date = new Date(timestamp);
+  const formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  
+  timeElement.textContent = formattedTime;
+  entry.appendChild(timeElement);
+  
+  // Add to popup content
+  transcriptPopupContent.appendChild(entry);
+  
+  // Auto-scroll to the bottom
+  transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
 }
 
 // Add function to save transcripts
@@ -1358,47 +1468,20 @@ function saveAllTranscripts() {
   URL.revokeObjectURL(url);
 }
 
-// Add event listener for saving transcripts on leaving room
-window.addEventListener('beforeunload', async (event) => {
-  // If we have transcripts, prevent immediate closure to allow saving
-  if (transcripts.size > 0) {
-    try {
-      // Save all transcripts automatically when leaving
-      saveAllTranscripts();
-      
-      // Generate a summary of the call if there are meaningful transcripts
-      let totalTranscriptEntries = 0;
-      transcripts.forEach(entries => {
-        totalTranscriptEntries += entries.length;
-      });
-      
-      // Only generate summary if we have meaningful conversation data (more than 3 entries)
-      if (totalTranscriptEntries > 3) {
-        console.log('Generating call summary before closing...');
-        
-        // This will happen asynchronously, so we need to delay closing
-        event.preventDefault();
-        event.returnValue = '';
-        
-        // Generate and save the summary
-        await generateCallSummary();
-        
-        // Allow window to close after summary is generated
-        setTimeout(() => {
-          window.close();
-        }, 1000);
-      }
-    } catch (error) {
-      console.error('Error during application cleanup:', error);
-    }
-  }
-});
-
 // Generate a call summary
 async function generateCallSummary() {
   try {
+    // Prevent multiple simultaneous calls to generate summary
+    if (isSummaryGenerating) {
+      console.log('Summary generation already in progress');
+      return;
+    }
+    
+    isSummaryGenerating = true;
+    
     if (transcripts.size === 0) {
       console.warn('No transcripts available to summarize');
+      isSummaryGenerating = false;
       return;
     }
     
@@ -1426,6 +1509,7 @@ async function generateCallSummary() {
     
     if (!result.success) {
       console.error('Failed to generate summary:', result.error);
+      isSummaryGenerating = false;
       return;
     }
     
@@ -1457,20 +1541,46 @@ async function generateCallSummary() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     
+    isSummaryGenerating = false;
     return result.summary;
   } catch (error) {
     console.error('Error generating call summary:', error);
+    isSummaryGenerating = false;
+    throw error;
   }
 }
 
 // Function to handle application exit
 async function handleAppExit() {
   try {
+    // Prevent multiple exit handlers from running
+    if (isClosingApp) {
+      console.log('App exit already in progress, ignoring duplicate call');
+      return;
+    }
+    
+    isClosingApp = true;
+    
     // Ask user if they want to save summary before quitting
     if (transcripts.size > 0) {
       const wantToSave = confirm('Would you like to save a summary of this call before quitting?');
+      
       if (wantToSave) {
-        await generateCallSummary();
+        // Disable the quit button or add an overlay to prevent further interaction
+        const overlay = document.createElement('div');
+        overlay.className = 'app-exit-overlay';
+        overlay.innerHTML = '<div class="exit-message">Generating call summary, please wait...</div>';
+        document.body.appendChild(overlay);
+        
+        try {
+          await generateCallSummary();
+        } catch (err) {
+          console.error('Error generating summary during exit:', err);
+          alert('There was an error generating the call summary.');
+        }
+        
+        // Remove overlay
+        document.body.removeChild(overlay);
       }
     }
     
@@ -1482,12 +1592,14 @@ async function handleAppExit() {
     // Stop local media
     stopLocalMedia();
     
-    // Close the window
+    // Now it's safe to quit
+    console.log('Exiting application...');
     window.electronAPI.quitApp();
     
   } catch (error) {
     console.error('Error during application exit:', error);
-    window.electronAPI.quitApp(); // Force quit if there's an error
+    alert('There was an error closing the application. Please try again.');
+    isClosingApp = false; // Reset the flag so the user can try again
   }
 }
 

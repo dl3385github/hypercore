@@ -36,6 +36,10 @@ let activeSwarm = null;
 let activeConnections = new Map();
 let username = '';
 
+// Threshold for transcribing audio (minimum volume level required)
+const MIN_AUDIO_LEVEL = 0.05; // Adjust this value to change sensitivity
+const MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
+
 // Error handler for uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
@@ -286,17 +290,48 @@ function setupIpcHandlers() {
   // Handle audio transcription requests
   ipcMain.handle('transcribe-audio', async (event, audioBuffer, speaker) => {
     try {
-      console.log(`Transcribing audio from ${speaker}, size: ${audioBuffer.byteLength} bytes`);
+      // Skip transcribing if the buffer is too small
+      if (audioBuffer.length < 1000) { // Very short audio is likely just noise
+        return { success: false, error: 'Audio too short to transcribe' };
+      }
+      
+      // Check if audio has sufficient volume to transcribe
+      const audioData = new Float32Array(audioBuffer);
+      let maxVolume = 0;
+      let audioLength = 0;
+      
+      // Get the maximum volume and count frames above threshold
+      for (let i = 0; i < audioData.length; i++) {
+        const absValue = Math.abs(audioData[i]);
+        if (absValue > maxVolume) {
+          maxVolume = absValue;
+        }
+        
+        if (absValue > MIN_AUDIO_LEVEL) {
+          audioLength++;
+        }
+      }
+      
+      // If max volume is too low or not enough audio above threshold, skip transcription
+      if (maxVolume < MIN_AUDIO_LEVEL || audioLength < MIN_AUDIO_DURATION) {
+        console.log(`Skipping transcription - max volume: ${maxVolume.toFixed(3)}, frames above threshold: ${audioLength}`);
+        return { success: false, error: 'Audio volume too low' };
+      }
+      
+      console.log(`Transcribing audio - length: ${audioBuffer.length}, max volume: ${maxVolume.toFixed(3)}, frames above threshold: ${audioLength}`);
+      
+      // Generate random filename with timestamp for the WAV file
+      const timestamp = Date.now();
+      const filename = `./temp/audio_${timestamp}_${Math.floor(Math.random() * 1000)}.wav`;
       
       // Save audio buffer to a temporary file
-      const tempFilePath = path.join('./temp', `recording_${Date.now()}.webm`);
-      fs.writeFileSync(tempFilePath, Buffer.from(audioBuffer));
+      fs.writeFileSync(filename, Buffer.from(audioBuffer));
       
       // Call OpenAI Whisper API
-      const transcription = await transcribeWithWhisper(tempFilePath);
+      const transcription = await transcribeWithWhisper(filename);
       
       // Clean up the temporary file
-      fs.unlinkSync(tempFilePath);
+      fs.unlinkSync(filename);
       
       // Send transcription result to renderer
       const result = {
@@ -374,20 +409,21 @@ function setupIpcHandlers() {
 // Transcribe audio using OpenAI Whisper
 async function transcribeWithWhisper(audioFilePath) {
   try {
-    if (!openai) {
-      throw new Error('OpenAI API key not set. Cannot transcribe audio.');
-    }
+    console.log(`Sending audio file to OpenAI Whisper: ${audioFilePath}`);
     
-    console.log(`Sending audio file to OpenAI: ${audioFilePath}`);
+    // Read the audio file
+    const audioFile = fs.createReadStream(audioFilePath);
     
+    // Call OpenAI Whisper API
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(audioFilePath),
+      file: audioFile,
       model: "whisper-1",
       language: "en",
+      response_format: "text"
     });
     
     // Filter out empty or very short transcriptions
-    const text = transcription.text.trim();
+    const text = transcription.trim();
     if (!text || text.length < 3) {
       console.log('Transcription ignored (too short):', text);
       return '';  // Return empty string to indicate no useful transcription
@@ -396,8 +432,8 @@ async function transcribeWithWhisper(audioFilePath) {
     console.log('Transcription received:', text);
     return text;
   } catch (error) {
-    console.error('Error using Whisper API:', error);
-    throw new Error(`Whisper API error: ${error.message}`);
+    console.error('Error transcribing with Whisper:', error);
+    throw error;
   }
 }
 

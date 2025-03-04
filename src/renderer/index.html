@@ -34,6 +34,7 @@
           <span class="room-display">Room: <span id="current-room">default</span></span>
           <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
           <button id="save-transcript-btn" class="action-btn">Save Transcript</button>
+          <button id="toggle-transcript-popup-btn" class="action-btn">Show Transcript</button>
         </div>
       </div>
       
@@ -83,6 +84,17 @@
             <button id="send-btn">Send</button>
           </div>
         </div>
+      </div>
+    </div>
+    
+    <!-- Transcript Popup -->
+    <div id="transcript-popup" class="transcript-popup hidden">
+      <div class="transcript-popup-header">
+        <h3>Live Transcript</h3>
+        <button id="close-transcript-popup" class="close-btn">×</button>
+      </div>
+      <div class="transcript-popup-content">
+        <!-- Transcript entries will be added here dynamically -->
       </div>
     </div>
   </div>
