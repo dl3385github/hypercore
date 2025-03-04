@@ -19,16 +19,12 @@ const transcriptPopup = document.getElementById('transcript-popup');
 const transcriptPopupContent = document.querySelector('.transcript-popup-content');
 const toggleTranscriptPopupBtn = document.getElementById('toggle-transcript-popup-btn');
 const closeTranscriptPopupBtn = document.getElementById('close-transcript-popup');
-const settingsBtn = document.getElementById('settings-btn');
-const settingsModal = document.getElementById('settings-modal');
-const closeSettingsBtn = document.getElementById('close-settings');
-const saveSettingsBtn = document.getElementById('save-settings');
-const audioThresholdSlider = document.getElementById('audio-threshold');
-const thresholdValue = document.getElementById('threshold-value');
-const audioDurationSlider = document.getElementById('audio-duration');
-const durationValue = document.getElementById('duration-value');
-const showTranscriptsCheckbox = document.getElementById('show-transcripts');
 const summarizeBtn = document.getElementById('summarize-btn');
+const settingsBtn = document.getElementById('settings-btn');
+const settingsPopup = document.getElementById('settings-popup');
+const closeSettingsPopupBtn = document.getElementById('close-settings-popup');
+const audioThresholdSlider = document.getElementById('audio-threshold');
+const thresholdValueDisplay = document.getElementById('threshold-value');
 
 // State variables
 let peers = new Set();
@@ -64,6 +60,11 @@ let isSummaryGenerating = false;
 // Store volume levels for remote peers
 const peerVolumes = new Map();
 
+// App settings
+const appSettings = {
+  audioThreshold: 0.05, // Default value
+};
+
 // Initialize UI
 document.addEventListener('DOMContentLoaded', () => {
   // Focus on username input
@@ -74,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     roomInput.value = generateDefaultRoomId();
   }
   
-  // Set up event listeners
+  // Set up join button event
   joinButton.addEventListener('click', joinChat);
   usernameInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
@@ -92,54 +93,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   
+  // Set up message sending
   sendButton.addEventListener('click', sendMessage);
   messageInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
   });
   
+  // Set up video controls
   toggleVideoButton.addEventListener('click', toggleVideo);
   toggleAudioButton.addEventListener('click', toggleAudio);
+  
+  // Set up save transcript button
   saveTranscriptButton.addEventListener('click', saveAllTranscripts);
-  summarizeBtn.addEventListener('click', generateCallSummary);
   
   // Set up message receiving
   window.electronAPI.onNewMessage((message) => {
     addMessageToUI(message);
-  });
-  
-  // Add event listeners for transcript popup
-  toggleTranscriptPopupBtn.addEventListener('click', toggleTranscriptPopup);
-  closeTranscriptPopupBtn.addEventListener('click', () => {
-    transcriptPopup.classList.add('hidden');
-  });
-  
-  // Add event listeners for settings modal
-  settingsBtn.addEventListener('click', () => {
-    settingsModal.classList.remove('hidden');
-  });
-  
-  closeSettingsBtn.addEventListener('click', () => {
-    settingsModal.classList.add('hidden');
-  });
-  
-  // Update displayed values when sliders change
-  audioThresholdSlider.addEventListener('input', () => {
-    thresholdValue.textContent = audioThresholdSlider.value;
-  });
-  
-  audioDurationSlider.addEventListener('input', () => {
-    durationValue.textContent = audioDurationSlider.value;
-  });
-  
-  // Save settings button
-  saveSettingsBtn.addEventListener('click', saveSettings);
-  
-  // Set up beforeunload event to handle app exit
-  window.addEventListener('beforeunload', (e) => {
-    e.preventDefault();
-    e.returnValue = '';
-    handleAppExit();
-    return '';
   });
   
   // Track peers
@@ -183,6 +152,41 @@ document.addEventListener('DOMContentLoaded', () => {
   // Listen for summary request
   window.electronAPI.onGenerateSummary(() => {
     generateCallSummary();
+  });
+  
+  // Add event listeners for transcript popup
+  toggleTranscriptPopupBtn.addEventListener('click', toggleTranscriptPopup);
+  closeTranscriptPopupBtn.addEventListener('click', () => {
+    transcriptPopup.classList.add('hidden');
+  });
+  
+  // Add event listener for summarize button
+  summarizeBtn.addEventListener('click', generateCallSummary);
+  
+  // Add event listeners for settings popup
+  settingsBtn.addEventListener('click', toggleSettingsPopup);
+  closeSettingsPopupBtn.addEventListener('click', () => {
+    settingsPopup.classList.add('hidden');
+  });
+  
+  // Setup threshold slider
+  audioThresholdSlider.value = appSettings.audioThreshold;
+  thresholdValueDisplay.textContent = appSettings.audioThreshold;
+  
+  audioThresholdSlider.addEventListener('input', (e) => {
+    const newValue = parseFloat(e.target.value);
+    appSettings.audioThreshold = newValue;
+    thresholdValueDisplay.textContent = newValue.toFixed(2);
+    updateAudioThreshold(newValue);
+  });
+  
+  // Remove beforeunload event to prevent conflicts
+  window.removeEventListener('beforeunload', handleAppExit);
+  
+  // Add event listener for the window closing 
+  window.addEventListener('beforeunload', (e) => {
+    // Don't prevent default - we want to let the app close normally
+    handleAppExit();
   });
 });
 
@@ -284,6 +288,9 @@ async function joinChat() {
     
     // Focus on message input
     messageInput.focus();
+    
+    // Show transcript popup by default
+    transcriptPopup.classList.remove('hidden');
   } catch (error) {
     alert(`Error joining chat: ${error.message || 'Unknown error'}`);
   }
@@ -627,6 +634,9 @@ async function shouldInitiateConnection(peerId) {
 
 // Send our media state via data channel
 function sendMediaStateViaDataChannel(dataChannel) {
+  // Store username in data channel for reference
+  dataChannel._username = usernameInput.value.trim();
+  
   const mediaState = {
     type: 'media-state',
     username: usernameInput.value.trim(),
@@ -637,43 +647,34 @@ function sendMediaStateViaDataChannel(dataChannel) {
   dataChannel.send(JSON.stringify(mediaState));
 }
 
-// Function to handle data channel messages
+// Handle messages received via data channel
 function handleDataChannelMessage(peerId, message) {
-  try {
-    console.log(`Received data channel message from ${peerId}:`, message);
+  console.log(`Received data channel message from ${peerId}:`, message);
+  
+  if (message.type === 'media-state') {
+    // Update remote media state UI
+    updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
+  } else if (message.type === 'transcript') {
+    // Handle transcript message from peer
+    // Get the speaker from the message or use the peer's username
+    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
     
-    if (message.type === 'control') {
-      // Handle media state control messages
-      const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
-      console.log(`Received media state from ${speaker}: video=${message.videoEnabled}, audio=${message.audioEnabled}`);
-      
-      // Update remote media state
-      updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
-      
-      // Store the username for this peer
-      if (message.username && message.username !== speaker) {
-        peerUsernames.set(peerId, message.username);
-        console.log(`Updated username for ${peerId} to ${message.username}`);
-        
-        // Update the name in the UI
-        const remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-        if (remoteContainer) {
-          const nameElement = remoteContainer.querySelector('.participant-name');
-          if (nameElement) {
-            nameElement.textContent = message.username;
-          }
-        }
-      }
-    } else if (message.type === 'transcript') {
-      // Handle transcript message from peer
-      // This is critical for showing other peers' transcriptions
-      if (message.speaker && message.text) {
-        console.log(`Received transcript from ${message.speaker}: "${message.text}"`);
-        updateTranscription(message.speaker, message.text);
-      }
+    // Make sure we store this username for the peer if we don't have it already
+    if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
+      peerUsernames.set(peerId, speaker);
     }
-  } catch (err) {
-    console.error('Error handling data channel message:', err);
+    
+    // Skip empty or very short transcriptions
+    if (!message.text || message.text.trim().length < 3) {
+      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
+      return;
+    }
+    
+    // Update UI with the transcript
+    updateTranscription(speaker, message.text);
+    
+    // No need to add to transcript map again since updateTranscription already does this
   }
 }
 
@@ -1020,6 +1021,7 @@ function addRemoteStream(peerId, stream) {
       // Store the username in our map if it's not a placeholder
       if (peerName !== `Peer ${peerId.substring(0, 6)}`) {
         peerUsernames.set(peerId, peerName);
+        console.log(`Stored username "${peerName}" for peer ${peerId}`);
       }
       
       // Add video off indicator
@@ -1072,6 +1074,17 @@ function addRemoteStream(peerId, stream) {
       remoteVideosContainer.appendChild(remoteContainer);
       
       console.log(`Remote container for ${peerName} (${peerId}) added to DOM with transcript overlay`);
+    } else {
+      // Update the name if we now have a real username
+      const nameElement = remoteContainer.querySelector('.participant-name');
+      const currentName = nameElement.textContent;
+      
+      // If current name is a placeholder and we now have a real name
+      if (currentName.includes('Peer') && peerUsernames.has(peerId)) {
+        const realName = peerUsernames.get(peerId);
+        nameElement.textContent = realName;
+        console.log(`Updated name in DOM from "${currentName}" to "${realName}" for peer ${peerId}`);
+      }
     }
     
     // Find the video element
@@ -1124,110 +1137,92 @@ function getPeerUsername(peerId) {
         !nameElement.textContent.includes('Peer') && 
         !nameElement.textContent.includes('...')) {
       // Store it for future use
-      peerUsernames.set(peerId, nameElement.textContent);
-      return nameElement.textContent;
+      const username = nameElement.textContent;
+      peerUsernames.set(peerId, username);
+      console.log(`Retrieved username "${username}" for peer ${peerId} from DOM`);
+      return username;
     }
   }
   
-  // No username found
+  // If still no username found, check remote streams or connections
+  for (const [id, dataChannel] of dataChannels.entries()) {
+    if (id === peerId && dataChannel._username) {
+      const username = dataChannel._username;
+      peerUsernames.set(peerId, username);
+      console.log(`Retrieved username "${username}" for peer ${peerId} from data channel`);
+      return username;
+    }
+  }
+  
+  // Fallback to using short peerId as username
+  console.log(`No username found for peer ${peerId}, using ID-based name`);
   return null;
 }
 
-// Setup media recording
+// Set up media recording for local transcription
 function setupMediaRecording() {
+  if (!localStream || !localStream.getAudioTracks().length) return;
+  
   try {
-    if (!localStream || !localStream.getAudioTracks().length) {
-      console.warn('No audio tracks available for recording');
-      return;
-    }
+    // Create a new MediaRecorder
+    const audioStream = new MediaStream([localStream.getAudioTracks()[0]]);
+    mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
     
-    // Only start a new recorder if we don't have one already recording
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      console.log('MediaRecorder already recording');
-      return;
-    }
-    
-    console.log('Setting up MediaRecorder for local audio');
-    
-    // Create a media recorder for the audio track
-    const options = { mimeType: 'audio/webm' };
-    mediaRecorder = new MediaRecorder(localStream, options);
-    recordedChunks = [];
-    
-    // Handle data when it becomes available
-    mediaRecorder.ondataavailable = async (event) => {
+    // Handle data available event
+    mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
         recordedChunks.push(event.data);
       }
     };
     
-    // Handle stop event
+    // Handle recording stop
     mediaRecorder.onstop = async () => {
       if (recordedChunks.length === 0) return;
       
       try {
-        // Create a blob from chunks
+        // Create a blob from the recorded chunks
         const blob = new Blob(recordedChunks, { type: 'audio/webm' });
         recordedChunks = [];
         
-        // Convert blob to array buffer for sending to main process
+        // Convert blob to ArrayBuffer before sending to main process
         const arrayBuffer = await blob.arrayBuffer();
+        
+        // Create a regular array from the ArrayBuffer to ensure it can be cloned
         const uint8Array = new Uint8Array(arrayBuffer);
         const buffer = Array.from(uint8Array);
         
-        // Get the current username
-        const currentUsername = usernameInput.value.trim();
-        
-        // Send to main process for transcription via Whisper API
-        const result = await window.electronAPI.transcribeAudio(buffer, currentUsername);
-        
-        if (result.success && result.transcription && result.transcription.trim().length >= 3) {
-          console.log(`Local transcription: "${result.transcription}"`);
-          
-          // Update local UI with the transcript
-          updateTranscription(currentUsername, result.transcription);
-          
-          // Share with connected peers
-          for (const [peerId, dataChannel] of dataChannels.entries()) {
-            if (dataChannel.readyState === 'open') {
-              const transcriptMessage = {
-                type: 'transcript',
-                speaker: currentUsername,
-                text: result.transcription,
-                timestamp: new Date().toISOString()
-              };
-              
-              try {
-                dataChannel.send(JSON.stringify(transcriptMessage));
-                console.log(`Sent transcript to peer ${peerId}`);
-              } catch (err) {
-                console.error(`Error sending transcript to peer ${peerId}:`, err);
-              }
-            }
-          }
-        } else if (result.success) {
-          console.log('Transcription empty or too short, ignoring');
-        } else {
-          console.warn('Transcription failed:', result.error);
+        // Send to main process for transcription
+        const username = usernameInput.value.trim();
+        const result = await window.electronAPI.transcribeAudio(buffer, username);
+        if (result.success) {
+          // Transcription will come back through the onTranscriptionResult listener
         }
       } catch (error) {
-        console.error('Error handling transcription:', error);
-      } finally {
-        // Restart recording if it stopped and audio is still enabled
-        if (isAudioEnabled && mediaRecorder.state !== 'recording') {
-          mediaRecorder.start(5000);
-        }
+        console.error('Error transcribing audio:', error);
       }
     };
     
-    // Start recording in 5-second chunks
-    mediaRecorder.start(5000);
+    // Start recording
+    mediaRecorder.start();
     isRecording = true;
     
-    console.log('MediaRecorder started');
+    // Set up interval to stop and restart recording every 5 seconds
+    transcriptionInterval = setInterval(() => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        
+        // Start a new recording after a small delay
+        setTimeout(() => {
+          if (isAudioEnabled && isRecording) {
+            mediaRecorder.start();
+          }
+        }, 500);
+      }
+    }, 5000); // Record in 5-second chunks
+    
   } catch (error) {
-    console.error('Error setting up MediaRecorder:', error);
-    isRecording = false;
+    console.error('Error setting up media recording:', error);
+    addSystemMessage(`Error setting up transcription: ${error.message}`);
   }
 }
 
@@ -1245,32 +1240,28 @@ function stopMediaRecording() {
   }
 }
 
-// Setup remote transcription
+// Set up transcription for remote participants
 function setupRemoteTranscription(peerId, stream) {
+  // Extract audio track from the remote stream
+  const audioTracks = stream.getAudioTracks();
+  if (!audioTracks || audioTracks.length === 0) {
+    console.warn(`No audio tracks found in remote stream from ${peerId}`);
+    return;
+  }
+  
+  // Get peer username - use actual name if available, otherwise use ID-based placeholder
+  const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+  console.log(`Setting up transcription for remote audio from ${peerUsername} (${peerId})`);
+  
   try {
-    // Get audio track
-    const audioTrack = stream.getAudioTracks()[0];
-    if (!audioTrack) {
-      console.warn(`No audio track found for peer ${peerId}`);
-      return;
-    }
+    // Create a new MediaStream with just the audio track
+    const audioStream = new MediaStream([audioTracks[0]]);
     
-    console.log(`Setting up transcription for audio track from peer ${peerId}`);
-    
-    // Create a new audio context
-    const audioContext = new AudioContext();
-    const source = audioContext.createMediaStreamSource(stream);
-    
-    // Create a recorder for this audio stream
+    // Create a new MediaRecorder for this remote stream
+    const remoteRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
     const remoteChunks = [];
     
-    // Setup recorder
-    const remoteRecorder = new MediaRecorder(source.mediaStream, {
-      mimeType: 'audio/webm',
-      audioBitsPerSecond: 16000
-    });
-    
-    // Handle data available
+    // Handle data available event
     remoteRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
         remoteChunks.push(event.data);
@@ -1282,9 +1273,6 @@ function setupRemoteTranscription(peerId, stream) {
       if (remoteChunks.length === 0) return;
       
       try {
-        // Get peer username
-        const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
-        
         // Create a blob from the recorded chunks
         const blob = new Blob(remoteChunks, { type: 'audio/webm' });
         remoteChunks.length = 0; // Clear the array
@@ -1296,18 +1284,31 @@ function setupRemoteTranscription(peerId, stream) {
         
         const result = await window.electronAPI.transcribeAudio(buffer, peerUsername);
         if (result.success && result.transcription && result.transcription.trim().length >= 3) {
-          // Display the transcription
+          // Log the successful transcription
           console.log(`Remote transcription for ${peerUsername}: "${result.transcription}"`);
+          
+          // Update our own UI with the transcript
           updateTranscription(peerUsername, result.transcription);
           
-          // Share transcript with other peers
+          // Store in our local transcript map
+          if (!transcripts.has(peerUsername)) {
+            transcripts.set(peerUsername, []);
+          }
+          
+          const timestamp = new Date().toISOString();
+          transcripts.get(peerUsername).push({
+            timestamp,
+            text: result.transcription
+          });
+          
+          // Share transcript with other peers via data channel
           const dataChannel = dataChannels.get(peerId);
           if (dataChannel && dataChannel.readyState === 'open') {
             const transcriptMessage = {
               type: 'transcript',
               speaker: peerUsername,
               text: result.transcription,
-              timestamp: new Date().toISOString()
+              timestamp
             };
             dataChannel.send(JSON.stringify(transcriptMessage));
           }
@@ -1315,10 +1316,10 @@ function setupRemoteTranscription(peerId, stream) {
           console.log(`Ignoring empty or short remote transcription for ${peerUsername}`);
         }
       } catch (error) {
-        console.error(`Error transcribing remote audio from ${peerId}:`, error);
+        console.error(`Error transcribing remote audio from ${peerUsername}:`, error);
       } finally {
-        // Restart recording
-        if (remoteRecorder.state !== 'recording') {
+        // Restart recording if still connected
+        if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
           remoteRecorder.start(5000); // 5s chunks
         }
       }
@@ -1330,9 +1331,9 @@ function setupRemoteTranscription(peerId, stream) {
     // Start recording
     remoteRecorder.start(5000); // 5s chunks
     
-    console.log(`Started remote transcription for ${peerId}`);
+    console.log(`Started remote transcription for ${peerUsername} (${peerId})`);
   } catch (error) {
-    console.error(`Error setting up remote transcription for ${peerId}:`, error);
+    console.error(`Error setting up remote transcription for ${peerUsername} (${peerId}):`, error);
   }
 }
 
@@ -1345,7 +1346,7 @@ function toggleTranscriptPopup() {
 function updateTranscription(speaker, text) {
   if (!text || text.trim() === '') return;
   
-  console.log(`Updating transcription for ${speaker}: "${text}"`);
+  let overlayContainer = null;
   
   // Store transcript entry
   if (!transcripts.has(speaker)) {
@@ -1358,48 +1359,12 @@ function updateTranscription(speaker, text) {
     text
   });
   
-  // Always add to the transcript popup regardless of who spoke
+  console.log(`Updating transcription for ${speaker}: "${text}"`);
+  
+  // For now, don't show overlay transcripts since we're using the popup instead
+  
+  // Add to transcript popup
   addTranscriptToPopup(speaker, text, timestamp);
-  
-  // Find overlay for speaker if we want to show it there too
-  let overlayContainer = null;
-  
-  if (speaker === usernameInput.value.trim()) {
-    // Local user's transcript
-    overlayContainer = document.getElementById('local-overlay-transcript');
-  } else {
-    // Try to find the overlay for this remote user
-    const containers = document.querySelectorAll('.remote-video-container');
-    
-    for (const container of containers) {
-      const nameElement = container.querySelector('.participant-name');
-      if (nameElement && nameElement.textContent === speaker) {
-        overlayContainer = container.querySelector('.transcript-overlay');
-        break;
-      }
-    }
-  }
-  
-  // Update overlay if found and not set to always hidden
-  if (overlayContainer && !overlayContainer.classList.contains('always-hidden')) {
-    // Update the overlay with the current transcription
-    overlayContainer.textContent = text;
-    overlayContainer.classList.remove('hidden');
-    
-    // Make overlay more visible
-    overlayContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-    overlayContainer.style.color = 'white';
-    overlayContainer.style.padding = '8px';
-    overlayContainer.style.borderRadius = '4px';
-    overlayContainer.style.maxHeight = '60px';
-    overlayContainer.style.overflow = 'auto';
-    
-    // Hide the overlay after 5 seconds of inactivity
-    clearTimeout(overlayContainer.fadeTimeout);
-    overlayContainer.fadeTimeout = setTimeout(() => {
-      overlayContainer.classList.add('hidden');
-    }, 5000);
-  }
 }
 
 // Add transcript to popup
@@ -1514,10 +1479,16 @@ async function generateCallSummary() {
     isSummaryGenerating = true;
     
     if (transcripts.size === 0) {
-      console.warn('No transcripts available to summarize');
+      alert('No transcripts available to summarize');
       isSummaryGenerating = false;
       return;
     }
+    
+    // Show a generating overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'app-exit-overlay';
+    overlay.innerHTML = '<div class="exit-message">Generating call summary, please wait...</div>';
+    document.body.appendChild(overlay);
     
     console.log('Preparing transcript data for summary...');
     
@@ -1537,12 +1508,21 @@ async function generateCallSummary() {
     // Sort by timestamp
     allTranscripts.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     
+    // Log the transcript data 
+    console.log(`Sending ${allTranscripts.length} transcript entries from ${transcripts.size} speakers for summary generation...`);
+    transcripts.forEach((entries, speaker) => {
+      console.log(`- ${speaker}: ${entries.length} entries`);
+    });
+    
     // Generate summary using GPT-4o
-    console.log(`Sending ${allTranscripts.length} transcript entries for summary generation...`);
     const result = await window.electronAPI.generateCallSummary(allTranscripts);
+    
+    // Remove overlay
+    document.body.removeChild(overlay);
     
     if (!result.success) {
       console.error('Failed to generate summary:', result.error);
+      alert(`Error generating summary: ${result.error}`);
       isSummaryGenerating = false;
       return;
     }
@@ -1579,25 +1559,18 @@ async function generateCallSummary() {
     return result.summary;
   } catch (error) {
     console.error('Error generating call summary:', error);
+    alert(`Error generating summary: ${error.message}`);
     isSummaryGenerating = false;
     throw error;
   }
 }
 
 // Function to handle application exit
-async function handleAppExit() {
+function handleAppExit() {
+  // Just do some basic cleanup before quitting
+  console.log('App closing, cleaning up connections...');
+  
   try {
-    // Prevent multiple exit handlers from running
-    if (isClosingApp) {
-      console.log('App exit already in progress, ignoring duplicate call');
-      return;
-    }
-    
-    isClosingApp = true;
-    
-    // No longer asking to save or summarize - just clean up and quit
-    console.log('Cleaning up connections before quitting...');
-    
     // Clean up connections
     for (const peerId of Object.keys(peerConnections)) {
       cleanupPeerConnection(peerId);
@@ -1605,63 +1578,25 @@ async function handleAppExit() {
     
     // Stop local media
     stopLocalMedia();
-    
-    // Now it's safe to quit
-    console.log('Exiting application...');
-    window.electronAPI.quitApp();
-    
   } catch (error) {
-    console.error('Error during application exit:', error);
-    isClosingApp = false; // Reset the flag so the user can try again
-    
-    // Try to force quit if there's a critical error
-    try {
-      window.electronAPI.quitApp();
-    } catch (e) {
-      console.error('Failed to force quit:', e);
-    }
+    console.error('Error during cleanup:', error);
   }
+  
+  // Don't need to quit explicitly since Electron will handle closing the window
 }
 
-// Handle window close event
-window.addEventListener('beforeunload', (event) => {
-  // The event is handled by the main process
-  event.preventDefault();
-  handleAppExit();
-});
+// Toggle settings popup
+function toggleSettingsPopup() {
+  settingsPopup.classList.toggle('hidden');
+}
 
-// Function to save settings
-async function saveSettings() {
-  try {
-    const threshold = parseFloat(audioThresholdSlider.value);
-    const duration = parseInt(audioDurationSlider.value);
-    const showTranscripts = showTranscriptsCheckbox.checked;
-    
-    console.log(`Saving settings: threshold=${threshold}, duration=${duration}, showTranscripts=${showTranscripts}`);
-    
-    // Save to main process
-    const result = await window.electronAPI.updateAudioSettings({
-      threshold,
-      duration
+// Update audio threshold on the main process
+function updateAudioThreshold(value) {
+  window.electronAPI.updateAudioThreshold(value)
+    .then(() => {
+      console.log(`Audio threshold updated to ${value}`);
+    })
+    .catch(error => {
+      console.error('Error updating audio threshold:', error);
     });
-    
-    if (result.success) {
-      console.log('Settings saved successfully');
-      
-      // Update UI based on transcript visibility setting
-      const overlays = document.querySelectorAll('.transcript-overlay');
-      overlays.forEach(overlay => {
-        if (!showTranscripts) {
-          overlay.classList.add('always-hidden');
-        } else {
-          overlay.classList.remove('always-hidden');
-        }
-      });
-      
-      // Close the settings modal
-      settingsModal.classList.add('hidden');
-    }
-  } catch (error) {
-    console.error('Error saving settings:', error);
-  }
 } 

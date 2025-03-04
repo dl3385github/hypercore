@@ -36,9 +36,9 @@ let activeSwarm = null;
 let activeConnections = new Map();
 let username = '';
 
-// Threshold for transcribing audio (minimum volume level required) - default values
-let MIN_AUDIO_LEVEL = 0.05; // Adjust this value to change sensitivity
-let MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
+// Threshold for transcribing audio (minimum volume level required)
+let MIN_AUDIO_LEVEL = 0.05; // Default value, will be adjustable from UI
+const MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
 
 // Error handler for uncaught exceptions
 process.on('uncaughtException', (error) => {
@@ -314,11 +314,11 @@ function setupIpcHandlers() {
       
       // If max volume is too low or not enough audio above threshold, skip transcription
       if (maxVolume < MIN_AUDIO_LEVEL || audioLength < MIN_AUDIO_DURATION) {
-        console.log(`Skipping transcription - max volume: ${maxVolume.toFixed(3)}, frames above threshold: ${audioLength}`);
+        console.log(`Skipping transcription for ${speaker} - max volume: ${maxVolume.toFixed(3)}, frames above threshold: ${audioLength}`);
         return { success: false, error: 'Audio volume too low' };
       }
       
-      console.log(`Transcribing audio - length: ${audioBuffer.length}, max volume: ${maxVolume.toFixed(3)}, frames above threshold: ${audioLength}`);
+      console.log(`Transcribing audio from ${speaker} - length: ${audioBuffer.length}, max volume: ${maxVolume.toFixed(3)}, frames above threshold: ${audioLength}`);
       
       // Generate random filename with timestamp for the WAV file
       const timestamp = Date.now();
@@ -333,16 +333,36 @@ function setupIpcHandlers() {
       // Clean up the temporary file
       fs.unlinkSync(filename);
       
-      // Return transcription result directly to renderer
+      // If transcription is empty or too short, skip
+      if (!transcription || transcription.trim().length < 3) {
+        console.log(`Empty or short transcription from ${speaker}: "${transcription}"`);
+        return { 
+          success: true,
+          transcription: ''
+        };
+      }
+      
+      console.log(`Transcription from ${speaker}: "${transcription}"`);
+      
+      // Send transcription result to renderer
+      const result = {
+        speaker,
+        text: transcription,
+        timestamp: Date.now()
+      };
+      
+      mainWindow.webContents.send('transcription-result', result);
+      
       return { 
         success: true,
-        transcription,
-        speaker,
-        timestamp: Date.now()
+        transcription
       };
     } catch (error) {
       console.error('Error transcribing audio:', error);
-      return { success: false, error: error.message || 'Transcription failed' };
+      return {
+        success: false,
+        error: error.message || 'Failed to transcribe audio'
+      };
     }
   });
 
@@ -357,12 +377,16 @@ function setupIpcHandlers() {
         return { success: false, message: 'No transcript data available for summary' };
       }
       
-      console.log('Generating call summary with GPT-4o...');
+      console.log(`Generating call summary with GPT-4o from ${transcriptData.length} entries...`);
       
-      // Format the transcript data for GPT-4o
+      // Format the transcript data for GPT-4o - organize by username and make it like a conversation
       const formattedTranscript = transcriptData.map(item => 
         `${item.username}: ${item.text}`
       ).join('\n');
+      
+      // Log the formatted transcript for debugging
+      console.log('Formatted transcript for summary:');
+      console.log(formattedTranscript.substring(0, 500) + (formattedTranscript.length > 500 ? '...' : ''));
       
       // Generate a summary with GPT-4o
       const completion = await openai.chat.completions.create({
@@ -370,18 +394,18 @@ function setupIpcHandlers() {
         messages: [
           {
             role: "system",
-            content: "You are a helpful assistant that creates concise summaries of conversation transcripts. Identify key points, action items, decisions made, and important topics discussed."
+            content: "You are a helpful assistant that creates concise summaries of conversation transcripts. Identify key points, action items, decisions made, and important topics discussed. Format the summary with clear sections and bullet points. Make sure to attribute quotes and decisions to the correct participants."
           },
           {
             role: "user", 
-            content: `Please summarize the following call transcript:\n\n${formattedTranscript}`
+            content: `Please summarize the following call transcript, showing who participated and what they talked about:\n\n${formattedTranscript}`
           }
         ],
-        max_tokens: 1000
+        max_tokens: 1500
       });
       
       const summary = completion.choices[0].message.content;
-      console.log('Summary generated:', summary);
+      console.log('Summary generated successfully');
       
       return { 
         success: true, 
@@ -396,19 +420,10 @@ function setupIpcHandlers() {
     }
   });
 
-  // Handle setting updates
-  ipcMain.handle('update-audio-settings', (event, settings) => {
-    console.log('Updating audio settings:', settings);
-    
-    // Update audio threshold values
-    if (settings.threshold !== undefined) {
-      MIN_AUDIO_LEVEL = Number(settings.threshold);
-    }
-    
-    if (settings.duration !== undefined) {
-      MIN_AUDIO_DURATION = Number(settings.duration);
-    }
-    
+  // Handle audio threshold updates
+  ipcMain.handle('update-audio-threshold', (event, threshold) => {
+    console.log(`Updating audio threshold to ${threshold}`);
+    MIN_AUDIO_LEVEL = threshold;
     return { success: true };
   });
 }

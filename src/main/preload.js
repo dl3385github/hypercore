@@ -142,12 +142,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
   
-  // Update audio settings
-  updateAudioSettings: (settings) => {
-    logEvent('updateAudioSettings', settings);
-    return ipcRenderer.invoke('update-audio-settings', settings);
-  },
-  
   // Generate call summary
   generateCallSummary: (transcriptData) => {
     logEvent('generateCallSummary', `Transcript data with ${transcriptData.length} entries`);
@@ -166,6 +160,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.log('[Preload] Cleaning up onGenerateSummary listener');
       ipcRenderer.removeAllListeners('generate-summary');
     };
+  },
+  
+  // Update audio threshold
+  updateAudioThreshold: (threshold) => {
+    logEvent('updateAudioThreshold', `New threshold: ${threshold}`);
+    return ipcRenderer.invoke('update-audio-threshold', threshold);
   }
 });
 
