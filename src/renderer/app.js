@@ -50,75 +50,18 @@ document.addEventListener('DOMContentLoaded', () => {
     roomInput.value = generateDefaultRoomId();
   }
   
-  // Set up join button event
+  // Add direct event listeners for main actions
   joinButton.addEventListener('click', joinChat);
-  usernameInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      if (roomInput.value.trim()) {
-        joinChat();
-      } else {
-        roomInput.focus();
-      }
-    }
-  });
-  
-  roomInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && usernameInput.value.trim()) {
-      joinChat();
-    }
-  });
-  
-  // Set up message sending
   sendButton.addEventListener('click', sendMessage);
-  messageInput.addEventListener('keypress', (e) => {
+  messageInput.addEventListener('keypress', e => {
     if (e.key === 'Enter') sendMessage();
   });
-  
-  // Set up video controls
   toggleVideoButton.addEventListener('click', toggleVideo);
   toggleAudioButton.addEventListener('click', toggleAudio);
-  
-  // Set up save transcript button
   saveTranscriptButton.addEventListener('click', saveAllTranscripts);
   
-  // Set up message receiving
-  window.electronAPI.onNewMessage((message) => {
-    addMessageToUI(message);
-  });
-  
-  // Track peers
-  window.electronAPI.onPeerConnected((data) => {
-    peers.add(data.id);
-    updateConnectionCount();
-    addSystemMessage(`New peer connected (${data.id.substring(0, 8)}...)`);
-    
-    // Create WebRTC connection to this peer
-    createPeerConnection(data.id);
-  });
-  
-  window.electronAPI.onPeerDisconnected((data) => {
-    peers.delete(data.id);
-    updateConnectionCount();
-    addSystemMessage(`Peer disconnected (${data.id.substring(0, 8)}...)`);
-    
-    // Clean up WebRTC connection
-    cleanupPeerConnection(data.id);
-  });
-  
-  // Handle WebRTC signaling
-  window.electronAPI.onSignalReceived((data) => {
-    handleSignalReceived(data.peerId, data.from, data.signal);
-  });
-  
-  // Handle transcription results
-  window.electronAPI.onTranscriptionResult((result) => {
-    updateTranscription(result.speaker, result.text);
-  });
-  
-  // Handle network errors
-  window.electronAPI.onNetworkError((error) => {
-    addSystemMessage(`Network error: ${error.message}`);
-  });
+  // Set up the application event listeners
+  setupEventListeners();
 });
 
 // Generate a random room ID if none provided
@@ -1070,13 +1013,26 @@ function setupRemoteTranscription(peerId, stream) {
         
         // Create a blob from the recorded chunks
         const blob = new Blob(remoteChunks, { type: 'audio/webm' });
-        remoteChunks.length = 0; // Clear the array
+        // Clear the array for next recording
+        remoteChunks.length = 0; 
         
-        // Process locally - can be enhanced to send to main for transcription if needed
-        console.log(`Processed ${blob.size} bytes of audio from ${peerUsername}`);
+        // Convert blob to ArrayBuffer before sending to main process
+        const arrayBuffer = await blob.arrayBuffer();
         
-        // Note: In this implementation, we're assuming each peer handles their own transcription
-        // and sends the results via the data channel or signaling channel
+        // Create a regular array from the ArrayBuffer to ensure it can be cloned
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const buffer = Array.from(uint8Array);
+        
+        // Send to main process for transcription
+        console.log(`Sending remote audio from ${peerUsername} to main process for transcription`);
+        const result = await window.electronAPI.transcribeAudio(buffer, peerUsername);
+        
+        if (result.success) {
+          console.log(`Remote transcription successful for ${peerUsername}: ${result.transcription}`);
+          // The transcription result will come back through the onTranscriptionResult listener
+        } else {
+          console.error(`Error transcribing remote audio: ${result.error}`);
+        }
       } catch (error) {
         console.error(`Error processing remote audio from ${peerId}:`, error);
       }
@@ -1189,50 +1145,152 @@ function saveTranscript(username) {
   URL.revokeObjectURL(url);
 }
 
-// Save all transcripts
-function saveAllTranscripts() {
+// Save all transcripts and generate a summary
+async function saveAllTranscripts() {
   if (transcripts.size === 0) {
-    console.warn('No transcripts available to save');
+    addSystemMessage('No transcripts to save.');
     return;
   }
   
-  // Create a combined transcript with all participants
-  let allTranscripts = [];
-  
-  transcripts.forEach((entries, username) => {
-    entries.forEach(entry => {
-      allTranscripts.push({
-        timestamp: entry.timestamp,
-        username,
-        text: entry.text
+  try {
+    // First, format all transcripts chronologically
+    const allEntries = [];
+    
+    // Get all transcript entries with timestamps
+    transcripts.forEach((entries, speaker) => {
+      entries.forEach(entry => {
+        allEntries.push({
+          speaker,
+          text: entry.text,
+          timestamp: new Date(entry.timestamp)
+        });
       });
     });
-  });
-  
-  // Sort by timestamp
-  allTranscripts.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-  
-  // Format the transcript
-  const formattedTranscript = allTranscripts.map(entry => 
-    `[${entry.timestamp}] ${entry.username}: ${entry.text}`
-  ).join('\n');
-  
-  // Create a download link
-  const blob = new Blob([formattedTranscript], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `transcript_all_${currentRoom}_${Date.now()}.txt`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+    
+    // Sort by timestamp
+    allEntries.sort((a, b) => a.timestamp - b.timestamp);
+    
+    // Format into readable text
+    let formattedTranscript = "Conversation Transcript:\n\n";
+    allEntries.forEach(entry => {
+      const time = entry.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      formattedTranscript += `[${time}] ${entry.speaker}: ${entry.text}\n`;
+    });
+    
+    // Save the full transcript
+    const fileName = `transcript_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+    await window.electronAPI.saveFile(fileName, formattedTranscript);
+    
+    // Generate a summary with OpenAI
+    await generateConversationSummary(formattedTranscript);
+    
+    addSystemMessage(`Transcript saved as ${fileName}`);
+  } catch (error) {
+    console.error('Error saving transcripts:', error);
+    addSystemMessage(`Error saving transcripts: ${error.message}`);
+  }
 }
 
-// Add event listener for saving transcripts on leaving room
+// Generate a summary of the conversation with OpenAI
+async function generateConversationSummary(transcript) {
+  try {
+    addSystemMessage('Generating conversation summary...');
+    
+    // Send the transcript to OpenAI for summarization
+    const result = await window.electronAPI.summarizeConversation(transcript);
+    
+    if (result.success) {
+      // Save the summary
+      const summaryFileName = `summary_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+      await window.electronAPI.saveFile(summaryFileName, result.summary);
+      
+      addSystemMessage(`Summary saved as ${summaryFileName}`);
+    } else {
+      addSystemMessage(`Error generating summary: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error generating summary:', error);
+    addSystemMessage(`Error generating summary: ${error.message}`);
+  }
+}
+
+// Add event listener for saving transcripts
 window.addEventListener('beforeunload', () => {
   // Save all transcripts automatically when leaving
   if (transcripts.size > 0) {
     saveAllTranscripts();
   }
-}); 
+});
+
+// Set up event listeners
+function setupEventListeners() {
+  // UI buttons
+  joinButton.addEventListener('click', joinChat);
+  sendButton.addEventListener('click', sendMessage);
+  messageInput.addEventListener('keypress', e => {
+    if (e.key === 'Enter') sendMessage();
+  });
+  toggleVideoButton.addEventListener('click', toggleVideo);
+  toggleAudioButton.addEventListener('click', toggleAudio);
+  saveTranscriptButton.addEventListener('click', saveAllTranscripts);
+  
+  // Network events
+  const cleanupNewMessage = window.electronAPI.onNewMessage(message => {
+    addMessageToUI(message);
+  });
+  
+  const cleanupPeerConnected = window.electronAPI.onPeerConnected(data => {
+    addSystemMessage(`${data.username || 'A peer'} connected`);
+    updateConnectionCount();
+  });
+  
+  const cleanupPeerDisconnected = window.electronAPI.onPeerDisconnected(data => {
+    addSystemMessage(`${data.username || 'A peer'} disconnected`);
+    
+    // Clean up any resources for this peer
+    if (data.peerId) {
+      cleanupPeerConnection(data.peerId);
+    }
+    
+    updateConnectionCount();
+  });
+  
+  const cleanupSignalReceived = window.electronAPI.onSignalReceived(data => {
+    console.log('Signal received:', data);
+    handleSignalReceived(data.peerId, data.from, data.signal);
+  });
+  
+  const cleanupTranscriptionResult = window.electronAPI.onTranscriptionResult(data => {
+    updateTranscription(data.speaker, data.text);
+  });
+  
+  const cleanupNetworkError = window.electronAPI.onNetworkError(error => {
+    addSystemMessage(`Network error: ${error.message}`);
+  });
+  
+  // Save transcripts when app is closing
+  const cleanupSaveTranscripts = window.electronAPI.onSaveTranscripts(async () => {
+    console.log('Saving transcripts before app closes');
+    try {
+      await saveAllTranscripts();
+      window.electronAPI.saveTranscriptsDone({ success: true });
+    } catch (error) {
+      console.error('Error saving transcripts on app close:', error);
+      window.electronAPI.saveTranscriptsDone({ 
+        success: false, 
+        error: error.message || 'Unknown error saving transcripts'
+      });
+    }
+  });
+  
+  // Store cleanup functions for later use if needed
+  return {
+    cleanupNewMessage,
+    cleanupPeerConnected,
+    cleanupPeerDisconnected,
+    cleanupSignalReceived,
+    cleanupTranscriptionResult,
+    cleanupNetworkError,
+    cleanupSaveTranscripts
+  };
+} 

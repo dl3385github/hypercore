@@ -52,31 +52,63 @@ function createWindow() {
   try {
     // Create the browser window
     mainWindow = new BrowserWindow({
-      width: 1200,
+      width: 1280,
       height: 800,
       webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
-        contextIsolation: true,
         nodeIntegration: false,
-      },
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.js')
+      }
     });
 
-    // Load the index.html of the app
-    const htmlPath = path.join(__dirname, '../renderer/index.html');
-    console.log('Loading HTML from:', htmlPath);
-    mainWindow.loadFile(htmlPath);
-
-    // Open DevTools for debugging
-    mainWindow.webContents.openDevTools();
+    // Load the index.html
+    const startUrl = path.join(`file://${__dirname}/../renderer/index.html`);
+    console.log(`Loading HTML from: ${startUrl}`);
     
-    // Log when window is ready
-    mainWindow.webContents.on('did-finish-load', () => {
-      console.log('Window loaded successfully');
+    mainWindow.loadURL(startUrl)
+      .then(() => console.log('Window loaded successfully'))
+      .catch(err => console.error('Error loading window:', err));
+    
+    // Open DevTools
+    // mainWindow.webContents.openDevTools();
+    
+    // Set up handlers before closing
+    mainWindow.on('close', async (e) => {
+      try {
+        console.log('Window is closing, saving transcripts and generating summary...');
+        
+        // Notify renderer to save transcripts and generate summary
+        // We need to prevent window from closing until this is done
+        e.preventDefault();
+        
+        // Tell renderer to save transcripts
+        mainWindow.webContents.send('save-transcripts');
+        
+        // Wait for renderer to signal it's done
+        const result = await new Promise((resolve) => {
+          ipcMain.once('save-transcripts-done', (event, result) => resolve(result));
+          
+          // Set a timeout in case the renderer doesn't respond
+          setTimeout(() => resolve({ success: false, error: 'Timed out waiting for transcripts to save' }), 10000);
+        });
+        
+        if (result && !result.success) {
+          console.error('Error saving transcripts:', result.error);
+        }
+        
+        // Now actually close the window
+        mainWindow.destroy();
+      } catch (error) {
+        console.error('Error during window close:', error);
+        // Force close if there was an error
+        mainWindow.destroy();
+      }
     });
     
-    // Log errors
-    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      console.error('Failed to load:', errorCode, errorDescription);
+    // Emitted when the window is closed.
+    mainWindow.on('closed', () => {
+      console.log('Window has been closed');
+      mainWindow = null;
     });
   } catch (error) {
     console.error('Error creating window:', error);
@@ -263,11 +295,18 @@ function setupIpcHandlers() {
   // Handle audio transcription requests
   ipcMain.handle('transcribe-audio', async (event, audioBuffer, speaker) => {
     try {
-      console.log(`Transcribing audio from ${speaker}, size: ${audioBuffer.byteLength} bytes`);
+      console.log(`Transcribing audio from ${speaker}, size: ${audioBuffer?.length} bytes`);
+      
+      // Create temp directory if it doesn't exist
+      if (!fs.existsSync('./temp')) {
+        fs.mkdirSync('./temp', { recursive: true });
+      }
       
       // Save audio buffer to a temporary file
       const tempFilePath = path.join('./temp', `recording_${Date.now()}.webm`);
       fs.writeFileSync(tempFilePath, Buffer.from(audioBuffer));
+      
+      console.log(`Sending audio file to OpenAI: ${tempFilePath}`);
       
       // Call OpenAI Whisper API
       const transcription = await transcribeWithWhisper(tempFilePath);
@@ -295,6 +334,77 @@ function setupIpcHandlers() {
         error: error.message || 'Failed to transcribe audio'
       };
     }
+  });
+
+  // Handle saving files
+  ipcMain.handle('save-file', async (event, filename, content) => {
+    try {
+      // Create output directory if it doesn't exist
+      const outputDir = path.join('.', 'transcripts');
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      
+      const filePath = path.join(outputDir, filename);
+      fs.writeFileSync(filePath, content);
+      
+      return { 
+        success: true,
+        filePath
+      };
+    } catch (error) {
+      console.error('Error saving file:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to save file'
+      };
+    }
+  });
+
+  // Handle conversation summarization with OpenAI
+  ipcMain.handle('summarize-conversation', async (event, transcript) => {
+    try {
+      if (!openai) {
+        throw new Error('OpenAI API key not set. Cannot generate summary.');
+      }
+      
+      console.log('Sending conversation to OpenAI for summarization');
+      
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "You are a helpful assistant that generates concise summaries of conversations. Identify the main topics discussed, key points made by each participant, and any decisions or action items agreed upon."
+          },
+          {
+            role: "user",
+            content: `Please summarize this conversation transcript:\n\n${transcript}`
+          }
+        ],
+        max_tokens: 1000
+      });
+      
+      const summary = response.choices[0].message.content;
+      console.log('Summary generated successfully');
+      
+      return { 
+        success: true,
+        summary
+      };
+    } catch (error) {
+      console.error('Error summarizing conversation:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to summarize conversation'
+      };
+    }
+  });
+
+  // Signal that transcript saving is complete
+  ipcMain.handle('save-transcripts-done', async (event, result) => {
+    console.log('Transcript saving complete:', result);
+    return result;
   });
 }
 
