@@ -608,6 +608,18 @@ function handleDataChannelMessage(peerId, message) {
     
     // Update UI with the transcript
     updateTranscription(speaker, message.text);
+    
+    // Also store in the transcript map for the call summary
+    if (!transcripts.has(speaker)) {
+      transcripts.set(speaker, []);
+    }
+    
+    transcripts.get(speaker).push({
+      timestamp: message.timestamp || new Date().toISOString(),
+      text: message.text
+    });
+    
+    console.log(`Updated transcript for ${speaker}, total entries: ${transcripts.get(speaker).length}`);
   }
 }
 
