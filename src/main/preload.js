@@ -29,6 +29,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('send-message', message);
   },
   
+  // WebRTC signaling
+  sendSignal: (peerId, signal) => {
+    logEvent('sendSignal', peerId, signal);
+    return ipcRenderer.invoke('send-signal', peerId, signal);
+  },
+  
+  // Get video stream permissions
+  getMediaStream: (config) => {
+    logEvent('getMediaStream', config);
+    return ipcRenderer.invoke('get-media-stream', config);
+  },
+  
+  // Transcribe audio
+  transcribeAudio: (audioBuffer, username) => {
+    logEvent('transcribeAudio', `Audio from ${username}, size: ${audioBuffer.byteLength} bytes`);
+    return ipcRenderer.invoke('transcribe-audio', audioBuffer, username);
+  },
+  
+  // Get our own peer ID (public key)
+  getOwnId: () => {
+    return ipcRenderer.invoke('get-own-id');
+  },
+  
   // Receive new messages
   onNewMessage: (callback) => {
     console.log('[Preload] Setting up onNewMessage listener');
@@ -68,6 +91,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       console.log('[Preload] Cleaning up onPeerDisconnected listener');
       ipcRenderer.removeAllListeners('peer-disconnected');
+    };
+  },
+  
+  // WebRTC signaling events
+  onSignalReceived: (callback) => {
+    console.log('[Preload] Setting up onSignalReceived listener');
+    ipcRenderer.on('signal-received', (event, data) => {
+      logEvent('signal-received', data);
+      callback(data);
+    });
+    
+    return () => {
+      console.log('[Preload] Cleaning up onSignalReceived listener');
+      ipcRenderer.removeAllListeners('signal-received');
+    };
+  },
+  
+  // Transcription results
+  onTranscriptionResult: (callback) => {
+    console.log('[Preload] Setting up onTranscriptionResult listener');
+    ipcRenderer.on('transcription-result', (event, data) => {
+      logEvent('transcription-result', data);
+      callback(data);
+    });
+    
+    return () => {
+      console.log('[Preload] Cleaning up onTranscriptionResult listener');
+      ipcRenderer.removeAllListeners('transcription-result');
     };
   },
   

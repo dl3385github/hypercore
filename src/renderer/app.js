@@ -9,10 +9,34 @@ const messageInput = document.getElementById('message-input');
 const sendButton = document.getElementById('send-btn');
 const connectionCount = document.getElementById('connection-count');
 const currentRoomSpan = document.getElementById('current-room');
+const localVideo = document.getElementById('local-video');
+const remoteVideosContainer = document.getElementById('remote-videos');
+const toggleVideoButton = document.getElementById('toggle-video');
+const toggleAudioButton = document.getElementById('toggle-audio');
+const remoteVideoTemplate = document.getElementById('remote-video-template');
+const saveTranscriptButton = document.getElementById('save-transcript-btn');
 
-// Track connected peers
+// State variables
 let peers = new Set();
 let currentRoom = '';
+let localStream = null;
+let isVideoEnabled = true;
+let isAudioEnabled = true;
+let peerConnections = new Map(); // Key: peerId, Value: {connection, stream}
+let transcriptionIntervals = new Map(); // Tracking transcription timers for each peer
+let localTranscriptContainer = document.querySelector('#local-transcript .transcript-content');
+// Store transcripts by participant for later saving
+let transcripts = new Map(); // Key: username, Value: Array of transcript entries
+let dataChannels = new Map(); // Key: peerId, Value: RTCDataChannel
+
+// Media recording
+let mediaRecorder = null;
+let recordedChunks = [];
+let isRecording = false;
+let transcriptionInterval = null;
+
+// Store remote audio recorders for transcription
+let remoteRecorders = new Map();
 
 // Initialize UI
 document.addEventListener('DOMContentLoaded', () => {
@@ -48,6 +72,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') sendMessage();
   });
   
+  // Set up video controls
+  toggleVideoButton.addEventListener('click', toggleVideo);
+  toggleAudioButton.addEventListener('click', toggleAudio);
+  
+  // Set up save transcript button
+  saveTranscriptButton.addEventListener('click', saveAllTranscripts);
+  
   // Set up message receiving
   window.electronAPI.onNewMessage((message) => {
     addMessageToUI(message);
@@ -58,12 +89,28 @@ document.addEventListener('DOMContentLoaded', () => {
     peers.add(data.id);
     updateConnectionCount();
     addSystemMessage(`New peer connected (${data.id.substring(0, 8)}...)`);
+    
+    // Create WebRTC connection to this peer
+    createPeerConnection(data.id);
   });
   
   window.electronAPI.onPeerDisconnected((data) => {
     peers.delete(data.id);
     updateConnectionCount();
     addSystemMessage(`Peer disconnected (${data.id.substring(0, 8)}...)`);
+    
+    // Clean up WebRTC connection
+    cleanupPeerConnection(data.id);
+  });
+  
+  // Handle WebRTC signaling
+  window.electronAPI.onSignalReceived((data) => {
+    handleSignalReceived(data.peerId, data.from, data.signal);
+  });
+  
+  // Handle transcription results
+  window.electronAPI.onTranscriptionResult((result) => {
+    updateTranscription(result.speaker, result.text);
   });
   
   // Handle network errors
@@ -88,6 +135,66 @@ async function joinChat() {
   }
   
   try {
+    // Try to get user media (camera and microphone)
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        },
+        audio: true
+      });
+      
+      // If we got here, both video and audio are available
+      isVideoEnabled = true;
+      isAudioEnabled = true;
+      
+    } catch (mediaError) {
+      // Try fallback options if full access wasn't granted
+      console.warn('Could not access both camera and microphone, trying fallback options', mediaError);
+      
+      try {
+        // Try just audio
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: false,
+          audio: true
+        });
+        isVideoEnabled = false;
+        isAudioEnabled = true;
+        addSystemMessage('Camera access not available. Audio only mode enabled.');
+      } catch (audioError) {
+        // No media devices available
+        console.warn('Could not access any media devices', audioError);
+        localStream = null;
+        isVideoEnabled = false;
+        isAudioEnabled = false;
+        addSystemMessage('No camera or microphone detected. You can see and hear others but cannot share your own video or audio.');
+      }
+    }
+    
+    // Display local video if we have video access
+    if (localStream && isVideoEnabled) {
+      localVideo.srcObject = localStream;
+      localVideo.play().catch(e => console.error('Error playing local video:', e));
+      toggleVideoButton.querySelector('.icon').textContent = '📹';
+    } else {
+      toggleVideoButton.querySelector('.icon').textContent = '🚫';
+      toggleVideoButton.classList.add('video-off');
+    }
+    
+    // Set initial audio state
+    if (localStream && isAudioEnabled) {
+      toggleAudioButton.querySelector('.icon').textContent = '🎤';
+    } else {
+      toggleAudioButton.querySelector('.icon').textContent = '🔇';
+      toggleAudioButton.classList.add('muted');
+    }
+    
+    // Set up recording for transcription
+    if (localStream && isAudioEnabled) {
+      setupMediaRecording();
+    }
+    
     // Set username and join room in main process
     currentRoom = roomId;
     await window.electronAPI.setUsername(username);
@@ -172,4 +279,818 @@ function addSystemMessage(text) {
 // Update the connection count display
 function updateConnectionCount() {
   connectionCount.textContent = peers.size;
-} 
+}
+
+// Toggle video on/off
+function toggleVideo() {
+  if (!localStream) return;
+  
+  const videoTracks = localStream.getVideoTracks();
+  if (videoTracks.length === 0) {
+    addSystemMessage('No video device available');
+    return;
+  }
+  
+  isVideoEnabled = !isVideoEnabled;
+  
+  // Update all video tracks
+  videoTracks.forEach(track => {
+    track.enabled = isVideoEnabled;
+  });
+  
+  // Update UI
+  if (isVideoEnabled) {
+    toggleVideoButton.querySelector('.icon').textContent = '📹';
+    toggleVideoButton.classList.remove('video-off');
+  } else {
+    toggleVideoButton.querySelector('.icon').textContent = '🚫';
+    toggleVideoButton.classList.add('video-off');
+  }
+  
+  // Notify peers of video state change
+  notifyMediaStateChange();
+}
+
+// Toggle audio on/off
+function toggleAudio() {
+  if (!localStream) return;
+  
+  const audioTracks = localStream.getAudioTracks();
+  if (audioTracks.length === 0) {
+    addSystemMessage('No audio device available');
+    return;
+  }
+  
+  isAudioEnabled = !isAudioEnabled;
+  
+  // Update all audio tracks
+  audioTracks.forEach(track => {
+    track.enabled = isAudioEnabled;
+  });
+  
+  // Update UI
+  if (isAudioEnabled) {
+    toggleAudioButton.querySelector('.icon').textContent = '🎤';
+    toggleAudioButton.classList.remove('muted');
+    
+    // Restart recording if it was previously stopped
+    if (!isRecording && localStream) {
+      setupMediaRecording();
+    }
+  } else {
+    toggleAudioButton.querySelector('.icon').textContent = '🔇';
+    toggleAudioButton.classList.add('muted');
+    
+    // Stop recording if audio is off
+    stopMediaRecording();
+  }
+  
+  // Notify peers of audio state change
+  notifyMediaStateChange();
+}
+
+// Notify peers of media state changes
+function notifyMediaStateChange() {
+  // Send to all connected peers via data channels
+  for (const [peerId, dataChannel] of dataChannels.entries()) {
+    if (dataChannel.readyState === 'open') {
+      sendMediaStateViaDataChannel(dataChannel);
+    }
+  }
+}
+
+// Send control messages to all peers
+function sendControlMessage(message) {
+  // This would send media state changes through the data channel
+  // For this implementation, we're not implementing separate data channels
+  // as the focus is on basic video functionality first
+}
+
+// Create a WebRTC peer connection
+async function createPeerConnection(peerId) {
+  try {
+    console.log(`Creating WebRTC connection to peer: ${peerId}`);
+    
+    // Create connection if it doesn't exist
+    if (peerConnections.has(peerId)) {
+      console.log(`Connection to peer ${peerId} already exists`);
+      return;
+    }
+    
+    // Create new RTCPeerConnection with STUN servers
+    const peerConnection = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:stun.stunprotocol.org:3478' },
+        { urls: 'stun:stun.ekiga.net:3478' },
+        { urls: 'stun:stun.ideasip.com:3478' },
+        { urls: 'stun:stun.voiparound.com:3478' }
+      ],
+      iceCandidatePoolSize: 10
+    });
+    
+    // Create a data channel for control messages
+    const dataChannel = peerConnection.createDataChannel(`chat-${peerId}`, {
+      ordered: true
+    });
+    
+    dataChannel.onopen = () => {
+      console.log(`Data channel to ${peerId} opened`);
+      
+      // Send our current media state immediately
+      if (dataChannel.readyState === 'open') {
+        sendMediaStateViaDataChannel(dataChannel);
+      }
+    };
+    
+    dataChannel.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        handleDataChannelMessage(peerId, message);
+      } catch (err) {
+        console.error('Failed to parse data channel message:', err);
+      }
+    };
+    
+    dataChannel.onclose = () => {
+      console.log(`Data channel to ${peerId} closed`);
+    };
+    
+    dataChannel.onerror = (error) => {
+      console.error(`Data channel error for peer ${peerId}:`, error);
+    };
+    
+    dataChannels.set(peerId, dataChannel);
+    
+    // Handle data channel from remote peer
+    peerConnection.ondatachannel = (event) => {
+      const receiveChannel = event.channel;
+      console.log(`Received data channel from ${peerId}:`, receiveChannel.label);
+      
+      receiveChannel.onmessage = (msgEvent) => {
+        try {
+          const message = JSON.parse(msgEvent.data);
+          handleDataChannelMessage(peerId, message);
+        } catch (err) {
+          console.error('Failed to parse incoming data channel message:', err);
+        }
+      };
+    };
+    
+    // Add our local stream tracks to the connection
+    if (localStream) {
+      localStream.getTracks().forEach(track => {
+        console.log(`Adding track to peer connection: ${track.kind}`);
+        peerConnection.addTrack(track, localStream);
+      });
+    }
+    
+    // Connection state change events
+    peerConnection.onconnectionstatechange = () => {
+      console.log(`Connection state for ${peerId} changed to: ${peerConnection.connectionState}`);
+      if (peerConnection.connectionState === 'failed' || 
+          peerConnection.connectionState === 'closed') {
+        console.warn(`Connection to peer ${peerId} ${peerConnection.connectionState}`);
+      }
+    };
+    
+    // ICE connection state change
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log(`ICE connection state for ${peerId} changed to: ${peerConnection.iceConnectionState}`);
+    };
+    
+    // Handle ICE candidates
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        console.log(`Generated ICE candidate for ${peerId}`, event.candidate);
+        const signal = {
+          type: 'ice-candidate',
+          candidate: event.candidate // Send the entire candidate, not JSON
+        };
+        
+        // Send the ICE candidate to the peer
+        window.electronAPI.sendSignal(peerId, signal);
+      } else {
+        console.log(`ICE candidate gathering completed for peer ${peerId}`);
+      }
+    };
+    
+    // Handle incoming stream
+    peerConnection.ontrack = (event) => {
+      console.log(`Received track from ${peerId}:`, event.track.kind);
+      const [remoteStream] = event.streams;
+      
+      if (!remoteStream) {
+        console.warn(`No stream in track event from ${peerId}`);
+        return;
+      }
+      
+      console.log(`Received remote stream from ${peerId}`);
+      
+      // Add the remote stream to the UI
+      addRemoteStream(peerId, remoteStream);
+    };
+    
+    // Store the connection
+    peerConnections.set(peerId, {
+      connection: peerConnection,
+      stream: null
+    });
+    
+    // Create offer (initiate connection)
+    // We'll use a comparison of peer IDs to determine who initiates
+    // This ensures only one side creates the offer
+    const shouldInitiate = await shouldInitiateConnection(peerId);
+    if (shouldInitiate) {
+      console.log(`This peer should initiate connection to ${peerId}`);
+      createOffer(peerId, peerConnection);
+    } else {
+      console.log(`Waiting for offer from peer ${peerId}`);
+    }
+    
+  } catch (error) {
+    console.error(`Error creating peer connection to ${peerId}:`, error);
+    addSystemMessage(`Failed to connect to peer: ${error.message}`);
+  }
+}
+
+// Determine if we should initiate the connection based on peer IDs
+async function shouldInitiateConnection(peerId) {
+  // Get our public key from the current connections
+  // This is a simple way to decide who initiates
+  try {
+    const ownId = await window.electronAPI.getOwnId();
+    if (!ownId) return true; // If we can't get our ID, default to initiating
+    
+    // Compare peer IDs to decide who initiates the connection
+    // This ensures only one side creates the offer
+    return ownId > peerId;
+  } catch (error) {
+    console.error('Error getting own ID:', error);
+    return true; // Default to initiating if there's an error
+  }
+}
+
+// Send our media state via data channel
+function sendMediaStateViaDataChannel(dataChannel) {
+  const mediaState = {
+    type: 'media-state',
+    username: usernameInput.value.trim(),
+    videoEnabled: isVideoEnabled,
+    audioEnabled: isAudioEnabled
+  };
+  
+  dataChannel.send(JSON.stringify(mediaState));
+}
+
+// Handle messages received via data channel
+function handleDataChannelMessage(peerId, message) {
+  console.log(`Received data channel message from ${peerId}:`, message);
+  
+  if (message.type === 'media-state') {
+    // Update remote media state UI
+    updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
+  }
+}
+
+// Update remote media state indicators
+function updateRemoteMediaState(peerId, username, videoEnabled, audioEnabled) {
+  const remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+  if (!remoteContainer) return;
+  
+  // Update video state indicator
+  const videoOffIndicator = remoteContainer.querySelector('.video-off-indicator');
+  if (videoEnabled) {
+    videoOffIndicator.classList.add('hidden');
+  } else {
+    videoOffIndicator.classList.remove('hidden');
+  }
+  
+  // Update audio state indicator
+  const audioOffIndicator = remoteContainer.querySelector('.audio-off-indicator');
+  if (audioEnabled) {
+    audioOffIndicator.classList.add('hidden');
+  } else {
+    audioOffIndicator.classList.remove('hidden');
+  }
+}
+
+// Clean up peer connection when a peer disconnects
+function cleanupPeerConnection(peerId) {
+  console.log(`Cleaning up connection for peer ${peerId}`);
+  
+  try {
+    // Clean up data channel
+    if (dataChannels.has(peerId)) {
+      const dataChannel = dataChannels.get(peerId);
+      if (dataChannel && dataChannel.readyState !== 'closed') {
+        dataChannel.close();
+      }
+      dataChannels.delete(peerId);
+    }
+    
+    // Clean up peer connection
+    if (peerConnections.has(peerId)) {
+      const { connection, stream } = peerConnections.get(peerId);
+      
+      // Close connection if it exists
+      if (connection) {
+        connection.ontrack = null;
+        connection.onicecandidate = null;
+        connection.oniceconnectionstatechange = null;
+        connection.onsignalingstatechange = null;
+        connection.onicegatheringstatechange = null;
+        connection.onconnectionstatechange = null;
+        connection.ondatachannel = null;
+        connection.close();
+      }
+      
+      peerConnections.delete(peerId);
+    }
+    
+    // Clean up remote recorder
+    if (remoteRecorders.has(peerId)) {
+      const { recorder, interval } = remoteRecorders.get(peerId);
+      if (interval) {
+        clearInterval(interval);
+      }
+      if (recorder && recorder.state === 'recording') {
+        recorder.stop();
+      }
+      remoteRecorders.delete(peerId);
+    }
+    
+    // Remove video element from the UI
+    const videoContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+    if (videoContainer) {
+      const videoElement = videoContainer.querySelector('video');
+      if (videoElement) {
+        videoElement.srcObject = null;
+        videoElement.pause();
+      }
+      videoContainer.remove();
+    }
+    
+    // Remove participant from transcript if it exists
+    const transcriptContainer = document.querySelector(`.transcript-container[data-participant="${peerId}"]`);
+    if (transcriptContainer) {
+      transcriptContainer.remove();
+    }
+    
+    // Update the UI
+    updateConnectionCount();
+    
+  } catch (error) {
+    console.error(`Error cleaning up peer connection for ${peerId}:`, error);
+  }
+}
+
+// Create an offer to initiate WebRTC connection
+async function createOffer(peerId, peerConnection) {
+  try {
+    // Create offer
+    const offer = await peerConnection.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true
+    });
+    
+    console.log(`Created offer for ${peerId}`, offer);
+    await peerConnection.setLocalDescription(offer);
+    
+    // Send the offer immediately to avoid delays
+    const signal = {
+      type: 'offer',
+      sdp: peerConnection.localDescription // Send the entire description, not JSON
+    };
+    
+    console.log(`Sending offer to peer ${peerId}`);
+    window.electronAPI.sendSignal(peerId, signal);
+  } catch (error) {
+    console.error(`Error creating offer for ${peerId}:`, error);
+  }
+}
+
+// Handle incoming WebRTC signals
+async function handleSignalReceived(peerId, from, signal) {
+  try {
+    console.log(`Received signal from ${from} (${peerId}):`, signal.type);
+    
+    // If we don't have a connection to this peer yet, create one
+    if (!peerConnections.has(peerId)) {
+      await createPeerConnection(peerId);
+    }
+    
+    const { connection } = peerConnections.get(peerId);
+    
+    // Handle different signal types
+    if (signal.type === 'offer') {
+      // Make sure we have a valid SDP object
+      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+        console.error('Invalid SDP in offer:', signal.sdp);
+        return;
+      }
+      
+      console.log(`Setting remote description (offer) from ${peerId}`);
+      await connection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+      
+      // Create and send answer
+      console.log(`Creating answer for ${peerId}`);
+      const answer = await connection.createAnswer();
+      await connection.setLocalDescription(answer);
+      
+      console.log(`Sending answer to ${peerId}`);
+      window.electronAPI.sendSignal(peerId, {
+        type: 'answer',
+        sdp: connection.localDescription // Send the entire description, not JSON
+      });
+      
+    } else if (signal.type === 'answer') {
+      // Make sure we have a valid SDP object
+      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+        console.error('Invalid SDP in answer:', signal.sdp);
+        return;
+      }
+      
+      console.log(`Setting remote description (answer) from ${peerId}`);
+      await connection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+      
+    } else if (signal.type === 'ice-candidate') {
+      // Make sure we have a valid candidate
+      if (!signal.candidate) {
+        console.error('Invalid ICE candidate:', signal.candidate);
+        return;
+      }
+      
+      console.log(`Adding ICE candidate from ${peerId}`, signal.candidate);
+      try {
+        // Check if the ICE candidate has required fields before adding
+        if (signal.candidate.sdpMid !== null || signal.candidate.sdpMLineIndex !== null) {
+          await connection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        } else {
+          console.warn(`Skipping invalid ICE candidate from ${peerId}: missing sdpMid or sdpMLineIndex`);
+        }
+      } catch (err) {
+        // Only log error if connection hasn't failed
+        if (connection.iceConnectionState !== 'failed') {
+          console.error(`Error adding ICE candidate from ${peerId}:`, err);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error handling signal from ${peerId}:`, error);
+  }
+}
+
+// Add a remote stream to the UI
+function addRemoteStream(peerId, stream) {
+  console.log(`Adding remote stream from ${peerId} to UI`);
+  
+  // Create a container for the remote video if it doesn't exist
+  let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+  
+  if (!remoteContainer) {
+    // Clone the template
+    console.log('Creating new remote video container');
+    const template = remoteVideoTemplate.content.cloneNode(true);
+    remoteContainer = template.querySelector('.remote-video-container');
+    remoteContainer.setAttribute('data-peer-id', peerId);
+    
+    // Set the participant name (using peerId for now)
+    const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
+    remoteContainer.querySelector('.participant-name').textContent = peerUsername;
+    
+    // Add the container to the remote videos section
+    remoteVideosContainer.appendChild(remoteContainer);
+  }
+  
+  // Add the stream to the video element
+  const videoElement = remoteContainer.querySelector('.remote-video');
+  
+  // Only set stream if it's different
+  if (videoElement.srcObject !== stream) {
+    console.log(`Setting video element source for peer ${peerId}`);
+    videoElement.srcObject = stream;
+    
+    // Add event listeners for video
+    videoElement.onloadedmetadata = () => {
+      console.log(`Remote video metadata loaded for ${peerId}`);
+      videoElement.play().catch(e => {
+        console.error(`Error playing remote video for ${peerId}:`, e);
+      });
+    };
+    
+    videoElement.onerror = (e) => {
+      console.error(`Error with remote video element for ${peerId}:`, e);
+    };
+    
+    // Ensure the video plays
+    if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA or higher
+      videoElement.play().catch(e => {
+        console.error(`Error playing remote video for ${peerId}:`, e);
+      });
+    }
+  }
+  
+  // Store the stream in our connections map
+  if (peerConnections.has(peerId)) {
+    peerConnections.get(peerId).stream = stream;
+  }
+  
+  // Set up transcription for this peer
+  setupRemoteTranscription(peerId, stream);
+}
+
+// Get a username for a peer based on peerId
+function getPeerUsername(peerId) {
+  // This would be more sophisticated in a real app
+  // where we have a mapping of peer IDs to usernames
+  return null;
+}
+
+// Set up media recording for local transcription
+function setupMediaRecording() {
+  if (!localStream || !localStream.getAudioTracks().length) return;
+  
+  try {
+    // Create a new MediaRecorder
+    const audioStream = new MediaStream([localStream.getAudioTracks()[0]]);
+    mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+    
+    // Handle data available event
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        recordedChunks.push(event.data);
+      }
+    };
+    
+    // Handle recording stop
+    mediaRecorder.onstop = async () => {
+      if (recordedChunks.length === 0) return;
+      
+      try {
+        // Create a blob from the recorded chunks
+        const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+        recordedChunks = [];
+        
+        // Convert blob to ArrayBuffer before sending to main process
+        const arrayBuffer = await blob.arrayBuffer();
+        
+        // Create a regular array from the ArrayBuffer to ensure it can be cloned
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const buffer = Array.from(uint8Array);
+        
+        // Send to main process for transcription
+        const username = usernameInput.value.trim();
+        const result = await window.electronAPI.transcribeAudio(buffer, username);
+        if (result.success) {
+          // Transcription will come back through the onTranscriptionResult listener
+        }
+      } catch (error) {
+        console.error('Error transcribing audio:', error);
+      }
+    };
+    
+    // Start recording
+    mediaRecorder.start();
+    isRecording = true;
+    
+    // Set up interval to stop and restart recording every 5 seconds
+    transcriptionInterval = setInterval(() => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        
+        // Start a new recording after a small delay
+        setTimeout(() => {
+          if (isAudioEnabled && isRecording) {
+            mediaRecorder.start();
+          }
+        }, 500);
+      }
+    }, 5000); // Record in 5-second chunks
+    
+  } catch (error) {
+    console.error('Error setting up media recording:', error);
+    addSystemMessage(`Error setting up transcription: ${error.message}`);
+  }
+}
+
+// Stop media recording
+function stopMediaRecording() {
+  isRecording = false;
+  
+  if (transcriptionInterval) {
+    clearInterval(transcriptionInterval);
+    transcriptionInterval = null;
+  }
+  
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  }
+}
+
+// Setup transcription for remote participants
+function setupRemoteTranscription(peerId, stream) {
+  // Extract audio track from the remote stream
+  const audioTracks = stream.getAudioTracks();
+  if (!audioTracks || audioTracks.length === 0) {
+    console.warn(`No audio tracks found in remote stream from ${peerId}`);
+    return;
+  }
+  
+  console.log(`Setting up transcription for remote audio from ${peerId}`);
+  
+  try {
+    // Create a new MediaStream with just the audio track
+    const audioStream = new MediaStream([audioTracks[0]]);
+    
+    // Create a new MediaRecorder for this remote stream
+    const remoteRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+    const remoteChunks = [];
+    
+    // Handle data available event
+    remoteRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        remoteChunks.push(event.data);
+      }
+    };
+    
+    // Handle recording stop
+    remoteRecorder.onstop = async () => {
+      if (remoteChunks.length === 0) return;
+      
+      try {
+        // Get peer username
+        const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+        
+        // Create a blob from the recorded chunks
+        const blob = new Blob(remoteChunks, { type: 'audio/webm' });
+        remoteChunks.length = 0; // Clear the array
+        
+        // Process locally - can be enhanced to send to main for transcription if needed
+        console.log(`Processed ${blob.size} bytes of audio from ${peerUsername}`);
+        
+        // Note: In this implementation, we're assuming each peer handles their own transcription
+        // and sends the results via the data channel or signaling channel
+      } catch (error) {
+        console.error(`Error processing remote audio from ${peerId}:`, error);
+      }
+    };
+    
+    // Start recording
+    remoteRecorder.start();
+    
+    // Set up interval to stop and restart recording every 5 seconds
+    const interval = setInterval(() => {
+      if (remoteRecorder && remoteRecorder.state === 'recording') {
+        remoteRecorder.stop();
+        
+        // Start a new recording after a small delay
+        setTimeout(() => {
+          // Only restart if the peer connection is still active
+          if (peerConnections.has(peerId)) {
+            remoteRecorder.start();
+          } else {
+            clearInterval(interval);
+          }
+        }, 500);
+      }
+    }, 5000); // Record in 5-second chunks
+    
+    // Store the recorder and interval for cleanup
+    if (!remoteRecorders.has(peerId)) {
+      remoteRecorders.set(peerId, { recorder: remoteRecorder, interval });
+    } else {
+      // Clean up existing recorder first
+      const existing = remoteRecorders.get(peerId);
+      clearInterval(existing.interval);
+      if (existing.recorder && existing.recorder.state === 'recording') {
+        existing.recorder.stop();
+      }
+      remoteRecorders.set(peerId, { recorder: remoteRecorder, interval });
+    }
+    
+  } catch (error) {
+    console.error(`Error setting up remote transcription for ${peerId}:`, error);
+  }
+}
+
+// Update transcription display
+function updateTranscription(speaker, text) {
+  if (!text || text.trim() === '') return;
+  
+  let transcriptContainer;
+  
+  // Store transcript entry
+  if (!transcripts.has(speaker)) {
+    transcripts.set(speaker, []);
+  }
+  
+  const timestamp = new Date().toISOString();
+  transcripts.get(speaker).push({
+    timestamp,
+    text
+  });
+  
+  if (speaker === usernameInput.value.trim()) {
+    // Local user's transcript
+    transcriptContainer = localTranscriptContainer;
+  } else {
+    // Find the right remote transcript container
+    // This is a simplified approach; in reality, you'd need to map peer IDs to usernames
+    const containers = document.querySelectorAll('.remote-video-container');
+    
+    for (const container of containers) {
+      const nameElement = container.querySelector('.participant-name');
+      if (nameElement && nameElement.textContent === speaker) {
+        transcriptContainer = container.querySelector('.transcript-content');
+        break;
+      }
+    }
+  }
+  
+  if (transcriptContainer) {
+    // Add the new transcription
+    const transcriptEntry = document.createElement('div');
+    transcriptEntry.textContent = `${speaker}: ${text}`;
+    transcriptContainer.appendChild(transcriptEntry);
+    
+    // Scroll to the bottom
+    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+  }
+}
+
+// Add function to save transcripts
+function saveTranscript(username) {
+  if (!transcripts.has(username)) {
+    console.warn(`No transcript found for ${username}`);
+    return;
+  }
+  
+  const entries = transcripts.get(username);
+  const formattedTranscript = entries.map(entry => 
+    `[${entry.timestamp}] ${username}: ${entry.text}`
+  ).join('\n');
+  
+  // Create a download link
+  const blob = new Blob([formattedTranscript], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `transcript_${username}_${currentRoom}_${Date.now()}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// Save all transcripts
+function saveAllTranscripts() {
+  if (transcripts.size === 0) {
+    console.warn('No transcripts available to save');
+    return;
+  }
+  
+  // Create a combined transcript with all participants
+  let allTranscripts = [];
+  
+  transcripts.forEach((entries, username) => {
+    entries.forEach(entry => {
+      allTranscripts.push({
+        timestamp: entry.timestamp,
+        username,
+        text: entry.text
+      });
+    });
+  });
+  
+  // Sort by timestamp
+  allTranscripts.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  
+  // Format the transcript
+  const formattedTranscript = allTranscripts.map(entry => 
+    `[${entry.timestamp}] ${entry.username}: ${entry.text}`
+  ).join('\n');
+  
+  // Create a download link
+  const blob = new Blob([formattedTranscript], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `transcript_all_${currentRoom}_${Date.now()}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// Add event listener for saving transcripts on leaving room
+window.addEventListener('beforeunload', () => {
+  // Save all transcripts automatically when leaving
+  if (transcripts.size > 0) {
+    saveAllTranscripts();
+  }
+}); 

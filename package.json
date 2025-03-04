@@ -6,15 +6,18 @@
     "start": "electron .",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["p2p", "chat", "hypercore", "electron"],
+  "keywords": ["p2p", "chat", "hypercore", "electron", "webrtc", "video-call"],
   "author": "",
   "license": "ISC",
-  "description": "P2P chat application using Hypercore protocol",
+  "description": "P2P chat application using Hypercore protocol with video calling and transcription",
   "dependencies": {
     "electron": "^28.1.0",
     "hyperswarm": "^4.6.1",
     "b4a": "^1.6.4",
     "hypercore": "^10.18.1",
-    "corestore": "^6.15.13"
+    "corestore": "^6.15.13",
+    "openai": "^4.28.0",
+    "buffer": "^6.0.3",
+    "events": "^3.3.0"
   }
 }

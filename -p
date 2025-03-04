@@ -1,0 +1,28 @@
+2025-03-04 23:06:08.625 Electron[29495:483511] +[IMKClient subclass]: chose IMKClient_Modern
+2025-03-04 23:06:08.625 Electron[29495:483511] +[IMKInputSession subclass]: chose IMKInputSession_Modern
+Error joining room: DHTError: NODE_DESTROYED: Node destroyed
+    at Server.listen (/Users/donlee/Desktop/hypercore/node_modules/hyperdht/lib/server.js:142:35)
+    at Hyperswarm.listen (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/index.js:419:55)
+    at PeerDiscovery._refresh (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/lib/peer-discovery.js:85:24)
+    at PeerDiscovery.refresh (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/lib/peer-discovery.js:138:35)
+    at PeerDiscoverySession.refresh (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/lib/peer-discovery.js:266:27)
+    at PeerDiscovery.session (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/lib/peer-discovery.js:38:13)
+    at Hyperswarm.join (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/index.js:443:22)
+    at P2PNetwork.joinRoom (/Users/donlee/Desktop/hypercore/src/network/p2p.js:44:36)
+    at /Users/donlee/Desktop/hypercore/src/main.js:160:23
+    at WebContents.<anonymous> (node:electron/js2c/browser_init:2:77979) {
+  code: 'NODE_DESTROYED'
+}
+Error joining room: DHTError: NODE_DESTROYED: Node destroyed
+    at Server.listen (/Users/donlee/Desktop/hypercore/node_modules/hyperdht/lib/server.js:142:35)
+    at Hyperswarm.listen (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/index.js:419:55)
+    at PeerDiscovery._refresh (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/lib/peer-discovery.js:85:24)
+    at PeerDiscovery.refresh (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/lib/peer-discovery.js:138:35)
+    at PeerDiscoverySession.refresh (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/lib/peer-discovery.js:266:27)
+    at PeerDiscovery.session (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/lib/peer-discovery.js:38:13)
+    at Hyperswarm.join (/Users/donlee/Desktop/hypercore/node_modules/hyperswarm/index.js:443:22)
+    at P2PNetwork.joinRoom (/Users/donlee/Desktop/hypercore/src/network/p2p.js:44:36)
+    at /Users/donlee/Desktop/hypercore/src/main.js:160:23
+    at WebContents.<anonymous> (node:electron/js2c/browser_init:2:77979) {
+  code: 'NODE_DESTROYED'
+}

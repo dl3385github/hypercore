@@ -5,10 +5,24 @@ const b4a = require('b4a');
 const Hypercore = require('hypercore');
 const crypto = require('crypto');
 const fs = require('fs');
+const { OpenAI } = require('openai');
+
+// OpenAI API key for Whisper
+const OPENAI_API_KEY = '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';
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: OPENAI_API_KEY
+});
 
 // Ensure storage directory exists
 if (!fs.existsSync('./storage')) {
   fs.mkdirSync('./storage', { recursive: true });
+}
+
+// Temporary directory for audio files
+if (!fs.existsSync('./temp')) {
+  fs.mkdirSync('./temp', { recursive: true });
 }
 
 // Keep a global reference of the window object
@@ -38,8 +52,8 @@ function createWindow() {
   try {
     // Create the browser window
     mainWindow = new BrowserWindow({
-      width: 800,
-      height: 600,
+      width: 1200,
+      height: 800,
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
@@ -121,6 +135,15 @@ function setupIpcHandlers() {
     }
   });
 
+  // Get our own peer ID (public key)
+  ipcMain.handle('get-own-id', (event) => {
+    if (!activeSwarm) {
+      return null;
+    }
+    
+    return activeSwarm.keyPair.publicKey.toString('hex');
+  });
+
   // Handle sending messages
   ipcMain.handle('send-message', async (event, message) => {
     try {
@@ -160,6 +183,105 @@ function setupIpcHandlers() {
       };
     }
   });
+
+  // Handle WebRTC signaling
+  ipcMain.handle('send-signal', async (event, peerId, signal) => {
+    try {
+      if (!activeSwarm) {
+        throw new Error('Not connected to any room');
+      }
+
+      // Find the connection for this peer
+      const connection = activeConnections.get(peerId);
+      if (!connection) {
+        throw new Error(`No connection found for peer: ${peerId}`);
+      }
+
+      // Send the signal data
+      const signalData = {
+        type: 'rtc-signal',
+        from: username,
+        signal,
+        timestamp: Date.now()
+      };
+
+      connection.write(JSON.stringify(signalData));
+      return { success: true };
+    } catch (error) {
+      console.error('Error sending signal:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to send signal'
+      };
+    }
+  });
+
+  // Handle media permission requests
+  ipcMain.handle('get-media-stream', async (event, config) => {
+    // This just proxies the request to the renderer
+    // (actual getUserMedia happens in renderer for Electron)
+    return { success: true };
+  });
+
+  // Handle audio transcription requests
+  ipcMain.handle('transcribe-audio', async (event, audioBuffer, speaker) => {
+    try {
+      console.log(`Transcribing audio from ${speaker}, size: ${audioBuffer.byteLength} bytes`);
+      
+      // Save audio buffer to a temporary file
+      const tempFilePath = path.join('./temp', `recording_${Date.now()}.webm`);
+      fs.writeFileSync(tempFilePath, Buffer.from(audioBuffer));
+      
+      // Call OpenAI Whisper API
+      const transcription = await transcribeWithWhisper(tempFilePath);
+      
+      // Clean up the temporary file
+      fs.unlinkSync(tempFilePath);
+      
+      // Send transcription result to renderer
+      const result = {
+        speaker,
+        text: transcription,
+        timestamp: Date.now()
+      };
+      
+      mainWindow.webContents.send('transcription-result', result);
+      
+      return { 
+        success: true,
+        transcription
+      };
+    } catch (error) {
+      console.error('Error transcribing audio:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to transcribe audio'
+      };
+    }
+  });
+}
+
+// Transcribe audio using OpenAI Whisper
+async function transcribeWithWhisper(audioFilePath) {
+  try {
+    if (!openai) {
+      throw new Error('OpenAI API key not set. Cannot transcribe audio.');
+    }
+    
+    console.log(`Sending audio file to OpenAI: ${audioFilePath}`);
+    
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(audioFilePath),
+      model: "whisper-1",
+      language: "en",
+    });
+    
+    console.log('Transcription received:', transcription.text);
+    return transcription.text;
+  } catch (error) {
+    console.error('Error using Whisper API:', error);
+    throw new Error(`Whisper API error: ${error.message}`);
+  }
 }
 
 // Join a specific room
@@ -251,6 +373,16 @@ function handleConnection(conn) {
         // Handle different message types
         if (message.type === 'chat-message') {
           mainWindow.webContents.send('new-message', message);
+        } 
+        else if (message.type === 'rtc-signal') {
+          // Forward WebRTC signals to the renderer
+          if (mainWindow) {
+            mainWindow.webContents.send('signal-received', {
+              peerId: remotePublicKey,
+              from: message.from,
+              signal: message.signal
+            });
+          }
         }
       } catch (err) {
         console.error('Failed to parse message:', err);
@@ -280,4 +412,4 @@ function handleConnection(conn) {
   } catch (error) {
     console.error('Error handling connection:', error);
   }
-} 
+}

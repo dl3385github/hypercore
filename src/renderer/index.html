@@ -5,6 +5,7 @@
   <title>P2P Chat with Hypercore</title>
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
   <div class="app-container">
     <div id="login-screen" class="login-screen">
@@ -32,24 +33,77 @@
         <div class="connection-info">
           <span class="room-display">Room: <span id="current-room">default</span></span>
           <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
+          <button id="save-transcript-btn" class="action-btn">Save Transcript</button>
         </div>
       </div>
       
-      <div id="messages-container" class="messages-container">
-        <div id="messages" class="messages"></div>
-      </div>
+      <div class="content-container">
+        <div class="video-container">
+          <div class="videos">
+            <div class="video-item local-video-container">
+              <div class="video-wrapper">
+                <video id="local-video" autoplay muted playsinline></video>
+                <div class="video-controls">
+                  <button id="toggle-video" class="control-btn">
+                    <span class="icon">📹</span>
+                  </button>
+                  <button id="toggle-audio" class="control-btn">
+                    <span class="icon">🎤</span>
+                  </button>
+                </div>
+              </div>
+              <div class="participant-info">
+                <div class="participant-name">You</div>
+                <div class="transcript-container" id="local-transcript">
+                  <div class="transcript-title">Transcript</div>
+                  <div class="transcript-content"></div>
+                </div>
+              </div>
+            </div>
+            
+            <div id="remote-videos" class="remote-videos">
+              <!-- Remote videos will be added here dynamically -->
+            </div>
+          </div>
+        </div>
+        
+        <div class="chat-container">
+          <div id="messages-container" class="messages-container">
+            <div id="messages" class="messages"></div>
+          </div>
 
-      <div class="message-input-container">
-        <input 
-          type="text" 
-          id="message-input" 
-          placeholder="Type your message..." 
-          maxlength="500"
-        >
-        <button id="send-btn">Send</button>
+          <div class="message-input-container">
+            <input 
+              type="text" 
+              id="message-input" 
+              placeholder="Type your message..." 
+              maxlength="500"
+            >
+            <button id="send-btn">Send</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
+
+  <template id="remote-video-template">
+    <div class="video-item remote-video-container">
+      <div class="video-wrapper">
+        <video class="remote-video" autoplay playsinline></video>
+        <div class="video-status">
+          <span class="video-off-indicator hidden">Video Off</span>
+          <span class="audio-off-indicator hidden">🔇</span>
+        </div>
+      </div>
+      <div class="participant-info">
+        <div class="participant-name"></div>
+        <div class="transcript-container">
+          <div class="transcript-title">Transcript</div>
+          <div class="transcript-content"></div>
+        </div>
+      </div>
+    </div>
+  </template>
 
   <script src="app.js"></script>
 </body>
