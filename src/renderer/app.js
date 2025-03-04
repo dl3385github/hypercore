@@ -15,6 +15,8 @@ const toggleVideoButton = document.getElementById('toggle-video');
 const toggleAudioButton = document.getElementById('toggle-audio');
 const remoteVideoTemplate = document.getElementById('remote-video-template');
 const saveTranscriptButton = document.getElementById('save-transcript-btn');
+const saveAllTranscriptsButton = document.getElementById('save-all-transcripts-btn');
+const chatContainer = document.querySelector('.chat-container');
 
 // State variables
 let peers = new Set();
@@ -78,8 +80,29 @@ document.addEventListener('DOMContentLoaded', () => {
   toggleVideoButton.addEventListener('click', toggleVideo);
   toggleAudioButton.addEventListener('click', toggleAudio);
   
-  // Set up save transcript button
-  saveTranscriptButton.addEventListener('click', saveAllTranscripts);
+  // Set up save transcript buttons
+  saveTranscriptButton.addEventListener('click', () => saveTranscript(usernameInput.value.trim()));
+  saveAllTranscriptsButton.addEventListener('click', saveAllTranscripts);
+  
+  // Ensure chat container stays visible
+  // Create a MutationObserver to watch for style changes
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      if (mutation.attributeName === 'style' || mutation.attributeName === 'class') {
+        // If chat container is hidden, make it visible again
+        if (chatContainer.classList.contains('hidden') || 
+            chatContainer.style.display === 'none' ||
+            chatContainer.style.visibility === 'hidden') {
+          chatContainer.classList.remove('hidden');
+          chatContainer.style.display = '';
+          chatContainer.style.visibility = '';
+        }
+      }
+    });
+  });
+  
+  // Start observing the chat container for attribute changes
+  observer.observe(chatContainer, { attributes: true });
   
   // Set up message receiving
   window.electronAPI.onNewMessage((message) => {
@@ -921,8 +944,17 @@ function addRemoteStream(peerId, stream) {
     const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
     remoteContainer.querySelector('.participant-name').textContent = peerUsername;
     
+    // Initialize transcript container
+    const transcriptContainer = remoteContainer.querySelector('.transcript-container');
+    transcriptContainer.setAttribute('id', `transcript-${peerId}`);
+    
     // Add the container to the remote videos section
     remoteVideosContainer.appendChild(remoteContainer);
+    
+    // Setup remote transcription with proper labels
+    if (stream.getAudioTracks().length > 0) {
+      setupRemoteTranscription(peerId, stream);
+    }
   }
   
   // Add the stream to the video element
@@ -948,18 +980,20 @@ function addRemoteStream(peerId, stream) {
     // Ensure the video plays
     if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA or higher
       videoElement.play().catch(e => {
-        console.error(`Error playing remote video for ${peerId}:`, e);
+        console.error(`Error playing remote video that was already loaded for ${peerId}:`, e);
       });
     }
   }
   
-  // Store the stream in our connections map
-  if (peerConnections.has(peerId)) {
-    peerConnections.get(peerId).stream = stream;
-  }
+  // Update UI for this peer
+  updateRemoteMediaState(
+    peerId,
+    getPeerUsername(peerId),
+    peerMediaStates[peerId]?.videoEnabled ?? true,
+    peerMediaStates[peerId]?.audioEnabled ?? true
+  );
   
-  // Set up transcription for this peer
-  setupRemoteTranscription(peerId, stream);
+  return remoteContainer;
 }
 
 // Get a username for a peer based on peerId
@@ -1153,6 +1187,7 @@ function updateTranscription(speaker, text) {
   if (!text || text.trim() === '') return;
   
   let transcriptContainer;
+  let transcriptWrapper;
   
   // Store transcript entry
   if (!transcripts.has(speaker)) {
@@ -1168,6 +1203,7 @@ function updateTranscription(speaker, text) {
   if (speaker === usernameInput.value.trim()) {
     // Local user's transcript
     transcriptContainer = document.querySelector('#local-transcript .transcript-content');
+    transcriptWrapper = document.querySelector('#local-transcript');
   } else {
     // Find the right remote transcript container
     const containers = document.querySelectorAll('.remote-video-container');
@@ -1176,19 +1212,30 @@ function updateTranscription(speaker, text) {
       const nameElement = container.querySelector('.participant-name');
       if (nameElement && nameElement.textContent === speaker) {
         transcriptContainer = container.querySelector('.transcript-content');
+        transcriptWrapper = container.querySelector('.transcript-container');
         break;
       }
     }
   }
   
-  if (transcriptContainer) {
-    // Add the new transcription
+  if (transcriptContainer && transcriptWrapper) {
+    // Clear previous content and add the new transcription
+    transcriptContainer.innerHTML = ''; // Clear previous text
     const transcriptEntry = document.createElement('div');
-    transcriptEntry.textContent = `${speaker}: ${text}`;
+    transcriptEntry.textContent = text;
     transcriptContainer.appendChild(transcriptEntry);
     
-    // Scroll to the bottom
-    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+    // Show the transcript container with animation
+    transcriptWrapper.classList.add('active');
+    
+    // Set a timeout to hide the transcript after 5 seconds
+    if (transcriptWrapper.fadeOutTimer) {
+      clearTimeout(transcriptWrapper.fadeOutTimer);
+    }
+    
+    transcriptWrapper.fadeOutTimer = setTimeout(() => {
+      transcriptWrapper.classList.remove('active');
+    }, 5000);
   }
 }
 

@@ -4,3 +4,4 @@ temp/
 *.log
 storage/
 transcripts/
+summaries/

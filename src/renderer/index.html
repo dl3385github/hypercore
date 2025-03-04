@@ -9,7 +9,7 @@
 <body>
   <div class="app-container">
     <div id="login-screen" class="login-screen">
-      <h1>P2P Chat</h1>
+      <h1>P2P Video Chat</h1>
       <div class="login-form">
         <input 
           type="text" 
@@ -29,11 +29,12 @@
 
     <div id="chat-screen" class="chat-screen hidden">
       <div class="chat-header">
-        <h2>Hypercore P2P Chat</h2>
+        <h2>Hypercore P2P Video Chat</h2>
         <div class="connection-info">
           <span class="room-display">Room: <span id="current-room">default</span></span>
           <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
           <button id="save-transcript-btn" class="action-btn">Save Transcript</button>
+          <button id="save-all-transcripts-btn" class="action-btn">Save All & Summary</button>
         </div>
       </div>
       
@@ -43,6 +44,10 @@
             <div class="video-item local-video-container">
               <div class="video-wrapper">
                 <video id="local-video" autoplay muted playsinline></video>
+                <div class="participant-name">You</div>
+                <div class="transcript-container" id="local-transcript">
+                  <div class="transcript-content"></div>
+                </div>
                 <div class="video-controls">
                   <button id="toggle-video" class="control-btn">
                     <span class="icon">📹</span>
@@ -50,13 +55,6 @@
                   <button id="toggle-audio" class="control-btn">
                     <span class="icon">🎤</span>
                   </button>
-                </div>
-              </div>
-              <div class="participant-info">
-                <div class="participant-name">You</div>
-                <div class="transcript-container" id="local-transcript">
-                  <div class="transcript-title">Transcript</div>
-                  <div class="transcript-content"></div>
                 </div>
               </div>
             </div>
@@ -90,16 +88,13 @@
     <div class="video-item remote-video-container">
       <div class="video-wrapper">
         <video class="remote-video" autoplay playsinline></video>
+        <div class="participant-name"></div>
+        <div class="transcript-container">
+          <div class="transcript-content"></div>
+        </div>
         <div class="video-status">
           <span class="video-off-indicator hidden">Video Off</span>
           <span class="audio-off-indicator hidden">🔇</span>
-        </div>
-      </div>
-      <div class="participant-info">
-        <div class="participant-name"></div>
-        <div class="transcript-container">
-          <div class="transcript-title">Transcript</div>
-          <div class="transcript-content"></div>
         </div>
       </div>
     </div>
