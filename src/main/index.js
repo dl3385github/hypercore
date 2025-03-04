@@ -103,6 +103,17 @@ app.on('window-all-closed', function () {
 });
 
 app.on('before-quit', async () => {
+  // Generate call summary if possible
+  if (mainWindow) {
+    try {
+      mainWindow.webContents.send('generate-summary');
+      // Give a moment for the summary to be generated
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+      console.error('Error generating summary:', error);
+    }
+  }
+  
   // Clean up swarm connections
   await leaveRoom();
 });
@@ -293,6 +304,56 @@ function setupIpcHandlers() {
       return {
         success: false,
         error: error.message || 'Failed to transcribe audio'
+      };
+    }
+  });
+
+  // Add a handler for generating a summary
+  ipcMain.handle('generate-call-summary', async (event, transcriptData) => {
+    try {
+      if (!openai) {
+        throw new Error('OpenAI API key not set. Cannot generate summary.');
+      }
+      
+      if (!transcriptData || !transcriptData.length) {
+        return { success: false, message: 'No transcript data available for summary' };
+      }
+      
+      console.log('Generating call summary with GPT-4o...');
+      
+      // Format the transcript data for GPT-4o
+      const formattedTranscript = transcriptData.map(item => 
+        `${item.username}: ${item.text}`
+      ).join('\n');
+      
+      // Generate a summary with GPT-4o
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "You are a helpful assistant that creates concise summaries of conversation transcripts. Identify key points, action items, decisions made, and important topics discussed."
+          },
+          {
+            role: "user", 
+            content: `Please summarize the following call transcript:\n\n${formattedTranscript}`
+          }
+        ],
+        max_tokens: 1000
+      });
+      
+      const summary = completion.choices[0].message.content;
+      console.log('Summary generated:', summary);
+      
+      return { 
+        success: true, 
+        summary 
+      };
+    } catch (error) {
+      console.error('Error generating summary with GPT-4o:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to generate summary'
       };
     }
   });

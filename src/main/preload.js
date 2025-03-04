@@ -134,6 +134,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.log('[Preload] Cleaning up onNetworkError listener');
       ipcRenderer.removeAllListeners('network-error');
     };
+  },
+  
+  // Generate call summary
+  generateCallSummary: (transcriptData) => {
+    logEvent('generateCallSummary', `Transcript data with ${transcriptData.length} entries`);
+    return ipcRenderer.invoke('generate-call-summary', transcriptData);
+  },
+  
+  // Listen for summary generation request
+  onGenerateSummary: (callback) => {
+    console.log('[Preload] Setting up onGenerateSummary listener');
+    ipcRenderer.on('generate-summary', (event) => {
+      logEvent('generate-summary');
+      callback();
+    });
+    
+    return () => {
+      console.log('[Preload] Cleaning up onGenerateSummary listener');
+      ipcRenderer.removeAllListeners('generate-summary');
+    };
   }
 });
 
