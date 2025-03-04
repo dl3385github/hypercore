@@ -14,9 +14,7 @@ const remoteVideosContainer = document.getElementById('remote-videos');
 const toggleVideoButton = document.getElementById('toggle-video');
 const toggleAudioButton = document.getElementById('toggle-audio');
 const remoteVideoTemplate = document.getElementById('remote-video-template');
-const saveTranscriptButton = document.getElementById('save-raw-transcript-btn');
-const saveAllTranscriptsButton = document.getElementById('save-all-transcripts-btn');
-const chatContainer = document.querySelector('.chat-container');
+const saveTranscriptButton = document.getElementById('save-transcript-btn');
 
 // State variables
 let peers = new Set();
@@ -80,29 +78,8 @@ document.addEventListener('DOMContentLoaded', () => {
   toggleVideoButton.addEventListener('click', toggleVideo);
   toggleAudioButton.addEventListener('click', toggleAudio);
   
-  // Set up save transcript buttons
-  saveTranscriptButton.addEventListener('click', () => saveAllTranscripts(false));
-  saveAllTranscriptsButton.addEventListener('click', () => saveAllTranscripts(true));
-  
-  // Ensure chat container stays visible
-  // Create a MutationObserver to watch for style changes
-  const observer = new MutationObserver((mutations) => {
-    mutations.forEach((mutation) => {
-      if (mutation.attributeName === 'style' || mutation.attributeName === 'class') {
-        // If chat container is hidden, make it visible again
-        if (chatContainer.classList.contains('hidden') || 
-            chatContainer.style.display === 'none' ||
-            chatContainer.style.visibility === 'hidden') {
-          chatContainer.classList.remove('hidden');
-          chatContainer.style.display = '';
-          chatContainer.style.visibility = '';
-        }
-      }
-    });
-  });
-  
-  // Start observing the chat container for attribute changes
-  observer.observe(chatContainer, { attributes: true });
+  // Set up save transcript button
+  saveTranscriptButton.addEventListener('click', saveAllTranscripts);
   
   // Set up message receiving
   window.electronAPI.onNewMessage((message) => {
@@ -158,17 +135,6 @@ document.addEventListener('DOMContentLoaded', () => {
       addSystemMessage(`Failed to generate call summary: ${result.error}`);
     }
   });
-  
-  // Update button text and ID
-  if (saveTranscriptButton) {
-    saveTranscriptButton.textContent = 'Save Raw Transcript';
-    saveTranscriptButton.id = 'save-raw-transcript-btn';
-  }
-  
-  const saveAllTranscriptsButton = document.getElementById('save-all-transcripts-btn');
-  if (saveAllTranscriptsButton) {
-    saveAllTranscriptsButton.textContent = 'Save Summary';
-  }
 });
 
 // Generate a random room ID if none provided
@@ -335,70 +301,66 @@ function updateConnectionCount() {
 
 // Toggle video on/off
 function toggleVideo() {
-  if (!localStream) return;
-  
-  const videoTracks = localStream.getVideoTracks();
-  if (videoTracks.length === 0) {
-    addSystemMessage('No video device available');
-    return;
+  try {
+    // Toggle video state
+    isVideoEnabled = !isVideoEnabled;
+    
+    // Update the local video stream
+    if (localStream) {
+      const videoTracks = localStream.getVideoTracks();
+      videoTracks.forEach(track => {
+        track.enabled = isVideoEnabled;
+      });
+    }
+    
+    // Update UI
+    const toggleBtn = document.getElementById('toggle-video');
+    if (!isVideoEnabled) {
+      toggleBtn.classList.add('video-off');
+      localVideo.classList.add('video-off');
+    } else {
+      toggleBtn.classList.remove('video-off');
+      localVideo.classList.remove('video-off');
+    }
+    
+    // Notify peers of state change
+    notifyMediaStateChange();
+    
+    console.log(`Video ${isVideoEnabled ? 'enabled' : 'disabled'}`);
+  } catch (error) {
+    console.error('Error toggling video:', error);
   }
-  
-  isVideoEnabled = !isVideoEnabled;
-  
-  // Update all video tracks
-  videoTracks.forEach(track => {
-    track.enabled = isVideoEnabled;
-  });
-  
-  // Update UI
-  if (isVideoEnabled) {
-    toggleVideoButton.querySelector('.icon').textContent = '📹';
-    toggleVideoButton.classList.remove('video-off');
-  } else {
-    toggleVideoButton.querySelector('.icon').textContent = '🚫';
-    toggleVideoButton.classList.add('video-off');
-  }
-  
-  // Notify peers of video state change
-  notifyMediaStateChange();
 }
 
 // Toggle audio on/off
 function toggleAudio() {
-  if (!localStream) return;
-  
-  const audioTracks = localStream.getAudioTracks();
-  if (audioTracks.length === 0) {
-    addSystemMessage('No audio device available');
-    return;
-  }
-  
-  isAudioEnabled = !isAudioEnabled;
-  
-  // Update all audio tracks
-  audioTracks.forEach(track => {
-    track.enabled = isAudioEnabled;
-  });
-  
-  // Update UI
-  if (isAudioEnabled) {
-    toggleAudioButton.querySelector('.icon').textContent = '🎤';
-    toggleAudioButton.classList.remove('muted');
+  try {
+    // Toggle audio state
+    isAudioEnabled = !isAudioEnabled;
     
-    // Restart recording if it was previously stopped
-    if (!isRecording && localStream) {
-      setupMediaRecording();
+    // Update the local audio stream
+    if (localStream) {
+      const audioTracks = localStream.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = isAudioEnabled;
+      });
     }
-  } else {
-    toggleAudioButton.querySelector('.icon').textContent = '🔇';
-    toggleAudioButton.classList.add('muted');
     
-    // Stop recording if audio is off
-    stopMediaRecording();
+    // Update UI
+    const toggleBtn = document.getElementById('toggle-audio');
+    if (!isAudioEnabled) {
+      toggleBtn.classList.add('muted');
+    } else {
+      toggleBtn.classList.remove('muted');
+    }
+    
+    // Notify peers of state change
+    notifyMediaStateChange();
+    
+    console.log(`Audio ${isAudioEnabled ? 'enabled' : 'disabled'}`);
+  } catch (error) {
+    console.error('Error toggling audio:', error);
   }
-  
-  // Notify peers of audio state change
-  notifyMediaStateChange();
 }
 
 // Notify peers of media state changes
@@ -940,57 +902,74 @@ async function processIceCandidate(peerId, connection, candidate) {
 // Add a remote stream to the UI
 function addRemoteStream(peerId, stream) {
   try {
-    console.log(`Adding remote stream from peer ${peerId}`);
+    const remoteVideos = document.querySelector('.remote-videos');
     
-    // Check if there's already a container for this peer
-    let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+    // Check if we already have a container for this peer
+    let videoItem = document.getElementById(`video-${peerId}`);
     
-    if (!remoteContainer) {
-      // Clone the template
-      const template = document.getElementById('remote-video-template');
-      const clone = document.importNode(template.content, true);
-      remoteContainer = clone.querySelector('.remote-video-container');
+    if (!videoItem) {
+      const peerUsername = getPeerUsername(peerId) || 'Unknown User';
       
-      // Set peer ID as a data attribute
-      remoteContainer.setAttribute('data-peer-id', peerId);
+      // Create video container
+      videoItem = document.createElement('div');
+      videoItem.className = 'video-item';
+      videoItem.id = `video-${peerId}`;
       
-      // Get and set username
-      const peerUsername = getPeerUsername(peerId);
-      if (peerUsername) {
-        remoteContainer.setAttribute('data-username', peerUsername);
-        const nameElement = remoteContainer.querySelector('.participant-name');
-        if (nameElement) {
-          nameElement.textContent = peerUsername;
-        }
+      // Create video wrapper
+      const videoWrapper = document.createElement('div');
+      videoWrapper.className = 'video-wrapper';
+      videoWrapper.setAttribute('data-username', peerUsername);
+      videoWrapper.setAttribute('data-peer-id', peerId);
+      
+      // Create video element
+      const videoElement = document.createElement('video');
+      videoElement.autoplay = true;
+      videoElement.playsInline = true;
+      
+      // Create controls container
+      const controlsContainer = document.createElement('div');
+      controlsContainer.className = 'video-controls';
+      
+      // Create participant info container
+      const participantInfo = document.createElement('div');
+      participantInfo.className = 'participant-info';
+      
+      // Create participant name element
+      const participantName = document.createElement('div');
+      participantName.className = 'participant-name';
+      participantName.textContent = peerUsername;
+      
+      // Create audio indicator
+      const audioIndicator = document.createElement('div');
+      audioIndicator.className = 'audio-off-indicator';
+      audioIndicator.innerHTML = '<i class="fas fa-microphone-slash"></i>';
+      audioIndicator.style.display = 'none';
+      
+      // Add elements to their containers
+      participantInfo.appendChild(participantName);
+      participantInfo.appendChild(audioIndicator);
+      controlsContainer.appendChild(participantInfo);
+      
+      videoWrapper.appendChild(videoElement);
+      videoWrapper.appendChild(controlsContainer);
+      
+      videoItem.appendChild(videoWrapper);
+      remoteVideos.appendChild(videoItem);
+      
+      // Setup remote transcription
+      setupRemoteTranscription(peerId, stream);
+    } else {
+      // Just update the stream for existing video
+      const videoElement = videoItem.querySelector('video');
+      
+      if (videoElement.srcObject !== stream) {
+        videoElement.srcObject = stream;
       }
-      
-      // Add to the DOM
-      document.getElementById('remote-videos').appendChild(remoteContainer);
     }
     
-    const videoElement = remoteContainer.querySelector('.remote-video');
-    if (videoElement) {
-      videoElement.srcObject = stream;
-      
-      videoElement.onloadedmetadata = () => {
-        videoElement.play().catch(error => {
-          console.error(`Error playing remote video: ${error.message}`);
-        });
-      };
-    }
-    
-    // Update media state indicators
-    updateRemoteMediaState(
-      peerId, 
-      getPeerUsername(peerId),
-      peerMediaStates[peerId]?.videoEnabled ?? true,
-      peerMediaStates[peerId]?.audioEnabled ?? true
-    );
-    
-    return remoteContainer;
+    console.log(`Added remote stream for peer ${peerId}`);
   } catch (error) {
-    console.error(`Error adding remote stream: ${error.message}`);
-    return null;
+    console.error('Error adding remote stream:', error);
   }
 }
 
@@ -1084,99 +1063,83 @@ function stopMediaRecording() {
 
 // Setup transcription for remote participants
 function setupRemoteTranscription(peerId, stream) {
-  // Extract audio track from the remote stream
-  const audioTracks = stream.getAudioTracks();
-  if (!audioTracks || audioTracks.length === 0) {
-    console.warn(`No audio tracks found in remote stream from ${peerId}`);
-    return;
-  }
-  
-  console.log(`Setting up transcription for remote audio from ${peerId}`);
-  
   try {
-    // Create a new MediaStream with just the audio track
+    console.log(`Setting up remote transcription for peer ${peerId}`);
+    
+    if (!stream || !stream.getAudioTracks || stream.getAudioTracks().length === 0) {
+      console.warn(`No audio tracks available for peer ${peerId}`);
+      return;
+    }
+    
+    // Get the audio tracks from the stream
+    const audioTracks = stream.getAudioTracks();
+    
+    if (audioTracks.length === 0) {
+      console.warn(`No audio tracks found in stream for peer ${peerId}`);
+      return;
+    }
+    
+    // Create a new audio stream with just the audio track
     const audioStream = new MediaStream([audioTracks[0]]);
     
-    // Create a new MediaRecorder for this remote stream
-    const remoteRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
-    const remoteChunks = [];
+    // Create an audio context to process the audio
+    const audioContext = new AudioContext();
+    const audioSource = audioContext.createMediaStreamSource(audioStream);
+    
+    // Create a media recorder for the audio stream
+    const options = { mimeType: 'audio/webm' };
+    const mediaRecorder = new MediaRecorder(audioStream, options);
+    
+    // Store the recorder for cleanup later
+    if (!remoteRecorders.has(peerId)) {
+      remoteRecorders.set(peerId, []);
+    }
+    remoteRecorders.get(peerId).push(mediaRecorder);
+    
+    // Array to store audio chunks
+    const audioChunks = [];
     
     // Handle data available event
-    remoteRecorder.ondataavailable = (event) => {
+    mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
-        remoteChunks.push(event.data);
+        audioChunks.push(event.data);
       }
     };
     
-    // Handle recording stop
-    remoteRecorder.onstop = async () => {
-      if (remoteChunks.length === 0) return;
-      
+    // Handle recording stop event
+    mediaRecorder.onstop = async () => {
       try {
-        // Get peer username
-        const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+        // Create a blob from the audio chunks
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
         
-        // Create a blob from the recorded chunks
-        const blob = new Blob(remoteChunks, { type: 'audio/webm' });
-        remoteChunks.length = 0; // Clear the array
+        // Convert blob to ArrayBuffer for transmission
+        const arrayBuffer = await audioBlob.arrayBuffer();
         
-        // Convert blob to ArrayBuffer before sending to main process
-        const arrayBuffer = await blob.arrayBuffer();
+        // Get the username for this peer
+        const peerUsername = getPeerUsername(peerId);
         
-        // Create a regular array from the ArrayBuffer to ensure it can be cloned
-        const uint8Array = new Uint8Array(arrayBuffer);
-        const buffer = Array.from(uint8Array);
+        // Send the audio to the main process for transcription
+        console.log(`Sending audio from peer ${peerId} (${peerUsername}) for transcription`);
+        window.electronAPI.transcribeAudio(arrayBuffer, peerUsername);
         
-        // Send to main process for transcription
-        console.log(`Sending remote audio for transcription from ${peerUsername}, size: ${buffer.length} bytes`);
-        const result = await window.electronAPI.transcribeAudio(buffer, peerUsername);
+        // Clear audio chunks for next recording
+        audioChunks.length = 0;
         
-        if (result.success) {
-          console.log(`Successfully transcribed audio from ${peerUsername}: "${result.transcription}"`);
-          // Transcription will come back through the onTranscriptionResult listener
-        } else {
-          console.error(`Failed to transcribe audio from ${peerUsername}:`, result.error);
+        // Start recording again if still connected
+        if (peerConnections.has(peerId) && peerConnections.get(peerId).connected) {
+          mediaRecorder.start(RECORDING_INTERVAL);
         }
       } catch (error) {
-        console.error(`Error processing remote audio from ${peerId}:`, error);
+        console.error(`Error processing audio from peer ${peerId}:`, error);
       }
     };
     
     // Start recording
-    remoteRecorder.start();
+    mediaRecorder.start(RECORDING_INTERVAL);
     
-    // Set up interval to stop and restart recording every 5 seconds
-    const interval = setInterval(() => {
-      if (remoteRecorder && remoteRecorder.state === 'recording') {
-        remoteRecorder.stop();
-        
-        // Start a new recording after a small delay
-        setTimeout(() => {
-          // Only restart if the peer connection is still active
-          if (peerConnections.has(peerId)) {
-            remoteRecorder.start();
-          } else {
-            clearInterval(interval);
-          }
-        }, 500);
-      }
-    }, 5000); // Record in 5-second chunks
-    
-    // Store the recorder and interval for cleanup
-    if (!remoteRecorders.has(peerId)) {
-      remoteRecorders.set(peerId, { recorder: remoteRecorder, interval });
-    } else {
-      // Clean up existing recorder first
-      const existing = remoteRecorders.get(peerId);
-      clearInterval(existing.interval);
-      if (existing.recorder && existing.recorder.state === 'recording') {
-        existing.recorder.stop();
-      }
-      remoteRecorders.set(peerId, { recorder: remoteRecorder, interval });
-    }
-    
+    console.log(`Remote transcription setup complete for peer ${peerId}`);
   } catch (error) {
-    console.error(`Error setting up remote transcription for ${peerId}:`, error);
+    console.error(`Error setting up remote transcription for peer ${peerId}:`, error);
   }
 }
 
@@ -1184,76 +1147,90 @@ function setupRemoteTranscription(peerId, stream) {
 function updateTranscription(speaker, text) {
   console.log(`Updating transcription for ${speaker}: ${text}`);
   
-  if (!text || text.trim() === '') return;
-  
-  let transcriptContainer;
-  let transcriptContent;
-  
-  // Store transcript entry
-  if (!transcripts.has(speaker)) {
-    transcripts.set(speaker, []);
-  }
-  
-  transcripts.get(speaker).push({
-    timestamp: new Date().toISOString(),
-    text: text
-  });
-  
-  // Find local or remote container
-  if (speaker === usernameInput.value.trim()) {
-    // Local user transcript
-    transcriptContainer = document.querySelector('#local-transcript');
-    if (transcriptContainer) {
-      transcriptContent = transcriptContainer.querySelector('.transcript-content');
-    }
-  } else {
-    // Find remote container by username attribute
-    const remoteContainer = document.querySelector(`.remote-video-container[data-username="${speaker}"]`);
+  try {
+    // Find the right transcript container
+    let container;
     
-    if (!remoteContainer) {
-      // Try to find by peer ID (fallback)
-      const containers = document.querySelectorAll('.remote-video-container');
-      for (const container of containers) {
-        const nameElement = container.querySelector('.participant-name');
-        if (nameElement && nameElement.textContent === speaker) {
-          transcriptContainer = container.querySelector('.transcript-container');
-          if (transcriptContainer) {
-            transcriptContent = transcriptContainer.querySelector('.transcript-content');
-          }
-          break;
-        }
+    if (speaker === usernameInput.value.trim()) {
+      // Local user
+      container = document.querySelector('.local-video-container .transcript-container');
+      if (!container) {
+        // Create if it doesn't exist
+        const localVideoContainer = document.querySelector('.local-video-container');
+        container = document.createElement('div');
+        container.className = 'transcript-container';
+        
+        const titleElem = document.createElement('div');
+        titleElem.className = 'transcript-title';
+        titleElem.textContent = 'You';
+        
+        const contentElem = document.createElement('div');
+        contentElem.className = 'transcript-content';
+        
+        container.appendChild(titleElem);
+        container.appendChild(contentElem);
+        localVideoContainer.appendChild(container);
       }
     } else {
-      transcriptContainer = remoteContainer.querySelector('.transcript-container');
-      if (transcriptContainer) {
-        transcriptContent = transcriptContainer.querySelector('.transcript-content');
+      // Remote user - find the video element with this peer's username
+      const remoteVideoContainer = document.querySelector(`.video-wrapper[data-username="${speaker}"]`);
+      if (remoteVideoContainer) {
+        container = remoteVideoContainer.querySelector('.transcript-container');
+        if (!container) {
+          // Create if it doesn't exist
+          container = document.createElement('div');
+          container.className = 'transcript-container';
+          
+          const titleElem = document.createElement('div');
+          titleElem.className = 'transcript-title';
+          titleElem.textContent = speaker;
+          
+          const contentElem = document.createElement('div');
+          contentElem.className = 'transcript-content';
+          
+          container.appendChild(titleElem);
+          container.appendChild(contentElem);
+          remoteVideoContainer.appendChild(container);
+        }
+      } else {
+        console.warn(`Could not find video container for ${speaker}`);
+        return;
       }
     }
-  }
-  
-  if (transcriptContent) {
-    const transcriptLine = document.createElement('div');
-    transcriptLine.textContent = text;
-    transcriptContent.appendChild(transcriptLine);
     
-    // Auto-scroll to the latest transcript
-    transcriptContent.scrollTop = transcriptContent.scrollHeight;
+    if (container) {
+      const contentElem = container.querySelector('.transcript-content');
+      
+      // Clear existing content
+      contentElem.innerHTML = '';
+      
+      // Add new content
+      const textElem = document.createElement('div');
+      textElem.textContent = text;
+      contentElem.appendChild(textElem);
+      
+      // Show the transcript container
+      container.classList.add('active');
+      
+      // Hide after 5 seconds
+      clearTimeout(container.fadeTimeout);
+      container.fadeTimeout = setTimeout(() => {
+        container.classList.remove('active');
+      }, 5000);
+    }
     
-    // Show the transcript container
-    showTranscriptContainer(transcriptContainer);
-  } else {
-    console.warn(`Transcript container for ${speaker} not found`);
-  }
-}
-
-// Add this function to ensure remote transcripts are displayed properly
-function showTranscriptContainer(transcriptContainer) {
-  if (transcriptContainer) {
-    transcriptContainer.classList.add('active');
-    // Auto-hide transcript after 5 seconds if no new content is added
-    setTimeout(() => {
-      transcriptContainer.classList.remove('active');
-    }, 5000);
+    // Add to transcript history
+    if (!transcripts.has(speaker)) {
+      transcripts.set(speaker, []);
+    }
+    
+    transcripts.get(speaker).push({
+      text,
+      timestamp: Date.now()
+    });
+    
+  } catch (error) {
+    console.error('Error updating transcription:', error);
   }
 }
 
@@ -1328,67 +1305,72 @@ function saveTranscript(username) {
 }
 
 // Save all transcripts
-function saveAllTranscripts(generateSummary = true) {
+function saveAllTranscripts() {
   if (transcripts.size === 0) {
-    addSystemMessage('No transcripts available to save.');
+    addSystemMessage('No transcripts available to save');
     return;
   }
-
+  
   try {
-    // Combine all transcripts from different speakers
-    const allTranscriptEntries = [];
+    // Generate a combined transcript with all speakers, chronologically sorted
+    const allEntries = [];
+    
     transcripts.forEach((entries, speaker) => {
       entries.forEach(entry => {
-        allTranscriptEntries.push({
-          timestamp: entry.timestamp,
-          speaker: speaker,
+        allEntries.push({
+          speaker,
+          timestamp: new Date(entry.timestamp),
           text: entry.text
         });
       });
     });
     
     // Sort by timestamp
-    allTranscriptEntries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    allEntries.sort((a, b) => a.timestamp - b.timestamp);
     
     // Format as markdown
-    let markdownContent = '# Conversation Transcript\n\n';
-    allTranscriptEntries.forEach(entry => {
-      const time = new Date(entry.timestamp).toLocaleTimeString();
-      markdownContent += `**${entry.speaker}** (${time}): ${entry.text}\n\n`;
+    let content = `# Complete Conversation Transcript - ${new Date().toLocaleString()}\n\n`;
+    
+    allEntries.forEach(entry => {
+      const time = entry.timestamp.toLocaleTimeString();
+      content += `[${time}] ${entry.speaker}: ${entry.text}\n`;
     });
     
     // Create a blob and download link
-    const blob = new Blob([markdownContent], { type: 'text/markdown' });
+    const blob = new Blob([content], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `transcript_${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
+    a.download = `complete_transcript_${Date.now()}.md`;
+    document.body.appendChild(a);
     a.click();
     
-    // If generate summary flag is true, send the transcript data to generate a summary
-    if (generateSummary) {
-      console.log('Initiating summary generation...');
-      
-      // Convert transcripts Map to an object suitable for IPC transport
-      const transcriptData = {};
-      transcripts.forEach((entries, speaker) => {
-        transcriptData[speaker] = entries;
-      });
-      
-      try {
-        window.electronAPI.generateSummary(transcriptData);
-        addSystemMessage('Summary generation initiated. It will be saved when ready.');
-      } catch (error) {
-        console.error('Error requesting summary generation:', error);
-        addSystemMessage('Failed to initiate summary generation.');
-      }
-    } else {
-      addSystemMessage('Raw transcript saved successfully.');
-    }
+    // Clean up
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
     
+    // Generate summary using the same transcript data
+    const transcriptData = {};
+    transcripts.forEach((entries, speaker) => {
+      transcriptData[speaker] = entries;
+    });
+    
+    // Send to main process for summary generation
+    window.electronAPI.generateSummary(transcriptData)
+      .then(result => {
+        console.log('Summary generation initiated:', result);
+        addSystemMessage('Generating call summary...');
+      })
+      .catch(error => {
+        console.error('Error initiating summary generation:', error);
+      });
+    
+    addSystemMessage('All transcripts saved successfully');
   } catch (error) {
     console.error('Error saving all transcripts:', error);
-    addSystemMessage('Failed to save transcripts.');
+    addSystemMessage(`Error saving transcripts: ${error.message}`);
   }
 }
 
