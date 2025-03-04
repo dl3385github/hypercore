@@ -25,6 +25,11 @@ if (!fs.existsSync('./temp')) {
   fs.mkdirSync('./temp', { recursive: true });
 }
 
+// Ensure summaries directory exists
+if (!fs.existsSync('./summaries')) {
+  fs.mkdirSync('./summaries', { recursive: true });
+}
+
 // Keep a global reference of the window object
 let mainWindow;
 
@@ -52,63 +57,31 @@ function createWindow() {
   try {
     // Create the browser window
     mainWindow = new BrowserWindow({
-      width: 1280,
+      width: 1200,
       height: 800,
       webPreferences: {
-        nodeIntegration: false,
+        preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
-        preload: path.join(__dirname, 'preload.js')
-      }
+        nodeIntegration: false,
+      },
     });
 
-    // Load the index.html
-    const startUrl = path.join(`file://${__dirname}/../renderer/index.html`);
-    console.log(`Loading HTML from: ${startUrl}`);
+    // Load the index.html of the app
+    const htmlPath = path.join(__dirname, '../renderer/index.html');
+    console.log('Loading HTML from:', htmlPath);
+    mainWindow.loadFile(htmlPath);
+
+    // Open DevTools for debugging
+    mainWindow.webContents.openDevTools();
     
-    mainWindow.loadURL(startUrl)
-      .then(() => console.log('Window loaded successfully'))
-      .catch(err => console.error('Error loading window:', err));
-    
-    // Open DevTools
-    // mainWindow.webContents.openDevTools();
-    
-    // Set up handlers before closing
-    mainWindow.on('close', async (e) => {
-      try {
-        console.log('Window is closing, saving transcripts and generating summary...');
-        
-        // Notify renderer to save transcripts and generate summary
-        // We need to prevent window from closing until this is done
-        e.preventDefault();
-        
-        // Tell renderer to save transcripts
-        mainWindow.webContents.send('save-transcripts');
-        
-        // Wait for renderer to signal it's done
-        const result = await new Promise((resolve) => {
-          ipcMain.once('save-transcripts-done', (event, result) => resolve(result));
-          
-          // Set a timeout in case the renderer doesn't respond
-          setTimeout(() => resolve({ success: false, error: 'Timed out waiting for transcripts to save' }), 10000);
-        });
-        
-        if (result && !result.success) {
-          console.error('Error saving transcripts:', result.error);
-        }
-        
-        // Now actually close the window
-        mainWindow.destroy();
-      } catch (error) {
-        console.error('Error during window close:', error);
-        // Force close if there was an error
-        mainWindow.destroy();
-      }
+    // Log when window is ready
+    mainWindow.webContents.on('did-finish-load', () => {
+      console.log('Window loaded successfully');
     });
     
-    // Emitted when the window is closed.
-    mainWindow.on('closed', () => {
-      console.log('Window has been closed');
-      mainWindow = null;
+    // Log errors
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+      console.error('Failed to load:', errorCode, errorDescription);
     });
   } catch (error) {
     console.error('Error creating window:', error);
@@ -295,18 +268,11 @@ function setupIpcHandlers() {
   // Handle audio transcription requests
   ipcMain.handle('transcribe-audio', async (event, audioBuffer, speaker) => {
     try {
-      console.log(`Transcribing audio from ${speaker}, size: ${audioBuffer?.length} bytes`);
-      
-      // Create temp directory if it doesn't exist
-      if (!fs.existsSync('./temp')) {
-        fs.mkdirSync('./temp', { recursive: true });
-      }
+      console.log(`Transcribing audio from ${speaker}, size: ${audioBuffer.byteLength} bytes`);
       
       // Save audio buffer to a temporary file
       const tempFilePath = path.join('./temp', `recording_${Date.now()}.webm`);
       fs.writeFileSync(tempFilePath, Buffer.from(audioBuffer));
-      
-      console.log(`Sending audio file to OpenAI: ${tempFilePath}`);
       
       // Call OpenAI Whisper API
       const transcription = await transcribeWithWhisper(tempFilePath);
@@ -336,75 +302,40 @@ function setupIpcHandlers() {
     }
   });
 
-  // Handle saving files
-  ipcMain.handle('save-file', async (event, filename, content) => {
+  // Handle call summary generation
+  ipcMain.handle('generate-summary', async (event, transcriptData) => {
     try {
-      // Create output directory if it doesn't exist
-      const outputDir = path.join('.', 'transcripts');
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
+      console.log('Received request to generate call summary');
+      
+      // Generate the summary
+      const result = await generateCallSummary(transcriptData);
+      
+      if (result.success) {
+        // Send the summary result to the renderer
+        mainWindow.webContents.send('summary-generated', {
+          success: true,
+          summary: result.summary,
+          summaryFilePath: result.summaryFilePath
+        });
+      } else {
+        throw new Error(result.error);
       }
       
-      const filePath = path.join(outputDir, filename);
-      fs.writeFileSync(filePath, content);
-      
-      return { 
-        success: true,
-        filePath
-      };
+      return result;
     } catch (error) {
-      console.error('Error saving file:', error);
-      return {
+      console.error('Error generating call summary:', error);
+      
+      // Notify renderer of error
+      mainWindow.webContents.send('summary-generated', {
         success: false,
-        error: error.message || 'Failed to save file'
-      };
-    }
-  });
-
-  // Handle conversation summarization with OpenAI
-  ipcMain.handle('summarize-conversation', async (event, transcript) => {
-    try {
-      if (!openai) {
-        throw new Error('OpenAI API key not set. Cannot generate summary.');
-      }
-      
-      console.log('Sending conversation to OpenAI for summarization');
-      
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: "You are a helpful assistant that generates concise summaries of conversations. Identify the main topics discussed, key points made by each participant, and any decisions or action items agreed upon."
-          },
-          {
-            role: "user",
-            content: `Please summarize this conversation transcript:\n\n${transcript}`
-          }
-        ],
-        max_tokens: 1000
+        error: error.message
       });
       
-      const summary = response.choices[0].message.content;
-      console.log('Summary generated successfully');
-      
-      return { 
-        success: true,
-        summary
-      };
-    } catch (error) {
-      console.error('Error summarizing conversation:', error);
       return {
         success: false,
-        error: error.message || 'Failed to summarize conversation'
+        error: error.message || 'Failed to generate call summary'
       };
     }
-  });
-
-  // Signal that transcript saving is complete
-  ipcMain.handle('save-transcripts-done', async (event, result) => {
-    console.log('Transcript saving complete:', result);
-    return result;
   });
 }
 
@@ -428,6 +359,93 @@ async function transcribeWithWhisper(audioFilePath) {
   } catch (error) {
     console.error('Error using Whisper API:', error);
     throw new Error(`Whisper API error: ${error.message}`);
+  }
+}
+
+// Generate call summary using GPT-4o
+async function generateCallSummary(transcriptData) {
+  try {
+    if (!openai) {
+      throw new Error('OpenAI API key not set. Cannot generate summary.');
+    }
+    
+    console.log('Generating call summary...');
+    
+    // Format transcript data for the model
+    let transcriptText = '';
+    
+    // Sort all transcript entries by timestamp
+    const allEntries = [];
+    for (const [speaker, entries] of Object.entries(transcriptData)) {
+      entries.forEach(entry => {
+        allEntries.push({
+          speaker,
+          timestamp: new Date(entry.timestamp),
+          text: entry.text
+        });
+      });
+    }
+    
+    // Sort by timestamp
+    allEntries.sort((a, b) => a.timestamp - b.timestamp);
+    
+    // Format as conversation
+    allEntries.forEach(entry => {
+      transcriptText += `${entry.speaker}: ${entry.text}\n`;
+    });
+    
+    // Get current date and time for the summary
+    const summaryDate = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+    
+    // If transcript is empty, return early
+    if (transcriptText.trim() === '') {
+      return {
+        success: false,
+        error: 'No transcript data available to summarize'
+      };
+    }
+    
+    // Call GPT-4o for summary
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: "You are a meeting summarizer. Create a concise summary of the conversation, highlighting key points, decisions, and action items. Format your response with clear sections and bullet points."
+        },
+        {
+          role: "user",
+          content: `Please summarize the following conversation transcript:\n\n${transcriptText}`
+        }
+      ],
+      max_tokens: 1000
+    });
+    
+    const summary = completion.choices[0].message.content;
+    
+    // Save the summary to a file
+    const summaryFilePath = path.join('./summaries', `call_summary_${summaryDate}.md`);
+    
+    // Create the summary file with both the raw transcript and the AI summary
+    const fileContent = `# Call Summary - ${new Date().toLocaleString()}\n\n` +
+                        `## AI-Generated Summary\n\n${summary}\n\n` +
+                        `## Raw Transcript\n\n${transcriptText}`;
+    
+    fs.writeFileSync(summaryFilePath, fileContent);
+    
+    console.log(`Call summary saved to: ${summaryFilePath}`);
+    
+    return {
+      success: true,
+      summary,
+      summaryFilePath
+    };
+  } catch (error) {
+    console.error('Error generating call summary:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to generate call summary'
+    };
   }
 }
 

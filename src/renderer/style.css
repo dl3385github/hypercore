@@ -125,7 +125,7 @@ body {
 }
 
 .video-container {
-  flex: 3;
+  flex: 7;
   padding: 15px;
   background-color: #f9f9f9;
   border-right: 1px solid #e0e0e0;
@@ -136,7 +136,7 @@ body {
 }
 
 .chat-container {
-  flex: 1.2;
+  flex: 3;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -230,6 +230,7 @@ body {
   flex-direction: column;
   gap: 20px;
   width: 100%;
+  height: 100%;
 }
 
 .video-item {
@@ -239,87 +240,172 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
-  margin-bottom: 15px;
+  height: 100%;
 }
 
 .local-video-container {
   width: 100%;
   margin-bottom: 20px;
+  max-height: 30%;
+}
+
+.remote-videos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 15px;
+  flex: 1;
 }
 
 .video-wrapper {
   position: relative;
-  width: 100%;
-  padding-top: 56.25%; /* 16:9 aspect ratio */
-  overflow: hidden;
+  padding-top: 56.25%; /* 16:9 Aspect Ratio */
+  background-color: #333;
+  flex-shrink: 0;
 }
 
-.video-wrapper video {
+video {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  background-color: #000;
+  background-color: #333;
 }
 
-.remote-videos {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 20px;
-  width: 100%;
+.video-controls {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  z-index: 10;
+}
+
+.control-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.8);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 18px;
+  transition: all 0.2s;
+}
+
+.control-btn:hover {
+  background-color: white;
+}
+
+.control-btn.muted .icon,
+.control-btn.video-off .icon {
+  color: #e74c3c;
+}
+
+.video-status {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: rgba(0, 0, 0, 0.5);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 14px;
+  z-index: 5;
+}
+
+.audio-off-indicator {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background-color: rgba(0, 0, 0, 0.5);
+  color: white;
+  padding: 5px;
+  border-radius: 50%;
+  font-size: 16px;
+  z-index: 5;
 }
 
 .participant-info {
   padding: 10px;
-  background-color: #f5f5f5;
-  border-top: 1px solid #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 80px;
 }
 
 .participant-name {
   font-weight: bold;
+  font-size: 16px;
   margin-bottom: 5px;
 }
 
 .transcript-container {
-  margin-top: 10px;
-  padding: 10px;
-  background-color: #fff;
-  border-radius: 4px;
+  margin-top: 8px;
+  background-color: rgba(245, 245, 245, 0.9);
   border: 1px solid #e0e0e0;
-  max-height: 100px;
+  border-radius: 4px;
+  padding: 8px;
+  height: 100%;
+  min-height: 80px;
+  max-height: 150px;
   overflow-y: auto;
+  flex: 1;
 }
 
 .transcript-title {
-  font-size: 0.9em;
+  font-size: 12px;
   color: #666;
-  margin-bottom: 5px;
+  margin-bottom: 4px;
+  font-weight: bold;
 }
 
 .transcript-content {
-  font-size: 0.9em;
+  font-size: 13px;
   line-height: 1.4;
+  overflow-y: auto;
+  height: 100%;
 }
 
-/* Media Queries for responsive layout */
-@media (max-width: 900px) {
+.transcript-content div {
+  margin-bottom: 4px;
+  padding: 2px 0;
+  border-bottom: 1px solid #eee;
+}
+
+/* Media queries for responsiveness */
+@media (max-width: 1024px) {
   .content-container {
     flex-direction: column;
   }
   
+  .video-container {
+    flex: 1;
+    height: 70vh;
+  }
+  
   .chat-container {
-    max-width: none;
-    height: 300px;
+    flex: none;
+    max-width: 100%;
+    height: 30vh;
+    min-height: 200px;
   }
   
   .remote-videos {
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
+  .local-video-container {
+    max-height: none;
+  }
+  
   .remote-videos {
     grid-template-columns: 1fr;
   }

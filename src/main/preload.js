@@ -43,20 +43,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Transcribe audio
   transcribeAudio: (audioBuffer, username) => {
-    logEvent('transcribeAudio', `Audio from ${username}, size: ${audioBuffer.length} bytes`);
+    logEvent('transcribeAudio', `Audio from ${username}, size: ${audioBuffer.byteLength} bytes`);
     return ipcRenderer.invoke('transcribe-audio', audioBuffer, username);
   },
   
-  // Save a file
-  saveFile: (filename, content) => {
-    logEvent('saveFile', `Saving file ${filename}`);
-    return ipcRenderer.invoke('save-file', filename, content);
-  },
-  
-  // Summarize conversation with OpenAI
-  summarizeConversation: (transcript) => {
-    logEvent('summarizeConversation', `Summarizing conversation of length ${transcript.length}`);
-    return ipcRenderer.invoke('summarize-conversation', transcript);
+  // Generate call summary
+  generateSummary: (transcriptData) => {
+    logEvent('generateSummary', `Generating summary for transcript data`);
+    return ipcRenderer.invoke('generate-summary', transcriptData);
   },
   
   // Get our own peer ID (public key)
@@ -148,24 +142,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
   
-  // Save transcripts on app close
-  onSaveTranscripts: (callback) => {
-    console.log('[Preload] Setting up onSaveTranscripts listener');
-    ipcRenderer.on('save-transcripts', (event) => {
-      logEvent('save-transcripts', 'Saving transcripts on app close');
-      callback();
+  // Summary generation result
+  onSummaryGenerated: (callback) => {
+    console.log('[Preload] Setting up onSummaryGenerated listener');
+    ipcRenderer.on('summary-generated', (event, data) => {
+      logEvent('summary-generated', data);
+      callback(data);
     });
     
     return () => {
-      console.log('[Preload] Cleaning up onSaveTranscripts listener');
-      ipcRenderer.removeAllListeners('save-transcripts');
+      console.log('[Preload] Cleaning up onSummaryGenerated listener');
+      ipcRenderer.removeAllListeners('summary-generated');
     };
-  },
-  
-  // Signal that transcript saving is complete
-  saveTranscriptsDone: (result) => {
-    logEvent('saveTranscriptsDone', result);
-    return ipcRenderer.invoke('save-transcripts-done', result);
   }
 });
 
