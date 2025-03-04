@@ -142,6 +142,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
   
+  // Update audio settings
+  updateAudioSettings: (settings) => {
+    logEvent('updateAudioSettings', settings);
+    return ipcRenderer.invoke('update-audio-settings', settings);
+  },
+  
   // Generate call summary
   generateCallSummary: (transcriptData) => {
     logEvent('generateCallSummary', `Transcript data with ${transcriptData.length} entries`);

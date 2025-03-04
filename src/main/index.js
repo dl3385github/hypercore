@@ -36,9 +36,9 @@ let activeSwarm = null;
 let activeConnections = new Map();
 let username = '';
 
-// Threshold for transcribing audio (minimum volume level required)
-const MIN_AUDIO_LEVEL = 0.05; // Adjust this value to change sensitivity
-const MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
+// Threshold for transcribing audio (minimum volume level required) - default values
+let MIN_AUDIO_LEVEL = 0.05; // Adjust this value to change sensitivity
+let MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
 
 // Error handler for uncaught exceptions
 process.on('uncaughtException', (error) => {
@@ -333,25 +333,16 @@ function setupIpcHandlers() {
       // Clean up the temporary file
       fs.unlinkSync(filename);
       
-      // Send transcription result to renderer
-      const result = {
-        speaker,
-        text: transcription,
-        timestamp: Date.now()
-      };
-      
-      mainWindow.webContents.send('transcription-result', result);
-      
+      // Return transcription result directly to renderer
       return { 
         success: true,
-        transcription
+        transcription,
+        speaker,
+        timestamp: Date.now()
       };
     } catch (error) {
       console.error('Error transcribing audio:', error);
-      return {
-        success: false,
-        error: error.message || 'Failed to transcribe audio'
-      };
+      return { success: false, error: error.message || 'Transcription failed' };
     }
   });
 
@@ -403,6 +394,22 @@ function setupIpcHandlers() {
         error: error.message || 'Failed to generate summary'
       };
     }
+  });
+
+  // Handle setting updates
+  ipcMain.handle('update-audio-settings', (event, settings) => {
+    console.log('Updating audio settings:', settings);
+    
+    // Update audio threshold values
+    if (settings.threshold !== undefined) {
+      MIN_AUDIO_LEVEL = Number(settings.threshold);
+    }
+    
+    if (settings.duration !== undefined) {
+      MIN_AUDIO_DURATION = Number(settings.duration);
+    }
+    
+    return { success: true };
   });
 }
 
