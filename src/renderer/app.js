@@ -23,6 +23,7 @@ let localStream = null;
 let isVideoEnabled = false;
 let isAudioEnabled = false;
 let peerConnections = new Map(); // Map of peer ID to connection object
+let peerUsernames = new Map(); // Map of peer ID to username
 let transcriptionIntervals = new Map(); // Map of peer ID to transcription interval
 let localTranscriptContainer = document.querySelector('#local-transcript .transcript-content');
 // Store transcripts by participant for later saving
@@ -590,6 +591,14 @@ function handleDataChannelMessage(peerId, message) {
   } else if (message.type === 'transcript') {
     // Handle transcript message from peer
     const username = message.username || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+    console.log(`Received transcript message for ${username}: "${message.text}"`);
+    
+    // Make sure we store this username for the peer if we don't have it already
+    if (!peerUsernames.has(peerId) && username !== `Peer ${peerId.substring(0, 6)}`) {
+      peerUsernames.set(peerId, username);
+    }
+    
+    // Update UI with the transcript
     updateTranscription(username, message.text);
   }
 }
@@ -616,59 +625,66 @@ function updateRemoteMediaState(peerId, username, videoEnabled, audioEnabled) {
   }
 }
 
-// Clean up a peer connection
+// Clean up peer connection
 function cleanupPeerConnection(peerId) {
-  console.log(`Cleaning up peer connection for ${peerId}`);
+  console.log(`Cleaning up connection for peer ${peerId}`);
   
-  // Remove from the UI
-  const videoElement = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-  if (videoElement) {
-    videoElement.remove();
+  // Clean up data channel
+  const dataChannel = dataChannels.get(peerId);
+  if (dataChannel) {
+    try {
+      dataChannel.close();
+    } catch (e) {
+      console.error(`Error closing data channel for ${peerId}:`, e);
+    }
+    dataChannels.delete(peerId);
   }
   
-  // Clean up the media recorder
-  if (remoteRecorders.has(peerId)) {
-    const recorder = remoteRecorders.get(peerId);
-    if (recorder.state === 'recording') {
-      recorder.stop();
+  // Clean up transcription resources
+  const remoteRecorder = remoteRecorders.get(peerId);
+  if (remoteRecorder) {
+    try {
+      if (remoteRecorder.state === 'recording') {
+        remoteRecorder.stop();
+      }
+    } catch (e) {
+      console.error(`Error stopping remote recorder for ${peerId}:`, e);
     }
     remoteRecorders.delete(peerId);
   }
   
-  // Clean up the connection
-  if (peerConnections.has(peerId)) {
-    const { connection, dataChannel } = peerConnections.get(peerId);
-    
-    // Close data channel if open
-    if (dataChannel && dataChannel.readyState !== 'closed') {
-      dataChannel.close();
-    }
-    
-    // Clean up event listeners
-    if (connection) {
-      connection.onicecandidate = null;
-      connection.oniceconnectionstatechange = null;
-      connection.onicegatheringstatechange = null;
-      connection.onsignalingstatechange = null;
-      connection.ontrack = null;
-      connection.ondatachannel = null;
-      
-      // Close the connection
+  // Clean up connection
+  const connection = peerConnections.get(peerId);
+  if (connection) {
+    try {
       connection.close();
+    } catch (e) {
+      console.error(`Error closing connection for ${peerId}:`, e);
     }
-    
-    // Remove from our maps
     peerConnections.delete(peerId);
-    dataChannels.delete(peerId);
-    
-    // Clean up any pending ICE candidates
-    if (pendingIceCandidates.has(peerId)) {
-      pendingIceCandidates.delete(peerId);
-    }
   }
   
-  // Update UI
+  // Clean up username mapping
+  peerUsernames.delete(peerId);
+  
+  // Clean up pending ICE candidates
+  pendingIceCandidates.delete(peerId);
+  
+  // Remove from peers set
+  peers.delete(peerId);
+  
+  // Update connection count
   updateConnectionCount();
+  
+  // Remove from UI
+  const remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+  if (remoteContainer) {
+    remoteContainer.remove();
+  }
+  
+  // Add system message
+  const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
+  addSystemMessage(`${peerUsername} disconnected`);
 }
 
 // Create an offer to initiate WebRTC connection
@@ -898,9 +914,15 @@ function addRemoteStream(peerId, stream) {
     remoteContainer = template.querySelector('.remote-video-container');
     remoteContainer.setAttribute('data-peer-id', peerId);
     
-    // Set the participant name (using peerId for now)
+    // Set the participant name (using username if available, or peerId as fallback)
     const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
     remoteContainer.querySelector('.participant-name').textContent = peerUsername;
+    
+    // Store username for future reference if not already stored and not a placeholder
+    if (!peerUsernames.has(peerId) && !peerUsername.includes('Peer')) {
+      peerUsernames.set(peerId, peerUsername);
+      console.log(`Stored username "${peerUsername}" for peer ${peerId}`);
+    }
     
     // Add the container to the remote videos section
     remoteVideosContainer.appendChild(remoteContainer);
@@ -939,14 +961,33 @@ function addRemoteStream(peerId, stream) {
     peerConnections.get(peerId).stream = stream;
   }
   
-  // Set up transcription for this peer
-  setupRemoteTranscription(peerId, stream);
+  // Set up transcription for this stream if it has audio tracks
+  if (stream.getAudioTracks().length > 0) {
+    setupRemoteTranscription(peerId, stream);
+  }
 }
 
 // Get a username for a peer based on peerId
 function getPeerUsername(peerId) {
-  // This would be more sophisticated in a real app
-  // where we have a mapping of peer IDs to usernames
+  // Check if we have a username stored for this peer
+  if (peerUsernames.has(peerId)) {
+    return peerUsernames.get(peerId);
+  }
+  
+  // If we find a remote video container with this peer ID, get the username from it
+  const remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+  if (remoteContainer) {
+    const nameElement = remoteContainer.querySelector('.participant-name');
+    if (nameElement && nameElement.textContent && 
+        !nameElement.textContent.includes('Peer') && 
+        !nameElement.textContent.includes('...')) {
+      // Store it for future use
+      peerUsernames.set(peerId, nameElement.textContent);
+      return nameElement.textContent;
+    }
+  }
+  
+  // No username found
   return null;
 }
 
@@ -1077,6 +1118,19 @@ function setupRemoteTranscription(peerId, stream) {
         const result = await window.electronAPI.transcribeAudio(buffer, peerUsername);
         if (result.success) {
           // Transcription will come back through the onTranscriptionResult listener
+          console.log(`Remote transcription for ${peerUsername} sent for processing`);
+          
+          // Check if dataChannel exists for this peer
+          const dataChannel = dataChannels.get(peerId);
+          if (dataChannel && dataChannel.readyState === 'open') {
+            // Share transcript with other peers
+            const transcriptMessage = {
+              type: 'transcript',
+              username: peerUsername,
+              text: result.transcription
+            };
+            dataChannel.send(JSON.stringify(transcriptMessage));
+          }
         }
       } catch (error) {
         console.error(`Error transcribing remote audio from ${peerId}:`, error);
@@ -1134,6 +1188,16 @@ function updateTranscription(speaker, text) {
         break;
       }
     }
+    
+    if (!overlayContainer) {
+      console.warn(`Could not find overlay container for speaker: ${speaker}`);
+      // Additional logging to help troubleshoot
+      console.log(`Available remote containers: ${containers.length}`);
+      containers.forEach(c => {
+        const name = c.querySelector('.participant-name').textContent;
+        console.log(`- Container for: "${name}"`);
+      });
+    }
   }
   
   if (transcriptContainer) {
@@ -1142,8 +1206,10 @@ function updateTranscription(speaker, text) {
     transcriptEntry.textContent = `${text}`;
     transcriptContainer.appendChild(transcriptEntry);
     
-    // Scroll to the bottom
-    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+    // Only keep the last 5 entries to avoid long scrolling text
+    while (transcriptContainer.childNodes.length > 5) {
+      transcriptContainer.removeChild(transcriptContainer.firstChild);
+    }
   }
   
   if (overlayContainer) {
@@ -1151,11 +1217,11 @@ function updateTranscription(speaker, text) {
     overlayContainer.textContent = text;
     overlayContainer.classList.remove('hidden');
     
-    // Hide the overlay after 5 seconds of inactivity
+    // Hide the overlay after 3 seconds of inactivity
     clearTimeout(overlayContainer.fadeTimeout);
     overlayContainer.fadeTimeout = setTimeout(() => {
       overlayContainer.classList.add('hidden');
-    }, 5000);
+    }, 3000);
   }
   
   // If we're using a data channel, also send to peers
@@ -1242,10 +1308,38 @@ function saveAllTranscripts() {
 }
 
 // Add event listener for saving transcripts on leaving room
-window.addEventListener('beforeunload', () => {
-  // Save all transcripts automatically when leaving
+window.addEventListener('beforeunload', async (event) => {
+  // If we have transcripts, prevent immediate closure to allow saving
   if (transcripts.size > 0) {
-    saveAllTranscripts();
+    try {
+      // Save all transcripts automatically when leaving
+      saveAllTranscripts();
+      
+      // Generate a summary of the call if there are meaningful transcripts
+      let totalTranscriptEntries = 0;
+      transcripts.forEach(entries => {
+        totalTranscriptEntries += entries.length;
+      });
+      
+      // Only generate summary if we have meaningful conversation data (more than 3 entries)
+      if (totalTranscriptEntries > 3) {
+        console.log('Generating call summary before closing...');
+        
+        // This will happen asynchronously, so we need to delay closing
+        event.preventDefault();
+        event.returnValue = '';
+        
+        // Generate and save the summary
+        await generateCallSummary();
+        
+        // Allow window to close after summary is generated
+        setTimeout(() => {
+          window.close();
+        }, 1000);
+      }
+    } catch (error) {
+      console.error('Error during application cleanup:', error);
+    }
   }
 });
 
@@ -1275,26 +1369,44 @@ async function generateCallSummary() {
     // Sort by timestamp
     allTranscripts.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     
-    // Generate summary
+    // Generate summary using GPT-4o
+    console.log(`Sending ${allTranscripts.length} transcript entries for summary generation...`);
     const result = await window.electronAPI.generateCallSummary(allTranscripts);
     
-    if (result.success) {
-      console.log('Call Summary Generated:');
-      console.log(result.summary);
-      
-      // Save the summary to a file
-      const blob = new Blob([result.summary], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `call_summary_${currentRoom}_${Date.now()}.txt`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } else {
-      console.error('Failed to generate summary:', result.error || result.message);
+    if (!result.success) {
+      console.error('Failed to generate summary:', result.error);
+      return;
     }
+    
+    console.log('Call summary generated successfully!');
+    
+    // Save the summary to a file
+    const roomName = currentRoom || 'unknown-room';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `call-summary-${roomName}-${timestamp}.txt`;
+    
+    const summaryContent = `CALL SUMMARY\n============\n\nRoom: ${roomName}\nDate: ${new Date().toLocaleString()}\nParticipants: ${Array.from(transcripts.keys()).join(', ')}\n\n${result.summary}`;
+    
+    // Create a Blob from the summary text
+    const blob = new Blob([summaryContent], { type: 'text/plain' });
+    
+    // Create a link to download the file
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    
+    // Append the link to the body
+    document.body.appendChild(link);
+    
+    // Click the link to download the file
+    link.click();
+    
+    // Clean up
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    return result.summary;
   } catch (error) {
     console.error('Error generating call summary:', error);
   }
