@@ -467,10 +467,25 @@ async function createPeerConnection(peerId) {
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         console.log(`Generated ICE candidate for ${peerId}`, event.candidate);
+        
+        // Ensure the candidate has the required fields
+        if (!event.candidate.candidate) {
+          console.warn(`Skipping invalid ICE candidate for ${peerId}: missing candidate string`);
+          return;
+        }
+        
+        // Properly format the ICE candidate for transport
         const signal = {
           type: 'ice-candidate',
-          candidate: event.candidate // Send the entire candidate, not JSON
+          candidate: {
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+            usernameFragment: event.candidate.usernameFragment
+          }
         };
+        
+        console.log(`Formatted ICE candidate for ${peerId}:`, signal.candidate);
         
         // Send the ICE candidate to the peer
         window.electronAPI.sendSignal(peerId, signal).then(result => {
@@ -669,13 +684,26 @@ async function createOffer(peerId, peerConnection) {
     console.log(`Created offer for ${peerId}`, offer);
     await peerConnection.setLocalDescription(offer);
     
+    // Wait a moment to ensure the local description is fully set
+    // This is important as sometimes the localDescription might not be immediately available
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Ensure we have a valid local description before sending
+    if (!peerConnection.localDescription) {
+      console.error(`No local description available for ${peerId}`);
+      return;
+    }
+    
     // Send the offer immediately to avoid delays
     const signal = {
       type: 'offer',
-      sdp: peerConnection.localDescription
+      sdp: {
+        type: peerConnection.localDescription.type,
+        sdp: peerConnection.localDescription.sdp
+      }
     };
     
-    console.log(`Sending offer to peer ${peerId}`);
+    console.log(`Sending offer to peer ${peerId}`, signal);
     window.electronAPI.sendSignal(peerId, signal).then(result => {
       if (!result.success) {
         console.error(`Failed to send offer to ${peerId}:`, result.error);
@@ -732,10 +760,22 @@ async function handleSignalReceived(peerId, from, signal) {
       const answer = await connection.createAnswer();
       await connection.setLocalDescription(answer);
       
+      // Wait a moment to ensure the local description is fully set
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Ensure we have a valid local description before sending
+      if (!connection.localDescription) {
+        console.error(`No local description available for answer to ${peerId}`);
+        return;
+      }
+      
       console.log(`Sending answer to ${peerId}`);
       window.electronAPI.sendSignal(peerId, {
         type: 'answer',
-        sdp: connection.localDescription
+        sdp: {
+          type: connection.localDescription.type,
+          sdp: connection.localDescription.sdp
+        }
       }).then(result => {
         if (!result.success) {
           console.error(`Failed to send answer to ${peerId}:`, result.error);
