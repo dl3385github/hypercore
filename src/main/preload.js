@@ -47,12 +47,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('transcribe-audio', audioBuffer, username);
   },
   
-  // Generate call summary
-  generateSummary: (transcriptData) => {
-    logEvent('generateSummary', `Generating summary for transcript data`);
-    return ipcRenderer.invoke('generate-summary', transcriptData);
-  },
-  
   // Get our own peer ID (public key)
   getOwnId: () => {
     return ipcRenderer.invoke('get-own-id');
@@ -139,20 +133,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       console.log('[Preload] Cleaning up onNetworkError listener');
       ipcRenderer.removeAllListeners('network-error');
-    };
-  },
-  
-  // Summary generation result
-  onSummaryGenerated: (callback) => {
-    console.log('[Preload] Setting up onSummaryGenerated listener');
-    ipcRenderer.on('summary-generated', (event, data) => {
-      logEvent('summary-generated', data);
-      callback(data);
-    });
-    
-    return () => {
-      console.log('[Preload] Cleaning up onSummaryGenerated listener');
-      ipcRenderer.removeAllListeners('summary-generated');
     };
   }
 });

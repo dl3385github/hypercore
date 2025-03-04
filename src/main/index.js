@@ -25,11 +25,6 @@ if (!fs.existsSync('./temp')) {
   fs.mkdirSync('./temp', { recursive: true });
 }
 
-// Ensure summaries directory exists
-if (!fs.existsSync('./summaries')) {
-  fs.mkdirSync('./summaries', { recursive: true });
-}
-
 // Keep a global reference of the window object
 let mainWindow;
 
@@ -301,42 +296,6 @@ function setupIpcHandlers() {
       };
     }
   });
-
-  // Handle call summary generation
-  ipcMain.handle('generate-summary', async (event, transcriptData) => {
-    try {
-      console.log('Received request to generate call summary');
-      
-      // Generate the summary
-      const result = await generateCallSummary(transcriptData);
-      
-      if (result.success) {
-        // Send the summary result to the renderer
-        mainWindow.webContents.send('summary-generated', {
-          success: true,
-          summary: result.summary,
-          summaryFilePath: result.summaryFilePath
-        });
-      } else {
-        throw new Error(result.error);
-      }
-      
-      return result;
-    } catch (error) {
-      console.error('Error generating call summary:', error);
-      
-      // Notify renderer of error
-      mainWindow.webContents.send('summary-generated', {
-        success: false,
-        error: error.message
-      });
-      
-      return {
-        success: false,
-        error: error.message || 'Failed to generate call summary'
-      };
-    }
-  });
 }
 
 // Transcribe audio using OpenAI Whisper
@@ -359,93 +318,6 @@ async function transcribeWithWhisper(audioFilePath) {
   } catch (error) {
     console.error('Error using Whisper API:', error);
     throw new Error(`Whisper API error: ${error.message}`);
-  }
-}
-
-// Generate call summary using GPT-4o
-async function generateCallSummary(transcriptData) {
-  try {
-    if (!openai) {
-      throw new Error('OpenAI API key not set. Cannot generate summary.');
-    }
-    
-    console.log('Generating call summary...');
-    
-    // Format transcript data for the model
-    let transcriptText = '';
-    
-    // Sort all transcript entries by timestamp
-    const allEntries = [];
-    for (const [speaker, entries] of Object.entries(transcriptData)) {
-      entries.forEach(entry => {
-        allEntries.push({
-          speaker,
-          timestamp: new Date(entry.timestamp),
-          text: entry.text
-        });
-      });
-    }
-    
-    // Sort by timestamp
-    allEntries.sort((a, b) => a.timestamp - b.timestamp);
-    
-    // Format as conversation
-    allEntries.forEach(entry => {
-      transcriptText += `${entry.speaker}: ${entry.text}\n`;
-    });
-    
-    // Get current date and time for the summary
-    const summaryDate = new Date().toISOString().replace(/:/g, '-').split('.')[0];
-    
-    // If transcript is empty, return early
-    if (transcriptText.trim() === '') {
-      return {
-        success: false,
-        error: 'No transcript data available to summarize'
-      };
-    }
-    
-    // Call GPT-4o for summary
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: "You are a meeting summarizer. Create a concise summary of the conversation, highlighting key points, decisions, and action items. Format your response with clear sections and bullet points."
-        },
-        {
-          role: "user",
-          content: `Please summarize the following conversation transcript:\n\n${transcriptText}`
-        }
-      ],
-      max_tokens: 1000
-    });
-    
-    const summary = completion.choices[0].message.content;
-    
-    // Save the summary to a file
-    const summaryFilePath = path.join('./summaries', `call_summary_${summaryDate}.md`);
-    
-    // Create the summary file with both the raw transcript and the AI summary
-    const fileContent = `# Call Summary - ${new Date().toLocaleString()}\n\n` +
-                        `## AI-Generated Summary\n\n${summary}\n\n` +
-                        `## Raw Transcript\n\n${transcriptText}`;
-    
-    fs.writeFileSync(summaryFilePath, fileContent);
-    
-    console.log(`Call summary saved to: ${summaryFilePath}`);
-    
-    return {
-      success: true,
-      summary,
-      summaryFilePath
-    };
-  } catch (error) {
-    console.error('Error generating call summary:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to generate call summary'
-    };
   }
 }
 
