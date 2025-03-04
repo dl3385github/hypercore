@@ -473,7 +473,15 @@ async function createPeerConnection(peerId) {
         };
         
         // Send the ICE candidate to the peer
-        window.electronAPI.sendSignal(peerId, signal);
+        window.electronAPI.sendSignal(peerId, signal).then(result => {
+          if (!result.success) {
+            console.error(`Failed to send ICE candidate to ${peerId}:`, result.error);
+          } else {
+            console.log(`Successfully sent ICE candidate to ${peerId}`);
+          }
+        }).catch(err => {
+          console.error(`Error sending ICE candidate to ${peerId}:`, err);
+        });
       } else {
         console.log(`ICE candidate gathering completed for peer ${peerId}`);
       }
@@ -664,11 +672,19 @@ async function createOffer(peerId, peerConnection) {
     // Send the offer immediately to avoid delays
     const signal = {
       type: 'offer',
-      sdp: peerConnection.localDescription // Send the entire description, not JSON
+      sdp: peerConnection.localDescription
     };
     
     console.log(`Sending offer to peer ${peerId}`);
-    window.electronAPI.sendSignal(peerId, signal);
+    window.electronAPI.sendSignal(peerId, signal).then(result => {
+      if (!result.success) {
+        console.error(`Failed to send offer to ${peerId}:`, result.error);
+      } else {
+        console.log(`Successfully sent offer to ${peerId}`);
+      }
+    }).catch(err => {
+      console.error(`Error sending offer to ${peerId}:`, err);
+    });
   } catch (error) {
     console.error(`Error creating offer for ${peerId}:`, error);
   }
@@ -678,9 +694,11 @@ async function createOffer(peerId, peerConnection) {
 async function handleSignalReceived(peerId, from, signal) {
   try {
     console.log(`Received signal from ${from} (${peerId}):`, signal.type);
+    console.log(`Signal content:`, signal);
     
     // If we don't have a connection to this peer yet, create one
     if (!peerConnections.has(peerId)) {
+      console.log(`Creating new peer connection for ${peerId} due to incoming signal`);
       await createPeerConnection(peerId);
     }
     
@@ -695,7 +713,19 @@ async function handleSignalReceived(peerId, from, signal) {
       }
       
       console.log(`Setting remote description (offer) from ${peerId}`);
-      await connection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+      const rtcSessionDescription = new RTCSessionDescription({
+        type: signal.sdp.type,
+        sdp: signal.sdp.sdp
+      });
+      console.log(`Created RTCSessionDescription for offer:`, rtcSessionDescription);
+      
+      try {
+        await connection.setRemoteDescription(rtcSessionDescription);
+        console.log(`Successfully set remote description (offer) for ${peerId}`);
+      } catch (error) {
+        console.error(`Failed to set remote description (offer) for ${peerId}:`, error);
+        return;
+      }
       
       // Create and send answer
       console.log(`Creating answer for ${peerId}`);
@@ -705,7 +735,15 @@ async function handleSignalReceived(peerId, from, signal) {
       console.log(`Sending answer to ${peerId}`);
       window.electronAPI.sendSignal(peerId, {
         type: 'answer',
-        sdp: connection.localDescription // Send the entire description, not JSON
+        sdp: connection.localDescription
+      }).then(result => {
+        if (!result.success) {
+          console.error(`Failed to send answer to ${peerId}:`, result.error);
+        } else {
+          console.log(`Successfully sent answer to ${peerId}`);
+        }
+      }).catch(err => {
+        console.error(`Error sending answer to ${peerId}:`, err);
       });
       
     } else if (signal.type === 'answer') {
@@ -716,8 +754,19 @@ async function handleSignalReceived(peerId, from, signal) {
       }
       
       console.log(`Setting remote description (answer) from ${peerId}`);
-      await connection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+      const rtcSessionDescription = new RTCSessionDescription({
+        type: signal.sdp.type,
+        sdp: signal.sdp.sdp
+      });
+      console.log(`Created RTCSessionDescription for answer:`, rtcSessionDescription);
       
+      try {
+        await connection.setRemoteDescription(rtcSessionDescription);
+        console.log(`Successfully set remote description (answer) for ${peerId}`);
+      } catch (error) {
+        console.error(`Failed to set remote description (answer) for ${peerId}:`, error);
+        return;
+      }
     } else if (signal.type === 'ice-candidate') {
       // Make sure we have a valid candidate
       if (!signal.candidate) {
@@ -725,11 +774,26 @@ async function handleSignalReceived(peerId, from, signal) {
         return;
       }
       
-      console.log(`Adding ICE candidate from ${peerId}`, signal.candidate);
+      console.log(`Processing ICE candidate from ${peerId}`, signal.candidate);
       try {
         // Check if the ICE candidate has required fields before adding
         if (signal.candidate.sdpMid !== null || signal.candidate.sdpMLineIndex !== null) {
-          await connection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          // Create a proper RTCIceCandidate object from the serialized data
+          const candidate = new RTCIceCandidate({
+            candidate: signal.candidate.candidate,
+            sdpMid: signal.candidate.sdpMid,
+            sdpMLineIndex: signal.candidate.sdpMLineIndex,
+            usernameFragment: signal.candidate.usernameFragment
+          });
+          
+          console.log(`Created RTCIceCandidate object:`, candidate);
+          
+          try {
+            await connection.addIceCandidate(candidate);
+            console.log(`Successfully added ICE candidate from ${peerId}`);
+          } catch (err) {
+            console.error(`Error adding ICE candidate from ${peerId}:`, err);
+          }
         } else {
           console.warn(`Skipping invalid ICE candidate from ${peerId}: missing sdpMid or sdpMLineIndex`);
         }

@@ -197,11 +197,48 @@ function setupIpcHandlers() {
         throw new Error(`No connection found for peer: ${peerId}`);
       }
 
+      // Properly serialize WebRTC objects for transport
+      // This ensures that SDP and ICE candidates can be reconstructed on the receiving end
+      let serializedSignal = signal;
+      
+      console.log(`Serializing ${signal.type} signal for peer ${peerId}`, signal);
+      
+      // For SDP (offer/answer), extract and format the session description
+      if (signal.type === 'offer' || signal.type === 'answer') {
+        if (signal.sdp && typeof signal.sdp === 'object') {
+          serializedSignal = {
+            type: signal.type,
+            sdp: {
+              type: signal.sdp.type,
+              sdp: signal.sdp.sdp
+            }
+          };
+          console.log(`Serialized ${signal.type} SDP:`, serializedSignal.sdp);
+        } else {
+          console.error(`Invalid SDP format in ${signal.type}:`, signal.sdp);
+        }
+      }
+      // For ICE candidates, extract and format the candidate data
+      else if (signal.type === 'ice-candidate' && signal.candidate) {
+        serializedSignal = {
+          type: signal.type,
+          candidate: {
+            candidate: signal.candidate.candidate,
+            sdpMid: signal.candidate.sdpMid,
+            sdpMLineIndex: signal.candidate.sdpMLineIndex,
+            usernameFragment: signal.candidate.usernameFragment
+          }
+        };
+        console.log(`Serialized ICE candidate:`, serializedSignal.candidate);
+      } else {
+        console.error(`Unknown signal type or missing data:`, signal);
+      }
+
       // Send the signal data
       const signalData = {
         type: 'rtc-signal',
         from: username,
-        signal,
+        signal: serializedSignal,
         timestamp: Date.now()
       };
 
