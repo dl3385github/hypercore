@@ -290,57 +290,51 @@ function setupIpcHandlers() {
   // Handle audio transcription requests
   ipcMain.handle('transcribe-audio', async (event, audioBuffer, speaker) => {
     try {
+      // Make sure audioBuffer is a buffer or convert it if needed
+      const buffer = Buffer.isBuffer(audioBuffer) ? audioBuffer : 
+                     (audioBuffer instanceof Uint8Array ? Buffer.from(audioBuffer) : 
+                     (Array.isArray(audioBuffer) ? Buffer.from(audioBuffer) : null));
+      
+      if (!buffer) {
+        console.error(`Invalid audio buffer from ${speaker}: `, typeof audioBuffer);
+        return { success: false, error: 'Invalid audio buffer format' };
+      }
+      
       // Skip transcribing if the buffer is too small
-      if (audioBuffer.length < 1000) { // Very short audio is likely just noise
-        console.log(`Audio buffer for ${speaker} too small (${audioBuffer.length} bytes), skipping`);
+      if (buffer.length < 1000) { // Very short audio is likely just noise
+        console.log(`Audio buffer too small from ${speaker}: ${buffer.length} bytes`);
         return { success: false, error: 'Audio too short to transcribe' };
       }
       
-      // Check if audio has sufficient volume to transcribe
-      const audioData = new Float32Array(audioBuffer);
-      let maxVolume = 0;
-      let audioLength = 0;
-      
-      // Get the maximum volume and count frames above threshold
-      for (let i = 0; i < audioData.length; i++) {
-        const absValue = Math.abs(audioData[i]);
-        if (absValue > maxVolume) {
-          maxVolume = absValue;
-        }
-        
-        if (absValue > MIN_AUDIO_LEVEL) {
-          audioLength++;
-        }
-      }
-      
-      // If max volume is too low or not enough audio above threshold, skip transcription
-      if (maxVolume < MIN_AUDIO_LEVEL || audioLength < MIN_AUDIO_DURATION) {
-        console.log(`Skipping transcription for ${speaker} - max volume: ${maxVolume.toFixed(3)}, frames above threshold: ${audioLength}`);
-        return { success: false, error: 'Audio volume too low' };
-      }
-      
-      console.log(`Transcribing audio from ${speaker} - length: ${audioBuffer.length}, max volume: ${maxVolume.toFixed(3)}, frames above threshold: ${audioLength}`);
+      console.log(`Processing audio from ${speaker} - buffer size: ${buffer.length} bytes`);
       
       // Generate random filename with timestamp for the WAV file
       const timestamp = Date.now();
       const filename = `./temp/audio_${timestamp}_${Math.floor(Math.random() * 1000)}.wav`;
       
+      // Ensure temp directory exists
+      if (!fs.existsSync('./temp')) {
+        fs.mkdirSync('./temp', { recursive: true });
+      }
+      
+      // Save audio buffer to a temporary file
+      fs.writeFileSync(filename, buffer);
+      
+      // Call OpenAI Whisper API
       try {
-        // Save audio buffer to a temporary file
-        fs.writeFileSync(filename, Buffer.from(audioBuffer));
-        
-        // Call OpenAI Whisper API
+        console.log(`Calling Whisper API with audio file: ${filename}`);
         const transcription = await transcribeWithWhisper(filename);
+        console.log(`Whisper API returned transcription for ${speaker}: "${transcription}"`);
         
         // Clean up the temporary file
         try {
           fs.unlinkSync(filename);
         } catch (cleanupError) {
-          console.warn(`Failed to delete temporary file ${filename}:`, cleanupError);
+          console.error(`Error cleaning up temporary file ${filename}:`, cleanupError);
         }
         
         // If transcription is empty or too short, skip
-        if (!transcription || transcription.trim().length < 3) {
+        if (!transcription || transcription.trim().length < 2) {
           console.log(`Empty or short transcription from ${speaker}: "${transcription}"`);
           return { 
             success: true,
@@ -348,7 +342,7 @@ function setupIpcHandlers() {
           };
         }
         
-        console.log(`Transcription from ${speaker}: "${transcription}"`);
+        console.log(`Valid transcription from ${speaker}: "${transcription}"`);
         
         // Send transcription result to renderer
         const result = {
@@ -363,15 +357,15 @@ function setupIpcHandlers() {
           success: true,
           transcription
         };
-      } catch (fileError) {
-        console.error(`Error processing audio file for ${speaker}:`, fileError);
+      } catch (whisperError) {
+        console.error(`Error in Whisper API call for ${speaker}:`, whisperError);
         return {
           success: false,
-          error: `File processing error: ${fileError.message}`
+          error: `Whisper API error: ${whisperError.message}`
         };
       }
     } catch (error) {
-      console.error(`Error transcribing audio for ${speaker}:`, error);
+      console.error('Error transcribing audio:', error);
       return {
         success: false,
         error: error.message || 'Failed to transcribe audio'
