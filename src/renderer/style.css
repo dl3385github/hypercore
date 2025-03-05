@@ -530,6 +530,8 @@ body {
   margin-bottom: 15px;
   padding-bottom: 15px;
   border-bottom: 1px solid #eee;
+  display: flex;
+  flex-direction: column;
 }
 
 .transcript-entry:last-child {
@@ -538,13 +540,17 @@ body {
 
 .transcript-speaker {
   font-weight: bold;
-  margin-bottom: 5px;
   color: #4a90e2;
+  display: inline;
+  margin-right: 5px;
 }
 
 .transcript-text {
   color: #333;
   line-height: 1.4;
+  display: inline;
+  flex: 1;
+  word-wrap: break-word;
 }
 
 .transcript-time {
@@ -640,4 +646,32 @@ body {
   color: #888;
   margin-top: 5px;
   margin-bottom: 15px;
+}
+
+/* Notification */
+.notification {
+  background-color: #4caf50;
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-left: 10px;
+  animation: pulse 2s infinite;
+  display: inline-block;
+}
+
+.notification.hidden {
+  display: none;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 1;
+  }
 } 

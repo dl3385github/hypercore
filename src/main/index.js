@@ -292,6 +292,7 @@ function setupIpcHandlers() {
     try {
       // Skip transcribing if the buffer is too small
       if (audioBuffer.length < 1000) { // Very short audio is likely just noise
+        console.log(`Audio buffer for ${speaker} too small (${audioBuffer.length} bytes), skipping`);
         return { success: false, error: 'Audio too short to transcribe' };
       }
       
@@ -324,41 +325,53 @@ function setupIpcHandlers() {
       const timestamp = Date.now();
       const filename = `./temp/audio_${timestamp}_${Math.floor(Math.random() * 1000)}.wav`;
       
-      // Save audio buffer to a temporary file
-      fs.writeFileSync(filename, Buffer.from(audioBuffer));
-      
-      // Call OpenAI Whisper API
-      const transcription = await transcribeWithWhisper(filename);
-      
-      // Clean up the temporary file
-      fs.unlinkSync(filename);
-      
-      // If transcription is empty or too short, skip
-      if (!transcription || transcription.trim().length < 3) {
-        console.log(`Empty or short transcription from ${speaker}: "${transcription}"`);
+      try {
+        // Save audio buffer to a temporary file
+        fs.writeFileSync(filename, Buffer.from(audioBuffer));
+        
+        // Call OpenAI Whisper API
+        const transcription = await transcribeWithWhisper(filename);
+        
+        // Clean up the temporary file
+        try {
+          fs.unlinkSync(filename);
+        } catch (cleanupError) {
+          console.warn(`Failed to delete temporary file ${filename}:`, cleanupError);
+        }
+        
+        // If transcription is empty or too short, skip
+        if (!transcription || transcription.trim().length < 3) {
+          console.log(`Empty or short transcription from ${speaker}: "${transcription}"`);
+          return { 
+            success: true,
+            transcription: ''
+          };
+        }
+        
+        console.log(`Transcription from ${speaker}: "${transcription}"`);
+        
+        // Send transcription result to renderer
+        const result = {
+          speaker,
+          text: transcription,
+          timestamp: Date.now()
+        };
+        
+        mainWindow.webContents.send('transcription-result', result);
+        
         return { 
           success: true,
-          transcription: ''
+          transcription
+        };
+      } catch (fileError) {
+        console.error(`Error processing audio file for ${speaker}:`, fileError);
+        return {
+          success: false,
+          error: `File processing error: ${fileError.message}`
         };
       }
-      
-      console.log(`Transcription from ${speaker}: "${transcription}"`);
-      
-      // Send transcription result to renderer
-      const result = {
-        speaker,
-        text: transcription,
-        timestamp: Date.now()
-      };
-      
-      mainWindow.webContents.send('transcription-result', result);
-      
-      return { 
-        success: true,
-        transcription
-      };
     } catch (error) {
-      console.error('Error transcribing audio:', error);
+      console.error(`Error transcribing audio for ${speaker}:`, error);
       return {
         success: false,
         error: error.message || 'Failed to transcribe audio'

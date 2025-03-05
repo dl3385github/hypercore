@@ -15,16 +15,6 @@ const toggleVideoButton = document.getElementById('toggle-video');
 const toggleAudioButton = document.getElementById('toggle-audio');
 const remoteVideoTemplate = document.getElementById('remote-video-template');
 const saveTranscriptButton = document.getElementById('save-transcript-btn');
-const transcriptPopup = document.getElementById('transcript-popup');
-const transcriptPopupContent = document.querySelector('.transcript-popup-content');
-const toggleTranscriptPopupBtn = document.getElementById('toggle-transcript-popup-btn');
-const closeTranscriptPopupBtn = document.getElementById('close-transcript-popup');
-const summarizeBtn = document.getElementById('summarize-btn');
-const settingsBtn = document.getElementById('settings-btn');
-const settingsPopup = document.getElementById('settings-popup');
-const closeSettingsPopupBtn = document.getElementById('close-settings-popup');
-const audioThresholdSlider = document.getElementById('audio-threshold');
-const thresholdValueDisplay = document.getElementById('threshold-value');
 
 // State variables
 let peers = new Set();
@@ -33,7 +23,6 @@ let localStream = null;
 let isVideoEnabled = false;
 let isAudioEnabled = false;
 let peerConnections = new Map(); // Map of peer ID to connection object
-let peerUsernames = new Map(); // Map of peer ID to username
 let transcriptionIntervals = new Map(); // Map of peer ID to transcription interval
 let localTranscriptContainer = document.querySelector('#local-transcript .transcript-content');
 // Store transcripts by participant for later saving
@@ -50,20 +39,6 @@ let transcriptionInterval = null;
 
 // Store remote audio recorders for transcription
 let remoteRecorders = new Map();
-
-// Variable to track if we're already closing the app
-let isClosingApp = false;
-
-// Track if summary generation is in progress
-let isSummaryGenerating = false;
-
-// Store volume levels for remote peers
-const peerVolumes = new Map();
-
-// App settings
-const appSettings = {
-  audioThreshold: 0.05, // Default value
-};
 
 // Initialize UI
 document.addEventListener('DOMContentLoaded', () => {
@@ -137,56 +112,12 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Handle transcription results
   window.electronAPI.onTranscriptionResult((result) => {
-    console.log(`Transcription received for ${result.speaker}: ${result.text}`);
-    if (result.text && result.text.trim()) {
-      updateTranscription(result.speaker, result.text);
-    }
+    updateTranscription(result.speaker, result.text);
   });
   
   // Handle network errors
   window.electronAPI.onNetworkError((error) => {
-    console.error('Network error:', error);
-    addSystemMessage(`⚠️ Network Error: ${error.message || 'Unknown error'}`);
-  });
-  
-  // Listen for summary request
-  window.electronAPI.onGenerateSummary(() => {
-    generateCallSummary();
-  });
-  
-  // Add event listeners for transcript popup
-  toggleTranscriptPopupBtn.addEventListener('click', toggleTranscriptPopup);
-  closeTranscriptPopupBtn.addEventListener('click', () => {
-    transcriptPopup.classList.add('hidden');
-  });
-  
-  // Add event listener for summarize button
-  summarizeBtn.addEventListener('click', generateCallSummary);
-  
-  // Add event listeners for settings popup
-  settingsBtn.addEventListener('click', toggleSettingsPopup);
-  closeSettingsPopupBtn.addEventListener('click', () => {
-    settingsPopup.classList.add('hidden');
-  });
-  
-  // Setup threshold slider
-  audioThresholdSlider.value = appSettings.audioThreshold;
-  thresholdValueDisplay.textContent = appSettings.audioThreshold;
-  
-  audioThresholdSlider.addEventListener('input', (e) => {
-    const newValue = parseFloat(e.target.value);
-    appSettings.audioThreshold = newValue;
-    thresholdValueDisplay.textContent = newValue.toFixed(2);
-    updateAudioThreshold(newValue);
-  });
-  
-  // Remove beforeunload event to prevent conflicts
-  window.removeEventListener('beforeunload', handleAppExit);
-  
-  // Add event listener for the window closing 
-  window.addEventListener('beforeunload', (e) => {
-    // Don't prevent default - we want to let the app close normally
-    handleAppExit();
+    addSystemMessage(`Network error: ${error.message}`);
   });
 });
 
@@ -288,9 +219,6 @@ async function joinChat() {
     
     // Focus on message input
     messageInput.focus();
-    
-    // Show transcript popup by default
-    transcriptPopup.classList.remove('hidden');
   } catch (error) {
     alert(`Error joining chat: ${error.message || 'Unknown error'}`);
   }
@@ -634,9 +562,6 @@ async function shouldInitiateConnection(peerId) {
 
 // Send our media state via data channel
 function sendMediaStateViaDataChannel(dataChannel) {
-  // Store username in data channel for reference
-  dataChannel._username = usernameInput.value.trim();
-  
   const mediaState = {
     type: 'media-state',
     username: usernameInput.value.trim(),
@@ -654,27 +579,6 @@ function handleDataChannelMessage(peerId, message) {
   if (message.type === 'media-state') {
     // Update remote media state UI
     updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
-  } else if (message.type === 'transcript') {
-    // Handle transcript message from peer
-    // Get the speaker from the message or use the peer's username
-    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
-    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
-    
-    // Make sure we store this username for the peer if we don't have it already
-    if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
-      peerUsernames.set(peerId, speaker);
-    }
-    
-    // Skip empty or very short transcriptions
-    if (!message.text || message.text.trim().length < 3) {
-      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
-      return;
-    }
-    
-    // Update UI with the transcript
-    updateTranscription(speaker, message.text);
-    
-    // No need to add to transcript map again since updateTranscription already does this
   }
 }
 
@@ -700,66 +604,74 @@ function updateRemoteMediaState(peerId, username, videoEnabled, audioEnabled) {
   }
 }
 
-// Clean up peer connection
+// Clean up peer connection when a peer disconnects
 function cleanupPeerConnection(peerId) {
   console.log(`Cleaning up connection for peer ${peerId}`);
   
-  // Clean up data channel
-  const dataChannel = dataChannels.get(peerId);
-  if (dataChannel) {
-    try {
-      dataChannel.close();
-    } catch (e) {
-      console.error(`Error closing data channel for ${peerId}:`, e);
-    }
-    dataChannels.delete(peerId);
-  }
-  
-  // Clean up transcription resources
-  const remoteRecorder = remoteRecorders.get(peerId);
-  if (remoteRecorder) {
-    try {
-      if (remoteRecorder.state === 'recording') {
-        remoteRecorder.stop();
+  try {
+    // Clean up data channel
+    if (dataChannels.has(peerId)) {
+      const dataChannel = dataChannels.get(peerId);
+      if (dataChannel && dataChannel.readyState !== 'closed') {
+        dataChannel.close();
       }
-    } catch (e) {
-      console.error(`Error stopping remote recorder for ${peerId}:`, e);
+      dataChannels.delete(peerId);
     }
-    remoteRecorders.delete(peerId);
-  }
-  
-  // Clean up connection
-  const connection = peerConnections.get(peerId);
-  if (connection) {
-    try {
-      connection.close();
-    } catch (e) {
-      console.error(`Error closing connection for ${peerId}:`, e);
+    
+    // Clean up peer connection
+    if (peerConnections.has(peerId)) {
+      const { connection, stream } = peerConnections.get(peerId);
+      
+      // Close connection if it exists
+      if (connection) {
+        connection.ontrack = null;
+        connection.onicecandidate = null;
+        connection.oniceconnectionstatechange = null;
+        connection.onsignalingstatechange = null;
+        connection.onicegatheringstatechange = null;
+        connection.onconnectionstatechange = null;
+        connection.ondatachannel = null;
+        connection.close();
+      }
+      
+      peerConnections.delete(peerId);
     }
-    peerConnections.delete(peerId);
+    
+    // Clean up remote recorder
+    if (remoteRecorders.has(peerId)) {
+      const { recorder, interval } = remoteRecorders.get(peerId);
+      if (interval) {
+        clearInterval(interval);
+      }
+      if (recorder && recorder.state === 'recording') {
+        recorder.stop();
+      }
+      remoteRecorders.delete(peerId);
+    }
+    
+    // Remove video element from the UI
+    const videoContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+    if (videoContainer) {
+      const videoElement = videoContainer.querySelector('video');
+      if (videoElement) {
+        videoElement.srcObject = null;
+        videoElement.pause();
+      }
+      videoContainer.remove();
+    }
+    
+    // Remove participant from transcript if it exists
+    const transcriptContainer = document.querySelector(`.transcript-container[data-participant="${peerId}"]`);
+    if (transcriptContainer) {
+      transcriptContainer.remove();
+    }
+    
+    // Update the UI
+    updateConnectionCount();
+    
+  } catch (error) {
+    console.error(`Error cleaning up peer connection for ${peerId}:`, error);
   }
-  
-  // Clean up username mapping
-  peerUsernames.delete(peerId);
-  
-  // Clean up pending ICE candidates
-  pendingIceCandidates.delete(peerId);
-  
-  // Remove from peers set
-  peers.delete(peerId);
-  
-  // Update connection count
-  updateConnectionCount();
-  
-  // Remove from UI
-  const remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-  if (remoteContainer) {
-    remoteContainer.remove();
-  }
-  
-  // Add system message
-  const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
-  addSystemMessage(`${peerUsername} disconnected`);
 }
 
 // Create an offer to initiate WebRTC connection
@@ -975,187 +887,69 @@ async function processIceCandidate(peerId, connection, candidate) {
   }
 }
 
-// Add remote stream to video grid
+// Add a remote stream to the UI
 function addRemoteStream(peerId, stream) {
-  try {
-    console.log(`Adding remote stream for peer ${peerId}`);
+  console.log(`Adding remote stream from ${peerId} to UI`);
+  
+  // Create a container for the remote video if it doesn't exist
+  let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+  
+  if (!remoteContainer) {
+    // Clone the template
+    console.log('Creating new remote video container');
+    const template = remoteVideoTemplate.content.cloneNode(true);
+    remoteContainer = template.querySelector('.remote-video-container');
+    remoteContainer.setAttribute('data-peer-id', peerId);
     
-    // Create video container if it doesn't exist
-    let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+    // Set the participant name (using peerId for now)
+    const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
+    remoteContainer.querySelector('.participant-name').textContent = peerUsername;
     
-    if (!remoteContainer) {
-      console.log(`Creating new remote container for peer ${peerId}`);
-      
-      // Get the peer's username
-      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-      
-      // Create a new container for this peer
-      remoteContainer = document.createElement('div');
-      remoteContainer.className = 'remote-video-container';
-      remoteContainer.setAttribute('data-peer-id', peerId);
-      
-      // Create video wrapper for aspect ratio
-      const videoWrapper = document.createElement('div');
-      videoWrapper.className = 'video-wrapper';
-      remoteContainer.appendChild(videoWrapper);
-      
-      // Add video element
-      const remoteVideo = document.createElement('video');
-      remoteVideo.className = 'remote-video';
-      remoteVideo.autoplay = true;
-      remoteVideo.playsInline = true;
-      videoWrapper.appendChild(remoteVideo);
-      
-      // Add transcript overlay container inside video wrapper
-      const transcriptOverlay = document.createElement('div');
-      transcriptOverlay.className = 'transcript-overlay hidden';
-      transcriptOverlay.id = `transcript-overlay-${peerId}`;
-      videoWrapper.appendChild(transcriptOverlay);
-      
-      // Add participant name
-      const nameElement = document.createElement('div');
-      nameElement.className = 'participant-name';
-      nameElement.textContent = peerName;
-      remoteContainer.appendChild(nameElement);
-      
-      // Store the username in our map if it's not a placeholder
-      if (peerName !== `Peer ${peerId.substring(0, 6)}`) {
-        peerUsernames.set(peerId, peerName);
-        console.log(`Stored username "${peerName}" for peer ${peerId}`);
-      }
-      
-      // Add video off indicator
-      const videoOffIndicator = document.createElement('div');
-      videoOffIndicator.className = 'video-off-indicator hidden';
-      videoOffIndicator.innerHTML = '📷❌';
-      videoWrapper.appendChild(videoOffIndicator);
-      
-      // Add audio off indicator
-      const audioOffIndicator = document.createElement('div');
-      audioOffIndicator.className = 'audio-off-indicator hidden';
-      audioOffIndicator.innerHTML = '🔇';
-      videoWrapper.appendChild(audioOffIndicator);
-      
-      // Add volume control
-      const volumeControl = document.createElement('div');
-      volumeControl.className = 'volume-control';
-      
-      const volumeLabel = document.createElement('label');
-      volumeLabel.textContent = 'Volume:';
-      volumeControl.appendChild(volumeLabel);
-      
-      const volumeSlider = document.createElement('input');
-      volumeSlider.type = 'range';
-      volumeSlider.min = '0';
-      volumeSlider.max = '2';
-      volumeSlider.step = '0.1';
-      volumeSlider.value = '1';
-      volumeSlider.className = 'volume-slider';
-      volumeControl.appendChild(volumeSlider);
-      
-      // Set initial volume
-      peerVolumes.set(peerId, 1.0);
-      
-      // Add event listener for volume change
-      volumeSlider.addEventListener('input', (e) => {
-        const volume = parseFloat(e.target.value);
-        peerVolumes.set(peerId, volume);
-        
-        // Find the audio element and adjust its volume
-        const videoElement = remoteContainer.querySelector('video');
-        if (videoElement) {
-          videoElement.volume = volume;
-        }
-      });
-      
-      remoteContainer.appendChild(volumeControl);
-      
-      // Add the container to the video grid
-      remoteVideosContainer.appendChild(remoteContainer);
-      
-      console.log(`Remote container for ${peerName} (${peerId}) added to DOM with transcript overlay`);
-    } else {
-      // Update the name if we now have a real username
-      const nameElement = remoteContainer.querySelector('.participant-name');
-      const currentName = nameElement.textContent;
-      
-      // If current name is a placeholder and we now have a real name
-      if (currentName.includes('Peer') && peerUsernames.has(peerId)) {
-        const realName = peerUsernames.get(peerId);
-        nameElement.textContent = realName;
-        console.log(`Updated name in DOM from "${currentName}" to "${realName}" for peer ${peerId}`);
-      }
-    }
-    
-    // Find the video element
-    const remoteVideo = remoteContainer.querySelector('.remote-video');
-    
-    // Set the srcObject to display the stream
-    remoteVideo.srcObject = stream;
-    
-    // Set the volume based on stored preference
-    if (peerVolumes.has(peerId)) {
-      remoteVideo.volume = peerVolumes.get(peerId);
-    }
-    
-    // Log active tracks
-    console.log(`Remote stream has ${stream.getTracks().length} tracks:`);
-    stream.getTracks().forEach(track => {
-      console.log(`- ${track.kind} track (${track.id}): enabled=${track.enabled}, readyState=${track.readyState}`);
-    });
-    
-    // Ensure the container is visible
-    remoteContainer.classList.remove('hidden');
-    
-    // Update connection count
-    updateConnectionCount();
-    
-    // Setup transcription for audio tracks
-    if (stream.getAudioTracks().length > 0) {
-      setupRemoteTranscription(peerId, stream);
-    }
-    
-    return remoteContainer;
-  } catch (error) {
-    console.error(`Error adding remote stream for ${peerId}:`, error);
-    return null;
+    // Add the container to the remote videos section
+    remoteVideosContainer.appendChild(remoteContainer);
   }
+  
+  // Add the stream to the video element
+  const videoElement = remoteContainer.querySelector('.remote-video');
+  
+  // Only set stream if it's different
+  if (videoElement.srcObject !== stream) {
+    console.log(`Setting video element source for peer ${peerId}`);
+    videoElement.srcObject = stream;
+    
+    // Add event listeners for video
+    videoElement.onloadedmetadata = () => {
+      console.log(`Remote video metadata loaded for ${peerId}`);
+      videoElement.play().catch(e => {
+        console.error(`Error playing remote video for ${peerId}:`, e);
+      });
+    };
+    
+    videoElement.onerror = (e) => {
+      console.error(`Error with remote video element for ${peerId}:`, e);
+    };
+    
+    // Ensure the video plays
+    if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA or higher
+      videoElement.play().catch(e => {
+        console.error(`Error playing remote video for ${peerId}:`, e);
+      });
+    }
+  }
+  
+  // Store the stream in our connections map
+  if (peerConnections.has(peerId)) {
+    peerConnections.get(peerId).stream = stream;
+  }
+  
+  // Set up transcription for this peer
+  setupRemoteTranscription(peerId, stream);
 }
 
 // Get a username for a peer based on peerId
 function getPeerUsername(peerId) {
-  // Check if we have a username stored for this peer
-  if (peerUsernames.has(peerId)) {
-    return peerUsernames.get(peerId);
-  }
-  
-  // If we find a remote video container with this peer ID, get the username from it
-  const remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-  if (remoteContainer) {
-    const nameElement = remoteContainer.querySelector('.participant-name');
-    if (nameElement && nameElement.textContent && 
-        !nameElement.textContent.includes('Peer') && 
-        !nameElement.textContent.includes('...')) {
-      // Store it for future use
-      const username = nameElement.textContent;
-      peerUsernames.set(peerId, username);
-      console.log(`Retrieved username "${username}" for peer ${peerId} from DOM`);
-      return username;
-    }
-  }
-  
-  // If still no username found, check remote streams or connections
-  for (const [id, dataChannel] of dataChannels.entries()) {
-    if (id === peerId && dataChannel._username) {
-      const username = dataChannel._username;
-      peerUsernames.set(peerId, username);
-      console.log(`Retrieved username "${username}" for peer ${peerId} from data channel`);
-      return username;
-    }
-  }
-  
-  // Fallback to using short peerId as username
-  console.log(`No username found for peer ${peerId}, using ID-based name`);
+  // This would be more sophisticated in a real app
+  // where we have a mapping of peer IDs to usernames
   return null;
 }
 
@@ -1240,7 +1034,7 @@ function stopMediaRecording() {
   }
 }
 
-// Set up transcription for remote participants
+// Setup transcription for remote participants
 function setupRemoteTranscription(peerId, stream) {
   // Extract audio track from the remote stream
   const audioTracks = stream.getAudioTracks();
@@ -1249,9 +1043,7 @@ function setupRemoteTranscription(peerId, stream) {
     return;
   }
   
-  // Get peer username - use actual name if available, otherwise use ID-based placeholder
-  const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
-  console.log(`Setting up transcription for remote audio from ${peerUsername} (${peerId})`);
+  console.log(`Setting up transcription for remote audio from ${peerId}`);
   
   try {
     // Create a new MediaStream with just the audio track
@@ -1273,134 +1065,115 @@ function setupRemoteTranscription(peerId, stream) {
       if (remoteChunks.length === 0) return;
       
       try {
+        // Get peer username
+        const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+        
         // Create a blob from the recorded chunks
         const blob = new Blob(remoteChunks, { type: 'audio/webm' });
         remoteChunks.length = 0; // Clear the array
         
-        // Send to main process for transcription
-        const arrayBuffer = await blob.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
-        const buffer = Array.from(uint8Array);
+        // Process locally - can be enhanced to send to main for transcription if needed
+        console.log(`Processed ${blob.size} bytes of audio from ${peerUsername}`);
         
-        const result = await window.electronAPI.transcribeAudio(buffer, peerUsername);
-        if (result.success && result.transcription && result.transcription.trim().length >= 3) {
-          // Log the successful transcription
-          console.log(`Remote transcription for ${peerUsername}: "${result.transcription}"`);
-          
-          // Update our own UI with the transcript
-          updateTranscription(peerUsername, result.transcription);
-          
-          // Store in our local transcript map
-          if (!transcripts.has(peerUsername)) {
-            transcripts.set(peerUsername, []);
-          }
-          
-          const timestamp = new Date().toISOString();
-          transcripts.get(peerUsername).push({
-            timestamp,
-            text: result.transcription
-          });
-          
-          // Share transcript with other peers via data channel
-          const dataChannel = dataChannels.get(peerId);
-          if (dataChannel && dataChannel.readyState === 'open') {
-            const transcriptMessage = {
-              type: 'transcript',
-              speaker: peerUsername,
-              text: result.transcription,
-              timestamp
-            };
-            dataChannel.send(JSON.stringify(transcriptMessage));
-          }
-        } else if (result.success) {
-          console.log(`Ignoring empty or short remote transcription for ${peerUsername}`);
-        }
+        // Note: In this implementation, we're assuming each peer handles their own transcription
+        // and sends the results via the data channel or signaling channel
       } catch (error) {
-        console.error(`Error transcribing remote audio from ${peerUsername}:`, error);
-      } finally {
-        // Restart recording if still connected
-        if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
-          remoteRecorder.start(5000); // 5s chunks
-        }
+        console.error(`Error processing remote audio from ${peerId}:`, error);
       }
     };
     
-    // Store the recorder for later cleanup
-    remoteRecorders.set(peerId, remoteRecorder);
-    
     // Start recording
-    remoteRecorder.start(5000); // 5s chunks
+    remoteRecorder.start();
     
-    console.log(`Started remote transcription for ${peerUsername} (${peerId})`);
+    // Set up interval to stop and restart recording every 5 seconds
+    const interval = setInterval(() => {
+      if (remoteRecorder && remoteRecorder.state === 'recording') {
+        remoteRecorder.stop();
+        
+        // Start a new recording after a small delay
+        setTimeout(() => {
+          // Only restart if the peer connection is still active
+          if (peerConnections.has(peerId)) {
+            remoteRecorder.start();
+          } else {
+            clearInterval(interval);
+          }
+        }, 500);
+      }
+    }, 5000); // Record in 5-second chunks
+    
+    // Store the recorder and interval for cleanup
+    if (!remoteRecorders.has(peerId)) {
+      remoteRecorders.set(peerId, { recorder: remoteRecorder, interval });
+    } else {
+      // Clean up existing recorder first
+      const existing = remoteRecorders.get(peerId);
+      clearInterval(existing.interval);
+      if (existing.recorder && existing.recorder.state === 'recording') {
+        existing.recorder.stop();
+      }
+      remoteRecorders.set(peerId, { recorder: remoteRecorder, interval });
+    }
+    
   } catch (error) {
-    console.error(`Error setting up remote transcription for ${peerUsername} (${peerId}):`, error);
+    console.error(`Error setting up remote transcription for ${peerId}:`, error);
   }
-}
-
-// Toggle transcript popup visibility
-function toggleTranscriptPopup() {
-  transcriptPopup.classList.toggle('hidden');
 }
 
 // Update transcription display
 function updateTranscription(speaker, text) {
-  if (!text || text.trim() === '') return;
-  
-  let overlayContainer = null;
-  
-  // Store transcript entry
-  if (!transcripts.has(speaker)) {
-    transcripts.set(speaker, []);
+  try {
+    // Validate inputs
+    if (!speaker) {
+      console.warn('Missing speaker in updateTranscription');
+      speaker = 'Unknown';
+    }
+    
+    if (!text || text.trim() === '') {
+      console.warn('Empty text in updateTranscription');
+      return;
+    }
+    
+    // Store transcript entry
+    if (!transcripts.has(speaker)) {
+      transcripts.set(speaker, []);
+    }
+    
+    const timestamp = new Date().toISOString();
+    
+    // Limit transcript history per speaker (keep last 50 entries)
+    const speakerTranscripts = transcripts.get(speaker);
+    if (speakerTranscripts.length >= 50) {
+      speakerTranscripts.shift(); // Remove oldest entry
+    }
+    
+    // Add new transcript
+    speakerTranscripts.push({
+      timestamp,
+      text
+    });
+    
+    console.log(`Updating transcription for ${speaker}: "${text}"`);
+    
+    // Add to transcript popup with improved formatting
+    addTranscriptToPopup(speaker, text, timestamp);
+    
+    // Show a notification that new transcript is available if popup is hidden
+    if (transcriptPopup.classList.contains('hidden')) {
+      const notificationElement = document.getElementById('transcript-notification');
+      if (notificationElement) {
+        notificationElement.textContent = 'New transcripts available';
+        notificationElement.classList.remove('hidden');
+        
+        // Hide notification after 3 seconds
+        setTimeout(() => {
+          notificationElement.classList.add('hidden');
+        }, 3000);
+      }
+    }
+  } catch (error) {
+    console.error('Error in updateTranscription:', error);
   }
-  
-  const timestamp = new Date().toISOString();
-  transcripts.get(speaker).push({
-    timestamp,
-    text
-  });
-  
-  console.log(`Updating transcription for ${speaker}: "${text}"`);
-  
-  // For now, don't show overlay transcripts since we're using the popup instead
-  
-  // Add to transcript popup
-  addTranscriptToPopup(speaker, text, timestamp);
-}
-
-// Add transcript to popup
-function addTranscriptToPopup(speaker, text, timestamp) {
-  // Create transcript entry
-  const entry = document.createElement('div');
-  entry.className = 'transcript-entry';
-  
-  // Add speaker name
-  const speakerElement = document.createElement('div');
-  speakerElement.className = 'transcript-speaker';
-  speakerElement.textContent = speaker;
-  entry.appendChild(speakerElement);
-  
-  // Add transcript text
-  const textElement = document.createElement('div');
-  textElement.className = 'transcript-text';
-  textElement.textContent = text;
-  entry.appendChild(textElement);
-  
-  // Add timestamp
-  const timeElement = document.createElement('div');
-  timeElement.className = 'transcript-time';
-  
-  // Format timestamp
-  const date = new Date(timestamp);
-  const formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  
-  timeElement.textContent = formattedTime;
-  entry.appendChild(timeElement);
-  
-  // Add to popup content
-  transcriptPopupContent.appendChild(entry);
-  
-  // Auto-scroll to the bottom
-  transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
 }
 
 // Add function to save transcripts
@@ -1467,136 +1240,23 @@ function saveAllTranscripts() {
   URL.revokeObjectURL(url);
 }
 
-// Generate a call summary
-async function generateCallSummary() {
-  try {
-    // Prevent multiple simultaneous calls to generate summary
-    if (isSummaryGenerating) {
-      console.log('Summary generation already in progress');
-      return;
+// Add event listener for saving transcripts on leaving room
+window.addEventListener('beforeunload', () => {
+  // Save all transcripts automatically when leaving
+  if (transcripts.size > 0) {
+    saveAllTranscripts();
+  }
+});
+
+// Toggle transcript popup visibility
+function toggleTranscriptPopup() {
+  transcriptPopup.classList.toggle('hidden');
+  
+  // Hide notification when showing the popup
+  if (!transcriptPopup.classList.contains('hidden')) {
+    const notificationElement = document.getElementById('transcript-notification');
+    if (notificationElement) {
+      notificationElement.classList.add('hidden');
     }
-    
-    isSummaryGenerating = true;
-    
-    if (transcripts.size === 0) {
-      alert('No transcripts available to summarize');
-      isSummaryGenerating = false;
-      return;
-    }
-    
-    // Show a generating overlay
-    const overlay = document.createElement('div');
-    overlay.className = 'app-exit-overlay';
-    overlay.innerHTML = '<div class="exit-message">Generating call summary, please wait...</div>';
-    document.body.appendChild(overlay);
-    
-    console.log('Preparing transcript data for summary...');
-    
-    // Create a combined transcript with all participants
-    let allTranscripts = [];
-    
-    transcripts.forEach((entries, username) => {
-      entries.forEach(entry => {
-        allTranscripts.push({
-          timestamp: entry.timestamp,
-          username,
-          text: entry.text
-        });
-      });
-    });
-    
-    // Sort by timestamp
-    allTranscripts.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-    
-    // Log the transcript data 
-    console.log(`Sending ${allTranscripts.length} transcript entries from ${transcripts.size} speakers for summary generation...`);
-    transcripts.forEach((entries, speaker) => {
-      console.log(`- ${speaker}: ${entries.length} entries`);
-    });
-    
-    // Generate summary using GPT-4o
-    const result = await window.electronAPI.generateCallSummary(allTranscripts);
-    
-    // Remove overlay
-    document.body.removeChild(overlay);
-    
-    if (!result.success) {
-      console.error('Failed to generate summary:', result.error);
-      alert(`Error generating summary: ${result.error}`);
-      isSummaryGenerating = false;
-      return;
-    }
-    
-    console.log('Call summary generated successfully!');
-    
-    // Save the summary to a file
-    const roomName = currentRoom || 'unknown-room';
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `call-summary-${roomName}-${timestamp}.txt`;
-    
-    const summaryContent = `CALL SUMMARY\n============\n\nRoom: ${roomName}\nDate: ${new Date().toLocaleString()}\nParticipants: ${Array.from(transcripts.keys()).join(', ')}\n\n${result.summary}`;
-    
-    // Create a Blob from the summary text
-    const blob = new Blob([summaryContent], { type: 'text/plain' });
-    
-    // Create a link to download the file
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    
-    // Append the link to the body
-    document.body.appendChild(link);
-    
-    // Click the link to download the file
-    link.click();
-    
-    // Clean up
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    
-    isSummaryGenerating = false;
-    return result.summary;
-  } catch (error) {
-    console.error('Error generating call summary:', error);
-    alert(`Error generating summary: ${error.message}`);
-    isSummaryGenerating = false;
-    throw error;
   }
 }
-
-// Function to handle application exit
-function handleAppExit() {
-  // Just do some basic cleanup before quitting
-  console.log('App closing, cleaning up connections...');
-  
-  try {
-    // Clean up connections
-    for (const peerId of Object.keys(peerConnections)) {
-      cleanupPeerConnection(peerId);
-    }
-    
-    // Stop local media
-    stopLocalMedia();
-  } catch (error) {
-    console.error('Error during cleanup:', error);
-  }
-  
-  // Don't need to quit explicitly since Electron will handle closing the window
-}
-
-// Toggle settings popup
-function toggleSettingsPopup() {
-  settingsPopup.classList.toggle('hidden');
-}
-
-// Update audio threshold on the main process
-function updateAudioThreshold(value) {
-  window.electronAPI.updateAudioThreshold(value)
-    .then(() => {
-      console.log(`Audio threshold updated to ${value}`);
-    })
-    .catch(error => {
-      console.error('Error updating audio threshold:', error);
-    });
-} 
