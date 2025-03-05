@@ -135,14 +135,42 @@ document.addEventListener('DOMContentLoaded', () => {
     handleSignalReceived(data.peerId, data.from, data.signal);
   });
   
-  // Handle transcription results
+  // Listen for transcription results from the main process
   window.electronAPI.onTranscriptionResult((result) => {
-    console.log(`Transcription received from main process for ${result.speaker}: "${result.text}"`);
+    console.log('Transcription received from main process for ' + result.speaker + ': "' + result.text + '"');
+    
+    // Make sure we have a valid, non-empty transcription
     if (result.text && result.text.trim().length > 0) {
-      console.log(`Adding transcription to UI for ${result.speaker}`);
+      console.log('Adding transcription to UI for ' + result.speaker);
+      // Update UI with transcription
       updateTranscription(result.speaker, result.text);
+      
+      // Store transcript entry for later saving
+      if (!transcripts.has(result.speaker)) {
+        transcripts.set(result.speaker, []);
+      }
+      
+      transcripts.get(result.speaker).push({
+        text: result.text,
+        timestamp: result.timestamp || Date.now()
+      });
+      
+      // Share transcript with other peers via data channel
+      for (const [peerId, dataChannel] of dataChannels.entries()) {
+        if (dataChannel && dataChannel.readyState === 'open') {
+          const transcriptMessage = {
+            type: 'transcript',
+            speaker: result.speaker,
+            text: result.text,
+            timestamp: new Date().toISOString()
+          };
+          
+          console.log(`Sharing transcription from ${result.speaker} with peer ${peerId}`);
+          dataChannel.send(JSON.stringify(transcriptMessage));
+        }
+      }
     } else {
-      console.log(`Ignoring empty transcription for ${result.speaker}`);
+      console.log('Ignoring empty transcription from ' + result.speaker);
     }
   });
   
@@ -292,8 +320,8 @@ async function joinChat() {
     // Focus on message input
     messageInput.focus();
     
-    // Show transcript popup by default
-    transcriptPopup.classList.remove('hidden');
+    // Don't show transcript popup by default
+    // transcriptPopup.classList.remove('hidden');
   } catch (error) {
     alert(`Error joining chat: ${error.message || 'Unknown error'}`);
   }
@@ -1245,8 +1273,10 @@ function stopMediaRecording() {
 
 // Set up transcription for remote participants
 function setupRemoteTranscription(peerId, stream) {
-  // Extract audio track from the remote stream
+  console.log(`Setting up remote transcription for peer: ${peerId}`);
+  
   const audioTracks = stream.getAudioTracks();
+  
   if (!audioTracks || audioTracks.length === 0) {
     console.warn(`No audio tracks found in remote stream from ${peerId}`);
     return;
@@ -1261,14 +1291,19 @@ function setupRemoteTranscription(peerId, stream) {
     const audioStream = new MediaStream([audioTracks[0]]);
     
     // Create a new MediaRecorder for this remote stream
-    const remoteRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+    const remoteRecorder = new MediaRecorder(audioStream, { 
+      mimeType: 'audio/webm',
+      audioBitsPerSecond: 128000 // Use a higher bitrate for better quality
+    });
     const remoteChunks = [];
     
     // Handle data available event
     remoteRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
+      if (event.data && event.data.size > 0) {
         remoteChunks.push(event.data);
         console.log(`Remote audio chunk received from ${peerUsername}, size: ${event.data.size}`);
+      } else {
+        console.warn(`Empty audio chunk received from ${peerUsername}`);
       }
     };
     
@@ -1278,7 +1313,11 @@ function setupRemoteTranscription(peerId, stream) {
         console.log(`No audio chunks collected for ${peerUsername}, restarting recorder`);
         // Restart recording if still connected
         if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
-          remoteRecorder.start(3000); // 3s chunks for faster transcription
+          try {
+            remoteRecorder.start(3000); // 3s chunks for faster transcription
+          } catch (error) {
+            console.error(`Error restarting recorder for ${peerUsername}:`, error);
+          }
         }
         return;
       }
@@ -1294,10 +1333,14 @@ function setupRemoteTranscription(peerId, stream) {
         
         // Ensure we have meaningful audio data
         if (arrayBuffer.byteLength < 1000) {
-          console.log(`Audio data too small from ${peerUsername}, skipping transcription`);
+          console.log(`Audio data too small from ${peerUsername} (${arrayBuffer.byteLength} bytes), skipping transcription`);
           // Restart recording
           if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
-            remoteRecorder.start(3000);
+            try {
+              remoteRecorder.start(3000);
+            } catch (error) {
+              console.error(`Error restarting recorder for ${peerUsername}:`, error);
+            }
           }
           return;
         }
@@ -1339,8 +1382,30 @@ function setupRemoteTranscription(peerId, stream) {
       } finally {
         // Restart recording if still connected
         if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
-          remoteRecorder.start(3000); // 3s chunks for faster transcription
+          try {
+            remoteRecorder.start(3000); // 3s chunks for faster transcription
+          } catch (error) {
+            console.error(`Error restarting recorder for ${peerUsername}:`, error);
+            
+            // Try to recreate the recorder if it's in a failed state
+            if (remoteRecorder.state === 'inactive' && peerConnections.has(peerId)) {
+              console.log(`Attempting to recreate recorder for ${peerUsername}`);
+              setupRemoteTranscription(peerId, stream);
+              return;
+            }
+          }
         }
+      }
+    };
+    
+    // Handle recorder errors
+    remoteRecorder.onerror = (event) => {
+      console.error(`MediaRecorder error for ${peerUsername}:`, event.error);
+      
+      // Try to recreate the recorder if there's an error
+      if (peerConnections.has(peerId)) {
+        console.log(`Recreating recorder for ${peerUsername} after error`);
+        setupRemoteTranscription(peerId, stream);
       }
     };
     

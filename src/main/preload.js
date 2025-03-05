@@ -43,8 +43,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Transcribe audio
   transcribeAudio: (audioBuffer, username) => {
-    logEvent('transcribeAudio', `Audio from ${username}, size: ${audioBuffer.byteLength} bytes`);
-    return ipcRenderer.invoke('transcribe-audio', audioBuffer, username);
+    try {
+      const bufferSize = audioBuffer.byteLength || audioBuffer.length || 'unknown';
+      logEvent('transcribeAudio', `Audio from ${username}, size: ${bufferSize} bytes, type: ${audioBuffer.constructor.name}`);
+      return ipcRenderer.invoke('transcribe-audio', audioBuffer, username);
+    } catch (error) {
+      console.error('Error in transcribeAudio:', error);
+      logEvent('transcribeAudio', `Error processing audio from ${username}: ${error.message}`);
+      return ipcRenderer.invoke('transcribe-audio', audioBuffer, username);
+    }
   },
   
   // Get our own peer ID (public key)

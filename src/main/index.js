@@ -290,14 +290,31 @@ function setupIpcHandlers() {
   // Handle audio transcription requests
   ipcMain.handle('transcribe-audio', async (event, audioBuffer, speaker) => {
     try {
-      // Make sure audioBuffer is a buffer or convert it if needed
-      const buffer = Buffer.isBuffer(audioBuffer) ? audioBuffer : 
-                     (audioBuffer instanceof Uint8Array ? Buffer.from(audioBuffer) : 
-                     (Array.isArray(audioBuffer) ? Buffer.from(audioBuffer) : null));
+      console.log(`Received transcription request from ${speaker}, buffer type: ${typeof audioBuffer}`);
       
-      if (!buffer) {
-        console.error(`Invalid audio buffer from ${speaker}: `, typeof audioBuffer);
-        return { success: false, error: 'Invalid audio buffer format' };
+      // Debug audio buffer properties
+      if (audioBuffer) {
+        console.log(`Audio buffer properties: isArray=${Array.isArray(audioBuffer)}, isUint8Array=${audioBuffer instanceof Uint8Array}, isBuffer=${Buffer.isBuffer(audioBuffer)}, hasLength=${audioBuffer.length !== undefined}, hasSize=${audioBuffer.size !== undefined}, byteLength=${audioBuffer.byteLength || 'undefined'}`);
+      } else {
+        console.error(`Received null or undefined audio buffer from ${speaker}`);
+        return { success: false, error: 'No audio buffer provided' };
+      }
+      
+      // Make sure audioBuffer is a buffer or convert it if needed
+      let buffer;
+      
+      if (Buffer.isBuffer(audioBuffer)) {
+        buffer = audioBuffer;
+      } else if (audioBuffer instanceof Uint8Array) {
+        buffer = Buffer.from(audioBuffer);
+      } else if (Array.isArray(audioBuffer)) {
+        buffer = Buffer.from(audioBuffer);
+      } else if (audioBuffer.buffer && audioBuffer.buffer instanceof ArrayBuffer) {
+        // Handle case where we have a typed array view
+        buffer = Buffer.from(audioBuffer.buffer);
+      } else {
+        console.error(`Unsupported audio buffer type from ${speaker}: ${typeof audioBuffer}`);
+        return { success: false, error: 'Unsupported audio buffer format' };
       }
       
       // Skip transcribing if the buffer is too small
