@@ -25,6 +25,9 @@ const settingsPopup = document.getElementById('settings-popup');
 const closeSettingsPopupBtn = document.getElementById('close-settings-popup');
 const audioThresholdSlider = document.getElementById('audio-threshold');
 const thresholdValueDisplay = document.getElementById('threshold-value');
+const microphoneSelect = document.getElementById('microphone-select');
+const speakerSelect = document.getElementById('speaker-select');
+const refreshDevicesBtn = document.getElementById('refresh-devices-btn');
 
 // State variables
 let peers = new Set();
@@ -60,13 +63,22 @@ let isSummaryGenerating = false;
 // Store volume levels for remote peers
 const peerVolumes = new Map();
 
+// Device selection state
+let selectedMicrophoneId = '';
+let selectedSpeakerId = '';
+let availableDevices = {
+  audioinput: [],
+  audiooutput: [],
+  videoinput: []
+};
+
 // App settings
 const appSettings = {
   audioThreshold: 0.05, // Default value
 };
 
-// Initialize UI
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize the app
+document.addEventListener('DOMContentLoaded', async () => {
   // Focus on username input
   usernameInput.focus();
   
@@ -105,6 +117,50 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Set up save transcript button
   saveTranscriptButton.addEventListener('click', saveAllTranscripts);
+  
+  // Add event listeners for transcript popup
+  toggleTranscriptPopupBtn.addEventListener('click', toggleTranscriptPopup);
+  closeTranscriptPopupBtn.addEventListener('click', () => {
+    transcriptPopup.classList.add('hidden');
+  });
+  
+  // Add event listener for summarize button
+  summarizeBtn.addEventListener('click', generateCallSummary);
+  
+  // Add event listeners for settings popup
+  settingsBtn.addEventListener('click', toggleSettingsPopup);
+  closeSettingsPopupBtn.addEventListener('click', toggleSettingsPopup);
+  
+  // Initialize audio threshold slider
+  audioThresholdSlider.value = appSettings.audioThreshold;
+  thresholdValueDisplay.textContent = appSettings.audioThreshold;
+  
+  audioThresholdSlider.addEventListener('input', (e) => {
+    const newValue = parseFloat(e.target.value);
+    appSettings.audioThreshold = newValue;
+    thresholdValueDisplay.textContent = newValue.toFixed(2);
+    updateAudioThreshold(newValue);
+  });
+  
+  // Device selection listeners
+  microphoneSelect.addEventListener('change', (e) => {
+    selectedMicrophoneId = e.target.value;
+    console.log(`Selected microphone: ${selectedMicrophoneId}`);
+    applyDeviceSelection();
+  });
+  
+  speakerSelect.addEventListener('change', (e) => {
+    selectedSpeakerId = e.target.value;
+    console.log(`Selected speaker: ${selectedSpeakerId}`);
+    applyDeviceSelection();
+  });
+  
+  refreshDevicesBtn.addEventListener('click', () => {
+    enumerateDevices();
+  });
+  
+  // Enumerate devices on startup
+  enumerateDevices();
   
   // Set up message receiving
   window.electronAPI.onNewMessage((message) => {
@@ -180,45 +236,8 @@ document.addEventListener('DOMContentLoaded', () => {
     addSystemMessage(`⚠️ Network Error: ${error.message || 'Unknown error'}`);
   });
   
-  // Listen for summary request
-  window.electronAPI.onGenerateSummary(() => {
-    generateCallSummary();
-  });
-  
-  // Add event listeners for transcript popup
-  toggleTranscriptPopupBtn.addEventListener('click', toggleTranscriptPopup);
-  closeTranscriptPopupBtn.addEventListener('click', () => {
-    transcriptPopup.classList.add('hidden');
-  });
-  
-  // Add event listener for summarize button
-  summarizeBtn.addEventListener('click', generateCallSummary);
-  
-  // Add event listeners for settings popup
-  settingsBtn.addEventListener('click', toggleSettingsPopup);
-  closeSettingsPopupBtn.addEventListener('click', () => {
-    settingsPopup.classList.add('hidden');
-  });
-  
-  // Setup threshold slider
-  audioThresholdSlider.value = appSettings.audioThreshold;
-  thresholdValueDisplay.textContent = appSettings.audioThreshold;
-  
-  audioThresholdSlider.addEventListener('input', (e) => {
-    const newValue = parseFloat(e.target.value);
-    appSettings.audioThreshold = newValue;
-    thresholdValueDisplay.textContent = newValue.toFixed(2);
-    updateAudioThreshold(newValue);
-  });
-  
-  // Remove beforeunload event to prevent conflicts
-  window.removeEventListener('beforeunload', handleAppExit);
-  
-  // Add event listener for the window closing 
-  window.addEventListener('beforeunload', (e) => {
-    // Don't prevent default - we want to let the app close normally
-    handleAppExit();
-  });
+  // Handle app exit
+  window.addEventListener('beforeunload', handleAppExit);
 });
 
 // Generate a random room ID if none provided
@@ -504,46 +523,36 @@ async function createPeerConnection(peerId) {
     });
     
     dataChannel.onopen = () => {
-      console.log(`Data channel to ${peerId} opened`);
+      console.log(`Data channel to peer ${peerId} opened`);
       
-      // Send our current media state immediately
-      if (dataChannel.readyState === 'open') {
-        sendMediaStateViaDataChannel(dataChannel);
-      }
+      // Send our media state when the channel opens
+      sendMediaStateViaDataChannel(dataChannel);
     };
     
     dataChannel.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
         handleDataChannelMessage(peerId, message);
-      } catch (err) {
-        console.error('Failed to parse data channel message:', err);
+      } catch (error) {
+        console.error(`Error parsing data channel message from ${peerId}:`, error);
       }
     };
     
     dataChannel.onclose = () => {
-      console.log(`Data channel to ${peerId} closed`);
+      console.log(`Data channel to peer ${peerId} closed`);
+      dataChannels.delete(peerId);
     };
     
     dataChannel.onerror = (error) => {
-      console.error(`Data channel error for peer ${peerId}:`, error);
+      console.error(`Data channel error with peer ${peerId}:`, error);
     };
     
     dataChannels.set(peerId, dataChannel);
     
     // Handle data channel from remote peer
     peerConnection.ondatachannel = (event) => {
-      const receiveChannel = event.channel;
-      console.log(`Received data channel from ${peerId}:`, receiveChannel.label);
-      
-      receiveChannel.onmessage = (msgEvent) => {
-        try {
-          const message = JSON.parse(msgEvent.data);
-          handleDataChannelMessage(peerId, message);
-        } catch (err) {
-          console.error('Failed to parse incoming data channel message:', err);
-        }
-      };
+      console.log(`Received data channel from peer ${peerId}`);
+      setupDataChannel(peerId, event.channel);
     };
     
     // Add our local stream tracks to the connection
@@ -713,6 +722,23 @@ function handleDataChannelMessage(peerId, message) {
 function updateRemoteMediaState(peerId, username, videoEnabled, audioEnabled) {
   const remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
   if (!remoteContainer) return;
+  
+  // Store username for this peer
+  if (username && username.trim() !== '') {
+    peerUsernames.set(peerId, username);
+    
+    // Update the display name on the video
+    const nameElement = remoteContainer.querySelector('.participant-name');
+    if (nameElement) {
+      const currentName = nameElement.textContent;
+      
+      // Only update if current name is a placeholder or different
+      if (currentName.includes('Peer') || currentName !== username) {
+        nameElement.textContent = username;
+        console.log(`Updated display name for peer ${peerId} from "${currentName}" to "${username}"`);
+      }
+    }
+  }
   
   // Update video state indicator
   const videoOffIndicator = remoteContainer.querySelector('.video-off-indicator');
@@ -1683,4 +1709,209 @@ function updateAudioThreshold(value) {
     .catch(error => {
       console.error('Error updating audio threshold:', error);
     });
+}
+
+// Device management functions
+async function enumerateDevices() {
+  try {
+    console.log('Enumerating media devices...');
+    
+    // Request permissions first to ensure we can see device labels
+    await navigator.mediaDevices.getUserMedia({ audio: true, video: true })
+      .catch(err => {
+        console.warn('Could not get full media access, some device labels may not be visible', err);
+        return navigator.mediaDevices.getUserMedia({ audio: true })
+          .catch(audioErr => {
+            console.warn('Could not get audio access either', audioErr);
+          });
+      });
+    
+    // Get devices
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    
+    // Reset device lists
+    availableDevices = {
+      audioinput: [],
+      audiooutput: [],
+      videoinput: []
+    };
+    
+    // Sort devices by kind
+    devices.forEach(device => {
+      if (availableDevices[device.kind]) {
+        availableDevices[device.kind].push(device);
+      }
+    });
+    
+    console.log('Available devices:', availableDevices);
+    
+    // Update device selection dropdowns
+    updateDeviceSelectors();
+    
+    // Select default devices if none selected
+    if (!selectedMicrophoneId && availableDevices.audioinput.length > 0) {
+      selectedMicrophoneId = availableDevices.audioinput[0].deviceId;
+    }
+    
+    if (!selectedSpeakerId && availableDevices.audiooutput.length > 0) {
+      selectedSpeakerId = availableDevices.audiooutput[0].deviceId;
+    }
+  } catch (error) {
+    console.error('Error enumerating devices:', error);
+  }
+}
+
+function updateDeviceSelectors() {
+  // Update microphone dropdown
+  microphoneSelect.innerHTML = '';
+  
+  availableDevices.audioinput.forEach(device => {
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    option.text = device.label || `Microphone ${device.deviceId.substring(0, 5)}`;
+    microphoneSelect.appendChild(option);
+  });
+  
+  if (selectedMicrophoneId) {
+    microphoneSelect.value = selectedMicrophoneId;
+  }
+  
+  // Update speaker dropdown
+  speakerSelect.innerHTML = '';
+  
+  availableDevices.audiooutput.forEach(device => {
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    option.text = device.label || `Speaker ${device.deviceId.substring(0, 5)}`;
+    speakerSelect.appendChild(option);
+  });
+  
+  if (selectedSpeakerId) {
+    speakerSelect.value = selectedSpeakerId;
+  }
+}
+
+async function applyDeviceSelection() {
+  try {
+    console.log(`Applying device selection: microphone=${selectedMicrophoneId}, speaker=${selectedSpeakerId}`);
+    
+    // Apply audio output selection to all remote videos
+    if (selectedSpeakerId && typeof HTMLMediaElement.prototype.setSinkId !== 'undefined') {
+      // Apply to all remote videos
+      const remoteVideos = document.querySelectorAll('.remote-video');
+      for (const video of remoteVideos) {
+        try {
+          await video.setSinkId(selectedSpeakerId);
+        } catch (error) {
+          console.error('Error setting audio output device for video element:', error);
+        }
+      }
+      
+      console.log(`Applied audio output device to ${remoteVideos.length} video elements`);
+    } else {
+      console.warn('setSinkId not supported by this browser or no speaker selected');
+    }
+    
+    // Only restart audio if we already have a stream
+    if (localStream && selectedMicrophoneId) {
+      // Save current audio/video state
+      const wasVideoEnabled = isVideoEnabled;
+      const wasAudioEnabled = isAudioEnabled;
+      
+      // Stop current tracks
+      for (const track of localStream.getTracks()) {
+        track.stop();
+      }
+      
+      // Create new constraints with selected devices
+      const constraints = {
+        audio: {
+          deviceId: { exact: selectedMicrophoneId }
+        },
+        video: wasVideoEnabled ? {
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        } : false
+      };
+      
+      console.log('Getting new media stream with constraints:', constraints);
+      
+      // Get new stream
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      // Update local video
+      localVideo.srcObject = localStream;
+      
+      // Apply previous media state
+      if (!wasAudioEnabled) {
+        localStream.getAudioTracks().forEach(track => {
+          track.enabled = false;
+        });
+      }
+      
+      // Replace tracks in all peer connections
+      if (peerConnections.size > 0) {
+        for (const [peerId, pc] of peerConnections.entries()) {
+          const senders = pc.getSenders();
+          
+          for (const sender of senders) {
+            if (sender.track) {
+              // Find matching track type in new stream
+              const newTrack = localStream.getTracks().find(t => t.kind === sender.track.kind);
+              if (newTrack) {
+                console.log(`Replacing ${newTrack.kind} track for peer ${peerId}`);
+                await sender.replaceTrack(newTrack);
+              }
+            }
+          }
+        }
+        
+        console.log(`Updated tracks for ${peerConnections.size} peer connections`);
+      }
+      
+      // Update UI to reflect current state
+      toggleVideoButton.classList.toggle('control-btn-active', wasVideoEnabled);
+      toggleAudioButton.classList.toggle('control-btn-active', wasAudioEnabled);
+      
+      // Notify other peers about our media state change
+      notifyMediaStateChange();
+      
+      // Setup media recording again if needed
+      if (wasAudioEnabled) {
+        setupMediaRecording();
+      }
+    }
+  } catch (error) {
+    console.error('Error applying device selection:', error);
+    alert('Error applying device selection: ' + error.message);
+  }
+}
+
+function setupDataChannel(peerId, channel) {
+  // Store channel in our map
+  dataChannels.set(peerId, channel);
+  
+  channel.onopen = () => {
+    console.log(`Data channel to peer ${peerId} opened`);
+    // Send our media state when the channel opens
+    sendMediaStateViaDataChannel(channel);
+  };
+  
+  channel.onclose = () => {
+    console.log(`Data channel to peer ${peerId} closed`);
+    dataChannels.delete(peerId);
+  };
+  
+  channel.onerror = (error) => {
+    console.error(`Data channel error with peer ${peerId}:`, error);
+  };
+  
+  channel.onmessage = (event) => {
+    try {
+      const message = JSON.parse(event.data);
+      handleDataChannelMessage(peerId, message);
+    } catch (error) {
+      console.error(`Error parsing data channel message from ${peerId}:`, error);
+    }
+  };
 } 
