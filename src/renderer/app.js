@@ -1243,6 +1243,12 @@ function setupMediaRecording() {
   if (!localStream || !localStream.getAudioTracks().length) return;
   
   try {
+    // Check if we already have a mediaRecorder that's recording
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      console.log('MediaRecorder is already running, not starting a new one');
+      return;
+    }
+    
     // Create a new MediaRecorder
     const audioStream = new MediaStream([localStream.getAudioTracks()[0]]);
     mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
@@ -1292,8 +1298,12 @@ function setupMediaRecording() {
         
         // Start a new recording after a small delay
         setTimeout(() => {
-          if (isAudioEnabled && isRecording) {
-            mediaRecorder.start();
+          if (isAudioEnabled && isRecording && mediaRecorder && mediaRecorder.state !== 'recording') {
+            try {
+              mediaRecorder.start();
+            } catch (error) {
+              console.error('Error restarting media recorder:', error);
+            }
           }
         }, 500);
       }
@@ -1314,8 +1324,23 @@ function stopMediaRecording() {
     transcriptionInterval = null;
   }
   
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop();
+  try {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+    }
+  } catch (error) {
+    console.error('Error stopping media recorder:', error);
+  }
+  
+  // Reset the media recorder
+  if (mediaRecorder) {
+    try {
+      // Remove event listeners
+      mediaRecorder.ondataavailable = null;
+      mediaRecorder.onstop = null;
+    } catch (error) {
+      console.error('Error cleaning up media recorder:', error);
+    }
   }
 }
 
