@@ -524,51 +524,25 @@ async function createPeerConnection(peerId) {
       ],
       iceCandidatePoolSize: 10
     });
+
+    // Store the connection
+    peerConnections.set(peerId, peerConnection);
     
-    // Create a data channel for control messages
-    const dataChannel = peerConnection.createDataChannel(`chat-${peerId}`, {
-      ordered: true
-    });
-    
-    dataChannel.onopen = () => {
-      console.log(`Data channel to peer ${peerId} opened`);
-      
-      // Send our media state when the channel opens
-      sendMediaStateViaDataChannel(dataChannel);
-    };
-    
-    dataChannel.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        handleDataChannelMessage(peerId, message);
-      } catch (error) {
-        console.error(`Error parsing data channel message from ${peerId}:`, error);
-      }
-    };
-    
-    dataChannel.onclose = () => {
-      console.log(`Data channel to peer ${peerId} closed`);
-      dataChannels.delete(peerId);
-    };
-    
-    dataChannel.onerror = (error) => {
-      console.error(`Data channel error with peer ${peerId}:`, error);
-    };
-    
-    dataChannels.set(peerId, dataChannel);
-    
-    // Handle data channel from remote peer
-    peerConnection.ondatachannel = (event) => {
-      console.log(`Received data channel from peer ${peerId}`);
-      setupDataChannel(peerId, event.channel);
-    };
-    
-    // Add our local stream tracks to the connection
+    // Add local tracks to the connection if available
     if (localStream) {
-      localStream.getTracks().forEach(track => {
-        console.log(`Adding track to peer connection: ${track.kind}`);
-        peerConnection.addTrack(track, localStream);
-      });
+      try {
+        const tracks = localStream.getTracks();
+        console.log(`Adding ${tracks.length} local tracks to peer connection ${peerId}`);
+        
+        for (const track of tracks) {
+          peerConnection.addTrack(track, localStream);
+          console.log(`Added ${track.kind} track to peer connection ${peerId}`);
+        }
+      } catch (trackError) {
+        console.error(`Error adding tracks to peer connection ${peerId}:`, trackError);
+      }
+    } else {
+      console.warn('No local stream available, tracks will not be added to peer connection');
     }
     
     // Connection state change events
@@ -640,26 +614,31 @@ async function createPeerConnection(peerId) {
       addRemoteStream(peerId, remoteStream);
     };
     
-    // Store the connection
-    peerConnections.set(peerId, {
-      connection: peerConnection,
-      stream: null
-    });
+    // Determine if we should send the offer
+    const shouldInitiateOffer = await shouldInitiateConnection(peerId);
     
-    // Create offer (initiate connection)
-    // We'll use a comparison of peer IDs to determine who initiates
-    // This ensures only one side creates the offer
-    const shouldInitiate = await shouldInitiateConnection(peerId);
-    if (shouldInitiate) {
+    // Set up data channel
+    if (shouldInitiateOffer) {
+      console.log(`Creating data channel for peer ${peerId}`);
+      const dataChannel = peerConnection.createDataChannel(`chat-${peerId}`, {
+        ordered: true
+      });
+      setupDataChannel(peerId, dataChannel);
+      
+      // Create offer (initiate connection)
       console.log(`This peer should initiate connection to ${peerId}`);
-      createOffer(peerId, peerConnection);
+      await createOffer(peerId, peerConnection);
     } else {
+      console.log(`Waiting for data channel from peer ${peerId}`);
+      peerConnection.ondatachannel = (event) => {
+        console.log(`Received data channel from peer ${peerId}`);
+        setupDataChannel(peerId, event.channel);
+      };
+      
       console.log(`Waiting for offer from peer ${peerId}`);
     }
-    
   } catch (error) {
     console.error(`Error creating peer connection to ${peerId}:`, error);
-    addSystemMessage(`Failed to connect to peer: ${error.message}`);
   }
 }
 
@@ -1844,10 +1823,8 @@ async function applyDeviceSelection() {
       const wasVideoEnabled = isVideoEnabled;
       const wasAudioEnabled = isAudioEnabled;
       
-      // Stop current tracks
-      for (const track of localStream.getTracks()) {
-        track.stop();
-      }
+      // Keep track of existing tracks for cleanup
+      const oldTracks = localStream.getTracks();
       
       // Create new constraints with selected devices
       const constraints = {
@@ -1866,58 +1843,84 @@ async function applyDeviceSelection() {
       
       console.log('Getting new media stream with constraints:', constraints);
       
-      // Get new stream
-      localStream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      // Update local video
-      localVideo.srcObject = localStream;
-      
-      // Apply previous media state
-      if (!wasAudioEnabled) {
-        localStream.getAudioTracks().forEach(track => {
-          track.enabled = false;
-        });
-      }
-      
-      // Replace tracks in all peer connections
-      if (peerConnections.size > 0) {
-        for (const [peerId, peerConnection] of peerConnections.entries()) {
-          try {
-            // Check if peerConnection is a valid RTCPeerConnection and has getSenders
-            if (peerConnection && typeof peerConnection.getSenders === 'function') {
-              const senders = peerConnection.getSenders();
-              
-              for (const sender of senders) {
-                if (sender.track) {
-                  // Find matching track type in new stream
-                  const newTrack = localStream.getTracks().find(t => t.kind === sender.track.kind);
-                  if (newTrack) {
-                    console.log(`Replacing ${newTrack.kind} track for peer ${peerId}`);
-                    await sender.replaceTrack(newTrack);
-                  }
-                }
-              }
-            } else {
+      try {
+        // Get new stream
+        const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        // Get tracks from new stream
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        const newAudioTrack = newStream.getAudioTracks()[0];
+        
+        // Update existing peer connections with the new tracks
+        if (peerConnections.size > 0) {
+          console.log(`Updating tracks for ${peerConnections.size} peer connections`);
+          
+          for (const [peerId, pc] of peerConnections.entries()) {
+            if (!pc || typeof pc.getSenders !== 'function') {
               console.warn(`Invalid peer connection for ${peerId}, cannot replace tracks`);
+              continue;
             }
-          } catch (err) {
-            console.error(`Error replacing tracks for peer ${peerId}:`, err);
+            
+            // Replace existing tracks with new tracks
+            const senders = pc.getSenders();
+            
+            for (const sender of senders) {
+              try {
+                if (sender.track && sender.track.kind === 'video' && newVideoTrack) {
+                  console.log(`Replacing video track for peer ${peerId}`);
+                  await sender.replaceTrack(newVideoTrack);
+                } else if (sender.track && sender.track.kind === 'audio' && newAudioTrack) {
+                  console.log(`Replacing audio track for peer ${peerId}`);
+                  await sender.replaceTrack(newAudioTrack);
+                }
+              } catch (error) {
+                console.error(`Error replacing ${sender.track?.kind || 'unknown'} track for peer ${peerId}:`, error);
+              }
+            }
           }
         }
         
-        console.log(`Updated tracks for ${peerConnections.size} peer connections`);
-      }
-      
-      // Update UI to reflect current state
-      toggleVideoButton.classList.toggle('control-btn-active', wasVideoEnabled);
-      toggleAudioButton.classList.toggle('control-btn-active', wasAudioEnabled);
-      
-      // Notify other peers about our media state change
-      notifyMediaStateChange();
-      
-      // Setup media recording again if needed
-      if (wasAudioEnabled) {
-        setupMediaRecording();
+        // Only after successfully updating peer connections do we update the local stream
+        // Stop old tracks
+        for (const track of oldTracks) {
+          track.stop();
+        }
+        
+        // Update local stream reference
+        localStream = newStream;
+        
+        // Update local video
+        localVideo.srcObject = localStream;
+        
+        // Apply previous media state
+        if (!wasAudioEnabled && localStream.getAudioTracks().length > 0) {
+          localStream.getAudioTracks().forEach(track => {
+            track.enabled = false;
+          });
+        }
+        
+        // Update UI to reflect current state
+        toggleVideoButton.classList.toggle('control-btn-active', wasVideoEnabled);
+        toggleAudioButton.classList.toggle('control-btn-active', wasAudioEnabled);
+        
+        // Notify other peers about our media state change
+        notifyMediaStateChange();
+        
+        // Setup media recording again if needed
+        if (wasAudioEnabled) {
+          setupMediaRecording();
+        }
+        
+        console.log('Successfully updated media devices');
+      } catch (streamError) {
+        console.error('Error getting new media stream:', streamError);
+        
+        // If there was an error, revert to previous device selections
+        console.log('Reverting to previous device settings');
+        
+        // We don't need to do anything with the old stream as it's still active
+        // Just notify the user
+        alert(`Failed to switch to selected devices: ${streamError.message}. Please try different devices.`);
       }
     }
   } catch (error) {
@@ -1953,4 +1956,5 @@ function setupDataChannel(peerId, channel) {
       console.error(`Error parsing data channel message from ${peerId}:`, error);
     }
   };
+} 
 } 
