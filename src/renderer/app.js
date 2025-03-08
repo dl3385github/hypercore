@@ -519,8 +519,13 @@ async function createPeerConnection(peerId) {
     
     // Create connection if it doesn't exist
     if (peerConnections.has(peerId)) {
-      console.log(`Connection to peer ${peerId} already exists`);
-      return;
+      console.warn(`Connection to peer ${peerId} already exists, removing old one first`);
+      // Close existing connection
+      const existingConn = peerConnections.get(peerId);
+      if (existingConn) {
+        existingConn.close();
+      }
+      peerConnections.delete(peerId);
     }
     
     // Create new RTCPeerConnection with STUN servers
@@ -539,37 +544,19 @@ async function createPeerConnection(peerId) {
       iceCandidatePoolSize: 10
     });
     
+    // Store the connection immediately so we can access it elsewhere
+    peerConnections.set(peerId, peerConnection);
+    
     // Create a data channel for control messages
-    const dataChannel = peerConnection.createDataChannel(`chat-${peerId}`, {
-      ordered: true
-    });
-    
-    dataChannel.onopen = () => {
-      console.log(`Data channel to peer ${peerId} opened`);
+    try {
+      const dataChannel = peerConnection.createDataChannel(`chat-${peerId}`, {
+        ordered: true
+      });
       
-      // Send our media state when the channel opens
-      sendMediaStateViaDataChannel(dataChannel);
-    };
-    
-    dataChannel.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        handleDataChannelMessage(peerId, message);
-      } catch (error) {
-        console.error(`Error parsing data channel message from ${peerId}:`, error);
-      }
-    };
-    
-    dataChannel.onclose = () => {
-      console.log(`Data channel to peer ${peerId} closed`);
-      dataChannels.delete(peerId);
-    };
-    
-    dataChannel.onerror = (error) => {
-      console.error(`Data channel error with peer ${peerId}:`, error);
-    };
-    
-    dataChannels.set(peerId, dataChannel);
+      setupDataChannel(peerId, dataChannel);
+    } catch (error) {
+      console.error(`Error creating data channel for peer ${peerId}:`, error);
+    }
     
     // Handle data channel from remote peer
     peerConnection.ondatachannel = (event) => {
@@ -579,10 +566,18 @@ async function createPeerConnection(peerId) {
     
     // Add our local stream tracks to the connection
     if (localStream) {
-      localStream.getTracks().forEach(track => {
-        console.log(`Adding track to peer connection: ${track.kind}`);
-        peerConnection.addTrack(track, localStream);
-      });
+      try {
+        const tracks = localStream.getTracks();
+        for (const track of tracks) {
+          console.log(`Adding ${track.kind} track to peer connection with peer ${peerId}`);
+          const sender = peerConnection.addTrack(track, localStream);
+          console.log(`Successfully added ${track.kind} track to peer ${peerId}`);
+        }
+      } catch (trackError) {
+        console.error(`Error adding tracks to peer connection with ${peerId}:`, trackError);
+      }
+    } else {
+      console.warn(`No local stream available when creating connection to peer ${peerId}`);
     }
     
     // Connection state change events
@@ -597,6 +592,13 @@ async function createPeerConnection(peerId) {
     // ICE connection state change
     peerConnection.oniceconnectionstatechange = () => {
       console.log(`ICE connection state for ${peerId} changed to: ${peerConnection.iceConnectionState}`);
+      
+      // Handle disconnection
+      if (peerConnection.iceConnectionState === 'disconnected' || 
+          peerConnection.iceConnectionState === 'failed' ||
+          peerConnection.iceConnectionState === 'closed') {
+        console.warn(`ICE connection to peer ${peerId} ${peerConnection.iceConnectionState}, may need to reconnect`);
+      }
     };
     
     // Handle ICE candidates
@@ -638,6 +640,18 @@ async function createPeerConnection(peerId) {
       }
     };
     
+    // Handle negotiation needed
+    peerConnection.onnegotiationneeded = async () => {
+      console.log(`Negotiation needed for peer connection with ${peerId}`);
+      const shouldInitiate = await shouldInitiateConnection(peerId);
+      if (shouldInitiate) {
+        console.log(`This peer will initiate renegotiation with ${peerId}`);
+        await createOffer(peerId, peerConnection);
+      } else {
+        console.log(`Waiting for peer ${peerId} to initiate renegotiation`);
+      }
+    };
+    
     // Handle incoming stream
     peerConnection.ontrack = (event) => {
       console.log(`Received track from ${peerId}:`, event.track.kind);
@@ -654,26 +668,10 @@ async function createPeerConnection(peerId) {
       addRemoteStream(peerId, remoteStream);
     };
     
-    // Store the connection
-    peerConnections.set(peerId, {
-      connection: peerConnection,
-      stream: null
-    });
-    
-    // Create offer (initiate connection)
-    // We'll use a comparison of peer IDs to determine who initiates
-    // This ensures only one side creates the offer
-    const shouldInitiate = await shouldInitiateConnection(peerId);
-    if (shouldInitiate) {
-      console.log(`This peer should initiate connection to ${peerId}`);
-      createOffer(peerId, peerConnection);
-    } else {
-      console.log(`Waiting for offer from peer ${peerId}`);
-    }
-    
+    return peerConnection;
   } catch (error) {
     console.error(`Error creating peer connection to ${peerId}:`, error);
-    addSystemMessage(`Failed to connect to peer: ${error.message}`);
+    throw error;
   }
 }
 
@@ -894,12 +892,13 @@ async function handleSignalReceived(peerId, from, signal) {
     console.log(`Signal content:`, signal);
     
     // If we don't have a connection to this peer yet, create one
+    let peerConnection;
     if (!peerConnections.has(peerId)) {
       console.log(`Creating new peer connection for ${peerId} due to incoming signal`);
-      await createPeerConnection(peerId);
+      peerConnection = await createPeerConnection(peerId);
+    } else {
+      peerConnection = peerConnections.get(peerId);
     }
-    
-    const { connection } = peerConnections.get(peerId);
     
     // Handle different signal types
     if (signal.type === 'offer') {
@@ -917,7 +916,7 @@ async function handleSignalReceived(peerId, from, signal) {
       console.log(`Created RTCSessionDescription for offer:`, rtcSessionDescription);
       
       try {
-        await connection.setRemoteDescription(rtcSessionDescription);
+        await peerConnection.setRemoteDescription(rtcSessionDescription);
         console.log(`Successfully set remote description (offer) for ${peerId}`);
         
         // Process any pending ICE candidates now that we have a remote description
@@ -925,33 +924,36 @@ async function handleSignalReceived(peerId, from, signal) {
           console.log(`Processing ${pendingIceCandidates.get(peerId).length} pending ICE candidates for ${peerId}`);
           const candidates = pendingIceCandidates.get(peerId);
           for (const candidate of candidates) {
-            await processIceCandidate(peerId, connection, candidate);
+            await processIceCandidate(peerId, peerConnection, candidate);
           }
           pendingIceCandidates.delete(peerId);
         }
         
         // Create and send answer
         console.log(`Creating answer for ${peerId}`);
-        const answer = await connection.createAnswer();
-        await connection.setLocalDescription(answer);
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
         
         // Wait a moment to ensure the local description is fully set
         await new Promise(resolve => setTimeout(resolve, 100));
         
         // Ensure we have a valid local description before sending
-        if (!connection.localDescription) {
-          console.error(`No local description available for answer to ${peerId}`);
+        if (!peerConnection.localDescription) {
+          console.error(`No local description available for ${peerId}`);
           return;
         }
         
-        console.log(`Sending answer to ${peerId}`);
-        window.electronAPI.sendSignal(peerId, {
+        // Send the answer
+        const answerSignal = {
           type: 'answer',
           sdp: {
-            type: connection.localDescription.type,
-            sdp: connection.localDescription.sdp
+            type: peerConnection.localDescription.type,
+            sdp: peerConnection.localDescription.sdp
           }
-        }).then(result => {
+        };
+        
+        console.log(`Sending answer to peer ${peerId}`);
+        window.electronAPI.sendSignal(peerId, answerSignal).then(result => {
           if (!result.success) {
             console.error(`Failed to send answer to ${peerId}:`, result.error);
           } else {
@@ -961,10 +963,8 @@ async function handleSignalReceived(peerId, from, signal) {
           console.error(`Error sending answer to ${peerId}:`, err);
         });
       } catch (error) {
-        console.error(`Failed to set remote description (offer) for ${peerId}:`, error);
-        return;
+        console.error(`Error processing offer from ${peerId}:`, error);
       }
-      
     } else if (signal.type === 'answer') {
       // Make sure we have a valid SDP object
       if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
@@ -977,10 +977,9 @@ async function handleSignalReceived(peerId, from, signal) {
         type: signal.sdp.type,
         sdp: signal.sdp.sdp
       });
-      console.log(`Created RTCSessionDescription for answer:`, rtcSessionDescription);
       
       try {
-        await connection.setRemoteDescription(rtcSessionDescription);
+        await peerConnection.setRemoteDescription(rtcSessionDescription);
         console.log(`Successfully set remote description (answer) for ${peerId}`);
         
         // Process any pending ICE candidates now that we have a remote description
@@ -988,46 +987,47 @@ async function handleSignalReceived(peerId, from, signal) {
           console.log(`Processing ${pendingIceCandidates.get(peerId).length} pending ICE candidates for ${peerId}`);
           const candidates = pendingIceCandidates.get(peerId);
           for (const candidate of candidates) {
-            await processIceCandidate(peerId, connection, candidate);
+            await processIceCandidate(peerId, peerConnection, candidate);
           }
           pendingIceCandidates.delete(peerId);
         }
       } catch (error) {
-        console.error(`Failed to set remote description (answer) for ${peerId}:`, error);
-        return;
+        console.error(`Error setting remote description for ${peerId}:`, error);
       }
     } else if (signal.type === 'ice-candidate') {
-      // Make sure we have a valid candidate
-      if (!signal.candidate) {
-        console.error('Invalid ICE candidate:', signal.candidate);
-        return;
-      }
-      
-      // If we don't have a remote description yet, buffer the ICE candidate
-      if (!connection.remoteDescription || !connection.remoteDescription.type) {
-        console.log(`Buffering ICE candidate for ${peerId} until remote description is set`);
-        if (!pendingIceCandidates.has(peerId)) {
-          pendingIceCandidates.set(peerId, []);
-        }
-        pendingIceCandidates.get(peerId).push(signal.candidate);
-        return;
-      }
-      
       // Process the ICE candidate
-      await processIceCandidate(peerId, connection, signal.candidate);
+      if (signal.candidate) {
+        console.log(`Received ICE candidate from ${peerId}:`, signal.candidate);
+        await processIceCandidate(peerId, peerConnection, signal.candidate);
+      } else {
+        console.warn(`Received empty ICE candidate from ${peerId}`);
+      }
+    } else {
+      console.warn(`Unknown signal type from ${peerId}: ${signal.type}`);
     }
   } catch (error) {
     console.error(`Error handling signal from ${peerId}:`, error);
   }
 }
 
-// Process an ICE candidate
+// Process an ICE candidate received from a peer
 async function processIceCandidate(peerId, connection, candidate) {
-  console.log(`Processing ICE candidate for ${peerId}`, candidate);
   try {
-    // Check if the ICE candidate has required fields before adding
-    if (candidate.sdpMid !== null || candidate.sdpMLineIndex !== null) {
-      // Create a proper RTCIceCandidate object from the serialized data
+    // If we don't have a remote description yet, buffer the ICE candidate
+    if (!connection.remoteDescription || !connection.remoteDescription.type) {
+      console.log(`Buffering ICE candidate for ${peerId} until remote description is set`);
+      if (!pendingIceCandidates.has(peerId)) {
+        pendingIceCandidates.set(peerId, []);
+      }
+      pendingIceCandidates.get(peerId).push(candidate);
+      return;
+    }
+    
+    // Ensure the candidate has the necessary properties
+    if (candidate.candidate && (candidate.sdpMid !== undefined || candidate.sdpMLineIndex !== undefined)) {
+      console.log(`Processing ICE candidate for ${peerId}:`, candidate);
+      
+      // Create an RTCIceCandidate object
       const iceCandidate = new RTCIceCandidate({
         candidate: candidate.candidate,
         sdpMid: candidate.sdpMid,
@@ -1047,8 +1047,8 @@ async function processIceCandidate(peerId, connection, candidate) {
       console.warn(`Skipping invalid ICE candidate for ${peerId}: missing sdpMid or sdpMLineIndex`, candidate);
     }
   } catch (err) {
-    // Only log error if connection hasn't failed
-    if (connection.iceConnectionState !== 'failed') {
+    // Only log error if connection is still viable
+    if (connection && connection.iceConnectionState !== 'failed' && connection.iceConnectionState !== 'closed') {
       console.error(`Error processing ICE candidate for ${peerId}:`, err);
     }
   }
@@ -1838,7 +1838,6 @@ async function applyDeviceSelection() {
     // Store original state before modifications
     const originalVideoEnabled = isVideoEnabled;
     const originalAudioEnabled = isAudioEnabled;
-    const originalTracks = localStream ? [...localStream.getTracks()] : [];
     
     // Apply audio output selection to all remote videos
     if (selectedSpeakerId && typeof HTMLMediaElement.prototype.setSinkId !== 'undefined') {
@@ -1860,6 +1859,9 @@ async function applyDeviceSelection() {
     // Only restart media if we already have a stream
     if (localStream) {
       try {
+        // Store existing peer connections before recreating them
+        const existingPeers = [...peerConnections.keys()];
+        
         // Create new constraints with selected devices
         const constraints = {
           audio: selectedMicrophoneId ? {
@@ -1874,7 +1876,7 @@ async function applyDeviceSelection() {
         
         console.log('Getting new media stream with constraints:', constraints);
         
-        // Store old stream to stop after successful acquisition of new stream
+        // Store old stream
         const oldStream = localStream;
         
         try {
@@ -1884,7 +1886,7 @@ async function applyDeviceSelection() {
           // If we successfully got the new stream, update localStream
           localStream = newStream;
           
-          // Update local video
+          // Update local video display
           if (localVideo) {
             localVideo.srcObject = newStream;
           }
@@ -1905,42 +1907,64 @@ async function applyDeviceSelection() {
             });
           }
           
-          // Replace tracks in all peer connections
-          if (peerConnections.size > 0) {
-            for (const [peerId, peerConnection] of peerConnections.entries()) {
-              if (peerConnection && typeof peerConnection.getSenders === 'function') {
-                const senders = peerConnection.getSenders();
+          // The key fix: Instead of just replacing tracks, we'll recreate all peer connections
+          // This ensures a clean slate for media connections
+          
+          // First, close and remove all existing peer connections
+          for (const peerId of existingPeers) {
+            try {
+              // Don't call cleanupPeerConnection as it will remove from the peers set
+              // We just want to recreate the connections, not forget about the peers
+              const peerConn = peerConnections.get(peerId);
+              if (peerConn) {
+                console.log(`Closing connection to peer ${peerId} for recreation`);
                 
-                // Track if replacements were successful
-                let replacementsSuccessful = true;
+                // Close the connection
+                peerConn.close();
                 
-                for (const sender of senders) {
-                  if (sender && sender.track) {
-                    // Find matching track type in new stream
-                    const newTrack = localStream.getTracks().find(t => t.kind === sender.track.kind);
-                    if (newTrack) {
-                      try {
-                        console.log(`Replacing ${newTrack.kind} track for peer ${peerId}`);
-                        await sender.replaceTrack(newTrack);
-                      } catch (error) {
-                        console.error(`Failed to replace ${sender.track.kind} track for peer ${peerId}:`, error);
-                        replacementsSuccessful = false;
-                      }
-                    }
-                  }
-                }
-                
-                if (replacementsSuccessful) {
-                  console.log(`Successfully replaced all tracks for peer ${peerId}`);
-                } else {
-                  console.warn(`Some track replacements failed for peer ${peerId}`);
-                }
-              } else {
-                console.warn(`Invalid peer connection for ${peerId}, cannot replace tracks`);
+                // Remove event listeners
+                peerConn.onicecandidate = null;
+                peerConn.ontrack = null;
+                peerConn.onnegotiationneeded = null;
+                peerConn.oniceconnectionstatechange = null;
+                peerConn.onicegatheringstatechange = null;
+                peerConn.onsignalingstatechange = null;
+                peerConn.onconnectionstatechange = null;
               }
+              
+              // Remove the old connection from our map
+              peerConnections.delete(peerId);
+              
+              // Also close any data channels
+              const dataChannel = dataChannels.get(peerId);
+              if (dataChannel) {
+                dataChannel.close();
+                dataChannels.delete(peerId);
+              }
+            } catch (error) {
+              console.error(`Error closing connection to peer ${peerId}:`, error);
             }
-            
-            console.log(`Updated tracks for ${peerConnections.size} peer connections`);
+          }
+          
+          // Recreate connections with all existing peers
+          console.log(`Recreating connections with ${existingPeers.length} peers after device change`);
+          
+          for (const peerId of existingPeers) {
+            try {
+              const newPeerConnection = await createPeerConnection(peerId);
+              
+              // Check if we need to initiate the connection
+              const shouldInitiate = await shouldInitiateConnection(peerId);
+              
+              if (shouldInitiate) {
+                console.log(`Initiating new connection to peer ${peerId} after device change`);
+                await createOffer(peerId, newPeerConnection);
+              } else {
+                console.log(`Waiting for peer ${peerId} to initiate connection after device change`);
+              }
+            } catch (error) {
+              console.error(`Error recreating connection to peer ${peerId}:`, error);
+            }
           }
           
           // Update UI to reflect current state
@@ -1949,19 +1973,18 @@ async function applyDeviceSelection() {
           toggleVideoButton.classList.toggle('control-btn-active', isVideoEnabled);
           toggleAudioButton.classList.toggle('control-btn-active', isAudioEnabled);
           
-          // Notify other peers about our media state change
-          notifyMediaStateChange();
-          
           // Setup media recording again if needed
           if (isAudioEnabled) {
             setupMediaRecording();
           }
           
-          console.log('Device selection successfully applied');
+          console.log('Device selection successfully applied with connection recreation');
         } catch (mediaError) {
           console.error('Error getting new media stream:', mediaError);
           
           // Restore original stream if we failed to get a new one
+          localStream = oldStream;
+          
           if (localVideo) {
             localVideo.srcObject = oldStream;
           }
