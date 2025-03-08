@@ -2,69 +2,13 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Hapa.ai</title>
+  <title>P2P Chat with Hypercore</title>
   <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
   <div class="app-container">
-    <!-- Signup/Signin Screen -->
-    <div id="auth-screen" class="auth-screen">
-      <h1>Hapa.ai</h1>
-      <div class="tabs">
-        <button id="signin-tab" class="tab-btn active">Sign In</button>
-        <button id="signup-tab" class="tab-btn">Sign Up</button>
-      </div>
-      
-      <div id="signin-form" class="auth-form">
-        <h2>Welcome to Hapa.ai</h2>
-        <input 
-          type="text" 
-          id="signin-username" 
-          placeholder="Username" 
-          maxlength="30"
-        >
-        <input 
-          type="password" 
-          id="signin-password" 
-          placeholder="Password" 
-          maxlength="100"
-        >
-        <button id="signin-btn">Sign In</button>
-      </div>
-      
-      <div id="signup-form" class="auth-form hidden">
-        <h2>Create Your Hapa.ai Node</h2>
-        <input 
-          type="text" 
-          id="signup-username" 
-          placeholder="Username" 
-          maxlength="30"
-        >
-        <input 
-          type="email" 
-          id="signup-email" 
-          placeholder="Email" 
-          maxlength="100"
-        >
-        <input 
-          type="password" 
-          id="signup-password" 
-          placeholder="Password" 
-          maxlength="100"
-        >
-        <input 
-          type="password" 
-          id="signup-confirm-password" 
-          placeholder="Confirm Password" 
-          maxlength="100"
-        >
-        <button id="signup-btn">Sign Up</button>
-      </div>
-    </div>
-
-    <!-- Login Screen (Room Join) -->
-    <div id="login-screen" class="login-screen hidden">
+    <div id="login-screen" class="login-screen">
       <h1>P2P Chat</h1>
       <div class="login-form">
         <input 
@@ -83,270 +27,68 @@
       </div>
     </div>
 
-    <!-- Main App UI -->
-    <div id="main-app" class="main-app hidden">
-      <!-- Sidebar Navigation -->
-      <div class="sidebar">
-        <div class="user-profile">
-          <div class="profile-image">
-            <img id="user-avatar" src="assets/default-avatar.png" alt="User Avatar">
-          </div>
-          <div id="user-display-name" class="user-name">User</div>
-          <div id="user-id" class="user-id">@user</div>
-        </div>
-        <div class="nav-menu">
-          <div class="nav-item active" data-page="chats">
-            <div class="nav-icon">💬</div>
-            <div class="nav-label">Chats</div>
-          </div>
-          <div class="nav-item" data-page="video-call">
-            <div class="nav-icon">📹</div>
-            <div class="nav-label">Video Call</div>
-          </div>
-          <div class="nav-item" data-page="social">
-            <div class="nav-icon">🐦</div>
-            <div class="nav-label">Social</div>
-          </div>
-          <div class="nav-item" data-page="gatekeeper">
-            <div class="nav-icon">🛡️</div>
-            <div class="nav-label">Gatekeeper</div>
-          </div>
-          <div class="nav-item" data-page="ai-stuffs">
-            <div class="nav-icon">🤖</div>
-            <div class="nav-label">AI Stuffs</div>
-          </div>
-          <div class="nav-item" data-page="settings">
-            <div class="nav-icon">⚙️</div>
-            <div class="nav-label">Settings</div>
-          </div>
+    <div id="chat-screen" class="chat-screen hidden">
+      <div class="chat-header">
+        <h2>Hypercore P2P Chat</h2>
+        <div class="connection-info">
+          <span class="room-display">Room: <span id="current-room">default</span></span>
+          <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
+          <button id="save-transcript-btn" class="action-btn">Save Transcript</button>
+          <button id="toggle-transcript-popup-btn" class="action-btn">Show Transcript</button>
+          <button id="summarize-btn" class="action-btn">Generate Summary</button>
+          <button id="settings-btn" class="action-btn">Settings</button>
         </div>
       </div>
       
-      <!-- Main Content Area -->
-      <div class="content">
-        <!-- Pages Container -->
-        <div id="pages-container" class="pages-container">
-          <!-- Chats Page -->
-          <div id="chats-page" class="page active">
-            <div class="chat-container">
-              <div class="chat-sidebar">
-                <div class="chat-header">
-                  <h2>Chats</h2>
-                  <button id="add-chat-btn" class="action-btn">+ New Chat</button>
+      <div class="content-container">
+        <div class="video-container">
+          <div class="videos">
+            <div class="video-item local-video-container">
+              <div class="video-wrapper">
+                <video id="local-video" autoplay muted playsinline></video>
+                <div class="video-controls">
+                  <button id="toggle-video" class="control-btn">
+                    <span class="icon">📹</span>
+                  </button>
+                  <button id="toggle-audio" class="control-btn">
+                    <span class="icon">🎤</span>
+                  </button>
                 </div>
-                <div id="chat-list" class="chat-list">
-                  <!-- Chat list items will be added here dynamically -->
-                </div>
+                <div class="transcript-overlay hidden" id="local-overlay-transcript"></div>
               </div>
-              <div class="chat-main">
-                <div class="chat-messages-container">
-                  <div id="chat-messages" class="chat-messages">
-                    <!-- Chat messages will be added here dynamically -->
-                  </div>
-                </div>
-                <div class="chat-input">
-                  <input type="text" id="chat-message-input" placeholder="Type a message...">
-                  <button id="chat-send-btn">Send</button>
+              <div class="participant-info">
+                <div class="participant-name">You</div>
+                <div class="transcript-container" id="local-transcript">
+                  <div class="transcript-title">Transcript</div>
+                  <div class="transcript-content"></div>
                 </div>
               </div>
             </div>
+            
+            <div id="remote-videos" class="remote-videos">
+              <!-- Remote videos will be added here dynamically -->
+            </div>
           </div>
-          
-          <!-- Video Call Page (Original Chat App) -->
-          <div id="video-call-page" class="page hidden">
-            <div id="chat-screen" class="chat-screen">
-              <div class="chat-header">
-                <h2>Hypercore P2P Chat</h2>
-                <div class="connection-info">
-                  <span class="room-display">Room: <span id="current-room">default</span></span>
-                  <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
-                  <button id="save-transcript-btn" class="action-btn">Save Transcript</button>
-                  <button id="toggle-transcript-popup-btn" class="action-btn">Show Transcript</button>
-                  <button id="summarize-btn" class="action-btn">Generate Summary</button>
-                  <button id="settings-btn" class="action-btn">Settings</button>
-                </div>
-              </div>
-              
-              <div class="content-container">
-                <div class="video-container">
-                  <div class="videos">
-                    <div class="video-item local-video-container">
-                      <div class="video-wrapper">
-                        <video id="local-video" autoplay muted playsinline></video>
-                        <div class="video-controls">
-                          <button id="toggle-video" class="control-btn">
-                            <span class="icon">📹</span>
-                          </button>
-                          <button id="toggle-audio" class="control-btn">
-                            <span class="icon">🎤</span>
-                          </button>
-                        </div>
-                        <div class="transcript-overlay hidden" id="local-overlay-transcript"></div>
-                      </div>
-                      <div class="participant-info">
-                        <div class="participant-name">You</div>
-                        <div class="transcript-container" id="local-transcript">
-                          <div class="transcript-title">Transcript</div>
-                          <div class="transcript-content"></div>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div id="remote-videos" class="remote-videos">
-                      <!-- Remote videos will be added here dynamically -->
-                    </div>
-                  </div>
-                </div>
-                
-                <div class="chat-container">
-                  <div id="messages-container" class="messages-container">
-                    <div id="messages" class="messages"></div>
-                  </div>
+        </div>
+        
+        <div class="chat-container">
+          <div id="messages-container" class="messages-container">
+            <div id="messages" class="messages"></div>
+          </div>
 
-                  <div class="message-input-container">
-                    <input 
-                      type="text" 
-                      id="message-input" 
-                      placeholder="Type your message..." 
-                      maxlength="500"
-                    >
-                    <button id="send-btn">Send</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Social Page -->
-          <div id="social-page" class="page hidden">
-            <div class="social-container">
-              <div class="social-header">
-                <h2>Social Feed</h2>
-                <div class="social-controls">
-                  <button id="new-post-btn" class="action-btn">New Post</button>
-                  <button id="filter-feed-btn" class="action-btn">Filter</button>
-                </div>
-              </div>
-              <div id="social-feed" class="social-feed">
-                <!-- Social feed posts will be added here dynamically -->
-              </div>
-            </div>
-          </div>
-          
-          <!-- Gatekeeper Page -->
-          <div id="gatekeeper-page" class="page hidden">
-            <div class="gatekeeper-container">
-              <div class="gatekeeper-header">
-                <h2>Gatekeeper</h2>
-              </div>
-              <div class="gatekeeper-chat">
-                <div class="gatekeeper-messages" id="gatekeeper-messages">
-                  <!-- Gatekeeper messages will be added here dynamically -->
-                </div>
-                <div class="gatekeeper-input">
-                  <input type="text" id="gatekeeper-message-input" placeholder="Type a message to Gatekeeper...">
-                  <button id="gatekeeper-send-btn">Send</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- AI Stuffs Page -->
-          <div id="ai-stuffs-page" class="page hidden">
-            <div class="ai-stuffs-container">
-              <h2>AI Stuffs</h2>
-              <p>Coming soon...</p>
-            </div>
-          </div>
-          
-          <!-- Settings Page -->
-          <div id="settings-page" class="page hidden">
-            <div class="settings-container">
-              <h2>Settings</h2>
-              
-              <div class="settings-section">
-                <h3>User Profile</h3>
-                <div class="profile-settings">
-                  <div class="profile-picture-settings">
-                    <img id="profile-picture-preview" src="assets/default-avatar.png" alt="Profile Picture">
-                    <button id="change-profile-picture-btn" class="action-btn">Change Picture</button>
-                  </div>
-                  <div class="profile-details">
-                    <div class="setting-item">
-                      <label for="profile-display-name">Display Name:</label>
-                      <input type="text" id="profile-display-name" placeholder="Your display name">
-                    </div>
-                    <div class="setting-item">
-                      <label>User ID:</label>
-                      <div id="profile-user-id" class="user-id-display">@username</div>
-                    </div>
-                    <div class="setting-item">
-                      <label>DID:</label>
-                      <div id="profile-did" class="did-display">did:plc:example123456789</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              <div class="settings-section">
-                <h3>Media Settings</h3>
-                <div class="setting-item">
-                  <label for="microphone-select">Microphone:</label>
-                  <select id="microphone-select">
-                    <option value="">Loading microphones...</option>
-                  </select>
-                </div>
-                
-                <div class="setting-item">
-                  <label for="speaker-select">Speaker:</label>
-                  <select id="speaker-select">
-                    <option value="">Loading speakers...</option>
-                  </select>
-                </div>
-                
-                <div class="setting-item">
-                  <label for="webcam-select">Webcam:</label>
-                  <select id="webcam-select">
-                    <option value="">Loading webcams...</option>
-                  </select>
-                </div>
-                
-                <div class="setting-item">
-                  <button id="refresh-devices-btn" class="action-btn">Refresh Devices</button>
-                </div>
-              </div>
-              
-              <div class="settings-section">
-                <h3>Audio Settings</h3>
-                <div class="setting-item">
-                  <label for="audio-threshold">Audio Detection Threshold:</label>
-                  <input type="range" id="audio-threshold" min="0.01" max="0.5" step="0.01" value="0.05">
-                  <span id="threshold-value">0.05</span>
-                </div>
-                <div class="setting-description">
-                  Higher values require louder sounds to be detected. Adjust if background noise is being transcribed or your voice isn't being detected.
-                </div>
-              </div>
-              
-              <div class="settings-section">
-                <h3>API Keys</h3>
-                <div class="setting-item">
-                  <label for="openai-api-key">OpenAI API Key:</label>
-                  <input type="password" id="openai-api-key" placeholder="sk-...">
-                  <button id="save-openai-key-btn" class="action-btn">Save</button>
-                </div>
-              </div>
-              
-              <div class="settings-section">
-                <h3>Account</h3>
-                <button id="signout-btn" class="danger-btn">Sign Out</button>
-              </div>
-            </div>
+          <div class="message-input-container">
+            <input 
+              type="text" 
+              id="message-input" 
+              placeholder="Type your message..." 
+              maxlength="500"
+            >
+            <button id="send-btn">Send</button>
           </div>
         </div>
       </div>
     </div>
-
+    
     <!-- Transcript Popup -->
     <div id="transcript-popup" class="transcript-popup hidden">
       <div class="transcript-popup-header">
@@ -358,7 +100,7 @@
       </div>
     </div>
     
-    <!-- Settings Popup (for the original video chat app) -->
+    <!-- Settings Popup -->
     <div id="settings-popup" class="settings-popup hidden">
       <div class="settings-popup-header">
         <h3>Settings</h3>
@@ -384,6 +126,13 @@
           </div>
           
           <div class="setting-item">
+            <label for="webcam-select">Camera:</label>
+            <select id="webcam-select">
+              <option value="">Loading cameras...</option>
+            </select>
+          </div>
+          
+          <div class="setting-item">
             <label for="speaker-select">Speaker:</label>
             <select id="speaker-select">
               <option value="">Loading speakers...</option>
@@ -391,45 +140,8 @@
           </div>
           
           <div class="setting-item">
-            <label for="webcam-select">Webcam:</label>
-            <select id="webcam-select">
-              <option value="">Loading webcams...</option>
-            </select>
-          </div>
-          
-          <div class="setting-item">
             <button id="refresh-devices-btn" class="action-btn">Refresh Devices</button>
           </div>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Modals -->
-    <div id="add-chat-modal" class="modal hidden">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Start New Chat</h3>
-          <button class="close-btn" id="close-add-chat-modal">×</button>
-        </div>
-        <div class="modal-body">
-          <div class="setting-item">
-            <label for="new-chat-user-id">Enter User ID:</label>
-            <input type="text" id="new-chat-user-id" placeholder="@username">
-          </div>
-          <button id="start-chat-btn" class="action-btn">Start Chat</button>
-        </div>
-      </div>
-    </div>
-    
-    <div id="new-post-modal" class="modal hidden">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Create New Post</h3>
-          <button class="close-btn" id="close-new-post-modal">×</button>
-        </div>
-        <div class="modal-body">
-          <textarea id="new-post-content" placeholder="What's on your mind?"></textarea>
-          <button id="create-post-btn" class="action-btn">Post</button>
         </div>
       </div>
     </div>
@@ -455,19 +167,6 @@
     </div>
   </template>
 
-  <!-- Add our assets folder -->
-  <script>
-    // Create a folder for assets if it doesn't exist
-    try {
-      window.electronAPI.ensureDirectoryExists('./assets');
-    } catch (error) {
-      console.error('Error creating assets directory:', error);
-    }
-  </script>
-
-  <!-- Add the authentication and main app scripts -->
-  <script src="auth.js"></script>
-  <script src="main-app.js"></script>
   <script src="app.js"></script>
 </body>
 </html> 

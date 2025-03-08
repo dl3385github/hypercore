@@ -1,5 +1,5 @@
 // DOM Elements
-const videoCallLoginScreen = document.getElementById('login-screen');
+const loginScreen = document.getElementById('login-screen');
 const chatScreen = document.getElementById('chat-screen');
 const usernameInput = document.getElementById('username-input');
 const roomInput = document.getElementById('room-input');
@@ -151,15 +151,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyDeviceSelection();
   });
   
-  speakerSelect.addEventListener('change', (e) => {
-    selectedSpeakerId = e.target.value;
-    console.log(`Selected speaker: ${selectedSpeakerId}`);
-    applyDeviceSelection();
-  });
-  
   webcamSelect.addEventListener('change', (e) => {
     selectedWebcamId = e.target.value;
     console.log(`Selected webcam: ${selectedWebcamId}`);
+    applyDeviceSelection();
+  });
+  
+  speakerSelect.addEventListener('change', (e) => {
+    selectedSpeakerId = e.target.value;
+    console.log(`Selected speaker: ${selectedSpeakerId}`);
     applyDeviceSelection();
   });
   
@@ -338,7 +338,7 @@ async function joinChat() {
     currentRoomSpan.textContent = roomId;
     
     // Switch to chat screen
-    videoCallLoginScreen.classList.add('hidden');
+    loginScreen.classList.add('hidden');
     chatScreen.classList.remove('hidden');
     
     // Add welcome message
@@ -1761,12 +1761,12 @@ async function enumerateDevices() {
       selectedMicrophoneId = availableDevices.audioinput[0].deviceId;
     }
     
-    if (!selectedSpeakerId && availableDevices.audiooutput.length > 0) {
-      selectedSpeakerId = availableDevices.audiooutput[0].deviceId;
-    }
-    
     if (!selectedWebcamId && availableDevices.videoinput.length > 0) {
       selectedWebcamId = availableDevices.videoinput[0].deviceId;
+    }
+    
+    if (!selectedSpeakerId && availableDevices.audiooutput.length > 0) {
+      selectedSpeakerId = availableDevices.audiooutput[0].deviceId;
     }
   } catch (error) {
     console.error('Error enumerating devices:', error);
@@ -1788,6 +1788,20 @@ function updateDeviceSelectors() {
     microphoneSelect.value = selectedMicrophoneId;
   }
   
+  // Update webcam dropdown
+  webcamSelect.innerHTML = '';
+  
+  availableDevices.videoinput.forEach(device => {
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    option.text = device.label || `Camera ${device.deviceId.substring(0, 5)}`;
+    webcamSelect.appendChild(option);
+  });
+  
+  if (selectedWebcamId) {
+    webcamSelect.value = selectedWebcamId;
+  }
+  
   // Update speaker dropdown
   speakerSelect.innerHTML = '';
   
@@ -1801,25 +1815,11 @@ function updateDeviceSelectors() {
   if (selectedSpeakerId) {
     speakerSelect.value = selectedSpeakerId;
   }
-  
-  // Update webcam dropdown
-  webcamSelect.innerHTML = '';
-  
-  availableDevices.videoinput.forEach(device => {
-    const option = document.createElement('option');
-    option.value = device.deviceId;
-    option.text = device.label || `Webcam ${device.deviceId.substring(0, 5)}`;
-    webcamSelect.appendChild(option);
-  });
-  
-  if (selectedWebcamId) {
-    webcamSelect.value = selectedWebcamId;
-  }
 }
 
 async function applyDeviceSelection() {
   try {
-    console.log(`Applying device selection: microphone=${selectedMicrophoneId}, speaker=${selectedSpeakerId}, webcam=${selectedWebcamId}`);
+    console.log(`Applying device selection: microphone=${selectedMicrophoneId}, webcam=${selectedWebcamId}, speaker=${selectedSpeakerId}`);
     
     // Apply audio output selection to all remote videos
     if (selectedSpeakerId && typeof HTMLMediaElement.prototype.setSinkId !== 'undefined') {
@@ -1838,8 +1838,8 @@ async function applyDeviceSelection() {
       console.warn('setSinkId not supported by this browser or no speaker selected');
     }
     
-    // Only restart if we already have a stream
-    if (localStream) {
+    // Only restart media if we already have a stream
+    if (localStream && (selectedMicrophoneId || selectedWebcamId)) {
       // Save current audio/video state
       const wasVideoEnabled = isVideoEnabled;
       const wasAudioEnabled = isAudioEnabled;
@@ -1853,9 +1853,12 @@ async function applyDeviceSelection() {
       const constraints = {
         audio: selectedMicrophoneId ? {
           deviceId: { exact: selectedMicrophoneId }
-        } : true,
-        video: wasVideoEnabled ? {
-          deviceId: selectedWebcamId ? { exact: selectedWebcamId } : undefined,
+        } : false,
+        video: wasVideoEnabled && selectedWebcamId ? {
+          deviceId: { exact: selectedWebcamId },
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        } : wasVideoEnabled ? {
           width: { ideal: 640 },
           height: { ideal: 480 }
         } : false
@@ -1878,23 +1881,27 @@ async function applyDeviceSelection() {
       
       // Replace tracks in all peer connections
       if (peerConnections.size > 0) {
-        for (const [peerId, pc] of peerConnections.entries()) {
-          // Check if pc is a valid RTCPeerConnection with getSenders method
-          if (pc && typeof pc.getSenders === 'function') {
-            const senders = pc.getSenders();
-            
-            for (const sender of senders) {
-              if (sender.track) {
-                // Find matching track type in new stream
-                const newTrack = localStream.getTracks().find(t => t.kind === sender.track.kind);
-                if (newTrack) {
-                  console.log(`Replacing ${newTrack.kind} track for peer ${peerId}`);
-                  await sender.replaceTrack(newTrack);
+        for (const [peerId, peerConnection] of peerConnections.entries()) {
+          try {
+            // Check if peerConnection is a valid RTCPeerConnection and has getSenders
+            if (peerConnection && typeof peerConnection.getSenders === 'function') {
+              const senders = peerConnection.getSenders();
+              
+              for (const sender of senders) {
+                if (sender.track) {
+                  // Find matching track type in new stream
+                  const newTrack = localStream.getTracks().find(t => t.kind === sender.track.kind);
+                  if (newTrack) {
+                    console.log(`Replacing ${newTrack.kind} track for peer ${peerId}`);
+                    await sender.replaceTrack(newTrack);
+                  }
                 }
               }
+            } else {
+              console.warn(`Invalid peer connection for ${peerId}, cannot replace tracks`);
             }
-          } else {
-            console.warn(`Peer connection for ${peerId} is not valid or doesn't support getSenders`);
+          } catch (err) {
+            console.error(`Error replacing tracks for peer ${peerId}:`, err);
           }
         }
         

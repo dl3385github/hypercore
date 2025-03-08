@@ -450,23 +450,6 @@ function setupIpcHandlers() {
     MIN_AUDIO_LEVEL = threshold;
     return { success: true };
   });
-
-  // Ensure a directory exists
-  ipcMain.handle('ensure-directory-exists', async (event, directory) => {
-    try {
-      if (!fs.existsSync(directory)) {
-        fs.mkdirSync(directory, { recursive: true });
-        console.log(`Created directory: ${directory}`);
-      }
-      return { success: true };
-    } catch (error) {
-      console.error(`Error creating directory ${directory}:`, error);
-      return {
-        success: false,
-        error: error.message || 'Failed to create directory'
-      };
-    }
-  });
 }
 
 // Transcribe audio using OpenAI Whisper
