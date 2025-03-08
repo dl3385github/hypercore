@@ -1864,7 +1864,7 @@ async function applyDeviceSelection() {
     const originalVideoEnabled = isVideoEnabled;
     const originalAudioEnabled = isAudioEnabled;
     
-    // Apply audio output selection to all remote videos
+    // Handle speaker changes - this doesn't require restarting streams
     if (selectedSpeakerId && typeof HTMLMediaElement.prototype.setSinkId !== 'undefined') {
       // Apply to all remote videos
       const remoteVideos = document.querySelectorAll('.remote-video');
@@ -1877,160 +1877,149 @@ async function applyDeviceSelection() {
       }
       
       console.log(`Applied audio output device to ${remoteVideos.length} video elements`);
-    } else {
-      console.warn('setSinkId not supported by this browser or no speaker selected');
+    } else if (selectedSpeakerId) {
+      console.warn('setSinkId not supported by this browser');
     }
     
-    // Only restart media if we already have a stream
+    // Only process video/audio changes if we already have a stream
     if (localStream) {
-      try {
-        // Store existing peer connections before recreating them
-        const existingPeers = [...peerConnections.keys()];
-        
-        // Create new constraints with selected devices
-        const constraints = {
-          audio: selectedMicrophoneId ? {
-            deviceId: { exact: selectedMicrophoneId }
-          } : originalAudioEnabled,
-          video: selectedWebcamId && originalVideoEnabled ? {
-            deviceId: { exact: selectedWebcamId },
-            width: { ideal: 640 },
-            height: { ideal: 480 }
-          } : originalVideoEnabled
-        };
-        
-        console.log('Getting new media stream with constraints:', constraints);
-        
-        // Store old stream
-        const oldStream = localStream;
-        
+      const existingPeers = [...peerConnections.keys()];
+      const oldStream = localStream;
+      let microphoneChanged = false;
+      let webcamChanged = false;
+      
+      // Handle microphone change if needed
+      if (selectedMicrophoneId && isAudioEnabled) {
         try {
-          // Get new stream
-          const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+          // Only get audio with the new microphone
+          const audioConstraints = {
+            audio: {
+              deviceId: { exact: selectedMicrophoneId }
+            }
+          };
           
-          // If we successfully got the new stream, update localStream
-          localStream = newStream;
+          console.log('Getting new audio stream with constraints:', audioConstraints);
           
-          // Update local video display
-          if (localVideo) {
-            localVideo.srcObject = newStream;
-          }
+          // Get just the new audio stream
+          const newAudioStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
           
-          // Apply previous media state to the new tracks
-          newStream.getAudioTracks().forEach(track => {
-            track.enabled = originalAudioEnabled;
-          });
+          // Replace the audio track in the existing stream
+          const newAudioTrack = newAudioStream.getAudioTracks()[0];
           
-          newStream.getVideoTracks().forEach(track => {
-            track.enabled = originalVideoEnabled;
-          });
-          
-          // Successfully got new stream, so we can stop the old one
-          if (oldStream) {
-            oldStream.getTracks().forEach(track => {
+          if (newAudioTrack) {
+            // Replace track in all peer connections
+            for (const [peerId, peerConnection] of peerConnections.entries()) {
+              const senders = peerConnection.getSenders();
+              const audioSender = senders.find(sender => 
+                sender.track && sender.track.kind === 'audio'
+              );
+              
+              if (audioSender) {
+                console.log(`Replacing audio track for peer ${peerId}`);
+                await audioSender.replaceTrack(newAudioTrack);
+              }
+            }
+            
+            // Stop old audio tracks
+            oldStream.getAudioTracks().forEach(track => {
               track.stop();
             });
-          }
-          
-          // The key fix: Instead of just replacing tracks, we'll recreate all peer connections
-          // This ensures a clean slate for media connections
-          
-          // First, close and remove all existing peer connections
-          for (const peerId of existingPeers) {
-            try {
-              // Don't call cleanupPeerConnection as it will remove from the peers set
-              // We just want to recreate the connections, not forget about the peers
-              const peerConn = peerConnections.get(peerId);
-              if (peerConn) {
-                console.log(`Closing connection to peer ${peerId} for recreation`);
-                
-                // Close the connection
-                peerConn.close();
-                
-                // Remove event listeners
-                peerConn.onicecandidate = null;
-                peerConn.ontrack = null;
-                peerConn.onnegotiationneeded = null;
-                peerConn.oniceconnectionstatechange = null;
-                peerConn.onicegatheringstatechange = null;
-                peerConn.onsignalingstatechange = null;
-                peerConn.onconnectionstatechange = null;
-              }
-              
-              // Remove the old connection from our map
-              peerConnections.delete(peerId);
-              
-              // Also close any data channels
-              const dataChannel = dataChannels.get(peerId);
-              if (dataChannel) {
-                dataChannel.close();
-                dataChannels.delete(peerId);
-              }
-            } catch (error) {
-              console.error(`Error closing connection to peer ${peerId}:`, error);
+            
+            // Add the new audio track to our local stream
+            // First remove existing audio tracks
+            const existingAudioTracks = localStream.getAudioTracks();
+            existingAudioTracks.forEach(track => {
+              localStream.removeTrack(track);
+            });
+            
+            // Then add the new one
+            localStream.addTrack(newAudioTrack);
+            
+            microphoneChanged = true;
+            console.log('Successfully replaced audio track');
+            
+            // Restart media recording with new audio track
+            if (isAudioEnabled) {
+              stopMediaRecording();
+              setupMediaRecording();
             }
           }
-          
-          // Recreate connections with all existing peers
-          console.log(`Recreating connections with ${existingPeers.length} peers after device change`);
-          
-          for (const peerId of existingPeers) {
-            try {
-              const newPeerConnection = await createPeerConnection(peerId);
-              
-              // Check if we need to initiate the connection
-              const shouldInitiate = await shouldInitiateConnection(peerId);
-              
-              if (shouldInitiate) {
-                console.log(`Initiating new connection to peer ${peerId} after device change`);
-                await createOffer(peerId, newPeerConnection);
-              } else {
-                console.log(`Waiting for peer ${peerId} to initiate connection after device change`);
-              }
-            } catch (error) {
-              console.error(`Error recreating connection to peer ${peerId}:`, error);
-            }
-          }
-          
-          // Update UI to reflect current state
-          isVideoEnabled = originalVideoEnabled;
-          isAudioEnabled = originalAudioEnabled;
-          toggleVideoButton.classList.toggle('control-btn-active', isVideoEnabled);
-          toggleAudioButton.classList.toggle('control-btn-active', isAudioEnabled);
-          
-          // Setup media recording again if needed
-          if (isAudioEnabled) {
-            setupMediaRecording();
-          }
-          
-          console.log('Device selection successfully applied with connection recreation');
-        } catch (mediaError) {
-          console.error('Error getting new media stream:', mediaError);
-          
-          // Restore original stream if we failed to get a new one
-          localStream = oldStream;
-          
-          if (localVideo) {
-            localVideo.srcObject = oldStream;
-          }
-          
-          // Keep original state
-          isVideoEnabled = originalVideoEnabled;
-          isAudioEnabled = originalAudioEnabled;
-          
-          // If it was a device constraint error, alert the user
-          if (mediaError.name === 'OverconstrainedError' || mediaError.name === 'NotFoundError') {
-            alert(`The selected device is not available or doesn't meet the requirements: ${mediaError.message}`);
-          } else {
-            alert(`Error switching devices: ${mediaError.message}`);
-          }
+        } catch (error) {
+          console.error('Error getting new audio stream:', error);
+          alert(`Could not access the selected microphone: ${error.message}`);
+          // This shouldn't affect video if it fails
         }
-      } catch (error) {
-        console.error('Error in device selection:', error);
-        alert(`Error in device selection: ${error.message}`);
       }
+      
+      // Handle webcam change if needed
+      if (selectedWebcamId && isVideoEnabled) {
+        try {
+          // Only get video with the new webcam
+          const videoConstraints = {
+            video: {
+              deviceId: { exact: selectedWebcamId },
+              width: { ideal: 640 },
+              height: { ideal: 480 }
+            }
+          };
+          
+          console.log('Getting new video stream with constraints:', videoConstraints);
+          
+          // Get just the new video stream
+          const newVideoStream = await navigator.mediaDevices.getUserMedia(videoConstraints);
+          
+          // Replace the video track in the existing stream
+          const newVideoTrack = newVideoStream.getVideoTracks()[0];
+          
+          if (newVideoTrack) {
+            // Replace track in all peer connections
+            for (const [peerId, peerConnection] of peerConnections.entries()) {
+              const senders = peerConnection.getSenders();
+              const videoSender = senders.find(sender => 
+                sender.track && sender.track.kind === 'video'
+              );
+              
+              if (videoSender) {
+                console.log(`Replacing video track for peer ${peerId}`);
+                await videoSender.replaceTrack(newVideoTrack);
+              }
+            }
+            
+            // Stop old video tracks
+            oldStream.getVideoTracks().forEach(track => {
+              track.stop();
+            });
+            
+            // Add the new video track to our local stream
+            // First remove existing video tracks
+            const existingVideoTracks = localStream.getVideoTracks();
+            existingVideoTracks.forEach(track => {
+              localStream.removeTrack(track);
+            });
+            
+            // Then add the new one
+            localStream.addTrack(newVideoTrack);
+            
+            webcamChanged = true;
+            console.log('Successfully replaced video track');
+          }
+        } catch (error) {
+          console.error('Error getting new video stream:', error);
+          alert(`Could not access the selected webcam: ${error.message}`);
+          // This shouldn't affect audio if it fails
+        }
+      }
+      
+      // Update local video display if either stream changed
+      if ((microphoneChanged || webcamChanged) && localVideo) {
+        localVideo.srcObject = localStream;
+      }
+      
+      // Update UI to reflect current state
+      toggleVideoButton.classList.toggle('control-btn-active', isVideoEnabled);
+      toggleAudioButton.classList.toggle('control-btn-active', isAudioEnabled);
     } else {
-      console.warn('No local stream exists, cannot apply device selection');
+      console.warn('No local stream exists, device selection will be applied when stream is initialized');
     }
   } catch (error) {
     console.error('Unexpected error in applyDeviceSelection:', error);
