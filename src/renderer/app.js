@@ -1,5 +1,5 @@
 // DOM Elements
-const loginScreen = document.getElementById('login-screen');
+const videoCallLoginScreen = document.getElementById('login-screen');
 const chatScreen = document.getElementById('chat-screen');
 const usernameInput = document.getElementById('username-input');
 const roomInput = document.getElementById('room-input');
@@ -27,6 +27,7 @@ const audioThresholdSlider = document.getElementById('audio-threshold');
 const thresholdValueDisplay = document.getElementById('threshold-value');
 const microphoneSelect = document.getElementById('microphone-select');
 const speakerSelect = document.getElementById('speaker-select');
+const webcamSelect = document.getElementById('webcam-select');
 const refreshDevicesBtn = document.getElementById('refresh-devices-btn');
 
 // State variables
@@ -66,6 +67,7 @@ const peerVolumes = new Map();
 // Device selection state
 let selectedMicrophoneId = '';
 let selectedSpeakerId = '';
+let selectedWebcamId = '';
 let availableDevices = {
   audioinput: [],
   audiooutput: [],
@@ -152,6 +154,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   speakerSelect.addEventListener('change', (e) => {
     selectedSpeakerId = e.target.value;
     console.log(`Selected speaker: ${selectedSpeakerId}`);
+    applyDeviceSelection();
+  });
+  
+  webcamSelect.addEventListener('change', (e) => {
+    selectedWebcamId = e.target.value;
+    console.log(`Selected webcam: ${selectedWebcamId}`);
     applyDeviceSelection();
   });
   
@@ -330,7 +338,7 @@ async function joinChat() {
     currentRoomSpan.textContent = roomId;
     
     // Switch to chat screen
-    loginScreen.classList.add('hidden');
+    videoCallLoginScreen.classList.add('hidden');
     chatScreen.classList.remove('hidden');
     
     // Add welcome message
@@ -1756,6 +1764,10 @@ async function enumerateDevices() {
     if (!selectedSpeakerId && availableDevices.audiooutput.length > 0) {
       selectedSpeakerId = availableDevices.audiooutput[0].deviceId;
     }
+    
+    if (!selectedWebcamId && availableDevices.videoinput.length > 0) {
+      selectedWebcamId = availableDevices.videoinput[0].deviceId;
+    }
   } catch (error) {
     console.error('Error enumerating devices:', error);
   }
@@ -1789,11 +1801,25 @@ function updateDeviceSelectors() {
   if (selectedSpeakerId) {
     speakerSelect.value = selectedSpeakerId;
   }
+  
+  // Update webcam dropdown
+  webcamSelect.innerHTML = '';
+  
+  availableDevices.videoinput.forEach(device => {
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    option.text = device.label || `Webcam ${device.deviceId.substring(0, 5)}`;
+    webcamSelect.appendChild(option);
+  });
+  
+  if (selectedWebcamId) {
+    webcamSelect.value = selectedWebcamId;
+  }
 }
 
 async function applyDeviceSelection() {
   try {
-    console.log(`Applying device selection: microphone=${selectedMicrophoneId}, speaker=${selectedSpeakerId}`);
+    console.log(`Applying device selection: microphone=${selectedMicrophoneId}, speaker=${selectedSpeakerId}, webcam=${selectedWebcamId}`);
     
     // Apply audio output selection to all remote videos
     if (selectedSpeakerId && typeof HTMLMediaElement.prototype.setSinkId !== 'undefined') {
@@ -1812,8 +1838,8 @@ async function applyDeviceSelection() {
       console.warn('setSinkId not supported by this browser or no speaker selected');
     }
     
-    // Only restart audio if we already have a stream
-    if (localStream && selectedMicrophoneId) {
+    // Only restart if we already have a stream
+    if (localStream) {
       // Save current audio/video state
       const wasVideoEnabled = isVideoEnabled;
       const wasAudioEnabled = isAudioEnabled;
@@ -1825,10 +1851,11 @@ async function applyDeviceSelection() {
       
       // Create new constraints with selected devices
       const constraints = {
-        audio: {
+        audio: selectedMicrophoneId ? {
           deviceId: { exact: selectedMicrophoneId }
-        },
+        } : true,
         video: wasVideoEnabled ? {
+          deviceId: selectedWebcamId ? { exact: selectedWebcamId } : undefined,
           width: { ideal: 640 },
           height: { ideal: 480 }
         } : false
@@ -1852,17 +1879,22 @@ async function applyDeviceSelection() {
       // Replace tracks in all peer connections
       if (peerConnections.size > 0) {
         for (const [peerId, pc] of peerConnections.entries()) {
-          const senders = pc.getSenders();
-          
-          for (const sender of senders) {
-            if (sender.track) {
-              // Find matching track type in new stream
-              const newTrack = localStream.getTracks().find(t => t.kind === sender.track.kind);
-              if (newTrack) {
-                console.log(`Replacing ${newTrack.kind} track for peer ${peerId}`);
-                await sender.replaceTrack(newTrack);
+          // Check if pc is a valid RTCPeerConnection with getSenders method
+          if (pc && typeof pc.getSenders === 'function') {
+            const senders = pc.getSenders();
+            
+            for (const sender of senders) {
+              if (sender.track) {
+                // Find matching track type in new stream
+                const newTrack = localStream.getTracks().find(t => t.kind === sender.track.kind);
+                if (newTrack) {
+                  console.log(`Replacing ${newTrack.kind} track for peer ${peerId}`);
+                  await sender.replaceTrack(newTrack);
+                }
               }
             }
+          } else {
+            console.warn(`Peer connection for ${peerId} is not valid or doesn't support getSenders`);
           }
         }
         

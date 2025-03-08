@@ -173,6 +173,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateAudioThreshold: (threshold) => {
     logEvent('updateAudioThreshold', `New threshold: ${threshold}`);
     return ipcRenderer.invoke('update-audio-threshold', threshold);
+  },
+  
+  // Ensure a directory exists
+  ensureDirectoryExists: (directory) => {
+    return ipcRenderer.invoke('ensure-directory-exists', directory);
   }
 });
 
