@@ -30,6 +30,35 @@ const speakerSelect = document.getElementById('speaker-select');
 const webcamSelect = document.getElementById('webcam-select');
 const refreshDevicesBtn = document.getElementById('refresh-devices-btn');
 
+// DOM Elements - Auth
+const authScreen = document.getElementById('auth-screen');
+const mainApp = document.getElementById('main-app');
+const authTabBtns = document.querySelectorAll('.auth-tab-btn');
+const authTabContents = document.querySelectorAll('.auth-tab-content');
+
+// Signin elements
+const signinIdInput = document.getElementById('signin-id');
+const signinPasswordInput = document.getElementById('signin-password');
+const signinBtn = document.getElementById('signin-btn');
+const signinError = document.getElementById('signin-error');
+
+// Signup elements
+const signupHandleInput = document.getElementById('signup-handle');
+const signupEmailInput = document.getElementById('signup-email');
+const signupPasswordInput = document.getElementById('signup-password');
+const signupPasswordConfirmInput = document.getElementById('signup-password-confirm');
+const signupBtn = document.getElementById('signup-btn');
+const signupError = document.getElementById('signup-error');
+
+// Navigation elements
+const navBtns = document.querySelectorAll('.nav-btn');
+const appPages = document.querySelectorAll('.app-page');
+
+// Settings page elements
+const userDidDisplay = document.getElementById('user-did-display');
+const userHandleDisplay = document.getElementById('user-handle-display');
+const logoutBtn = document.getElementById('logout-btn');
+
 // State variables
 let peers = new Set();
 let currentRoom = null;
@@ -81,9 +110,10 @@ const appSettings = {
 
 // Current user state
 let currentUser = null;
-// DOM elements for API settings
+
+// OpenAI API settings
 const openaiApiKeyInput = document.getElementById('openai-api-key');
-const saveApiKeyBtn = document.getElementById('save-api-key');
+const saveApiKeyBtn = document.getElementById('save-api-key-btn');
 const apiKeyStatus = document.getElementById('api-key-status');
 
 // Initialize the app
@@ -253,8 +283,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Handle app exit
   window.addEventListener('beforeunload', handleAppExit);
-<<<<<<< HEAD
-=======
 
   // Set up authentication tabs
   authTabBtns.forEach(btn => {
@@ -305,14 +333,85 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateAuthState(user);
   });
   
-  // Add event listeners after the rest of the event listeners are set up
-  // Setup API key form
-  saveApiKeyBtn.addEventListener('click', handleSaveApiKey);
+  // Add device selector event handlers
+  microphoneSelect.addEventListener('change', applyDeviceSelection);
+  webcamSelect.addEventListener('change', applyDeviceSelection);
+  speakerSelect.addEventListener('change', applyDeviceSelection);
+  refreshDevicesBtn.addEventListener('click', enumerateDevices);
   
-  // Initialize by loading the masked API key
-  loadApiKey();
->>>>>>> 3a3f440 (Move API keys to .env, fix transcript display, add API key settings)
+  // Add API key settings
+  saveApiKeyBtn.addEventListener('click', saveOpenAIApiKey);
+  
+  // Initialize the app after authentication
+  checkAuthState();
 });
+
+// Initialize OpenAI API key settings
+async function initializeApiKeySettings() {
+  try {
+    // Get the current API key (masked)
+    const result = await window.electronAPI.getOpenAIApiKey();
+    
+    if (result.success) {
+      openaiApiKeyInput.placeholder = result.isSet ? 'API key is set (hidden for security)' : 'Enter your OpenAI API key';
+      if (result.apiKey) {
+        openaiApiKeyInput.dataset.isSet = 'true';
+      } else {
+        openaiApiKeyInput.dataset.isSet = 'false';
+      }
+    }
+  } catch (error) {
+    console.error('Error initializing API key settings:', error);
+  }
+}
+
+// Save OpenAI API key
+async function saveOpenAIApiKey() {
+  try {
+    // Clear previous status
+    apiKeyStatus.textContent = '';
+    apiKeyStatus.className = 'setting-status';
+    
+    const apiKey = openaiApiKeyInput.value.trim();
+    
+    if (!apiKey && openaiApiKeyInput.dataset.isSet !== 'true') {
+      apiKeyStatus.textContent = 'Please enter an API key';
+      apiKeyStatus.classList.add('error');
+      return;
+    }
+    
+    // Don't send empty value if a key is already set and the field is empty (user wants to keep existing key)
+    if (!apiKey && openaiApiKeyInput.dataset.isSet === 'true') {
+      apiKeyStatus.textContent = 'No changes made';
+      return;
+    }
+    
+    // Save the API key
+    const result = await window.electronAPI.updateOpenAIApiKey(apiKey);
+    
+    if (result.success) {
+      apiKeyStatus.textContent = 'API key saved successfully';
+      apiKeyStatus.classList.add('success');
+      
+      // Update placeholder to show key is set
+      openaiApiKeyInput.value = '';
+      openaiApiKeyInput.placeholder = 'API key is set (hidden for security)';
+      openaiApiKeyInput.dataset.isSet = 'true';
+      
+      // Clear the status after a few seconds
+      setTimeout(() => {
+        apiKeyStatus.textContent = '';
+      }, 3000);
+    } else {
+      apiKeyStatus.textContent = result.error || 'Failed to save API key';
+      apiKeyStatus.classList.add('error');
+    }
+  } catch (error) {
+    console.error('Error saving API key:', error);
+    apiKeyStatus.textContent = error.message || 'An error occurred while saving API key';
+    apiKeyStatus.classList.add('error');
+  }
+}
 
 // Generate a random room ID if none provided
 function generateDefaultRoomId() {
@@ -1157,11 +1256,32 @@ function addRemoteStream(peerId, stream) {
       transcriptOverlay.id = `transcript-overlay-${peerId}`;
       videoWrapper.appendChild(transcriptOverlay);
       
+      // Add participant info section
+      const participantInfo = document.createElement('div');
+      participantInfo.className = 'participant-info';
+      remoteContainer.appendChild(participantInfo);
+      
       // Add participant name
       const nameElement = document.createElement('div');
       nameElement.className = 'participant-name';
       nameElement.textContent = peerName;
-      remoteContainer.appendChild(nameElement);
+      participantInfo.appendChild(nameElement);
+      
+      // Add transcript container
+      const transcriptContainer = document.createElement('div');
+      transcriptContainer.className = 'transcript-container';
+      participantInfo.appendChild(transcriptContainer);
+      
+      // Add transcript title
+      const transcriptTitle = document.createElement('div');
+      transcriptTitle.className = 'transcript-title';
+      transcriptTitle.textContent = 'Transcript';
+      transcriptContainer.appendChild(transcriptTitle);
+      
+      // Add transcript content
+      const transcriptContent = document.createElement('div');
+      transcriptContent.className = 'transcript-content';
+      transcriptContainer.appendChild(transcriptContent);
       
       // Store the username in our map if it's not a placeholder
       if (peerName !== `Peer ${peerId.substring(0, 6)}`) {
@@ -1347,6 +1467,28 @@ function setupMediaRecording() {
         const result = await window.electronAPI.transcribeAudio(buffer, username);
         if (result.success) {
           // Transcription will come back through the onTranscriptionResult listener
+        } else if (result.error) {
+          console.error('Transcription error:', result.error);
+          
+          // Check if it's an API key error 
+          if (result.error.includes('API key not set')) {
+            addSystemMessage(`⚠️ Transcription failed: OpenAI API key not set. Please configure in settings.`);
+            
+            // Show this message only once
+            if (!window.apiKeyErrorShown) {
+              window.apiKeyErrorShown = true;
+              
+              // Open settings popup to prompt user to enter API key
+              toggleSettingsPopup();
+              
+              // Focus on API key input
+              setTimeout(() => {
+                if (openaiApiKeyInput) {
+                  openaiApiKeyInput.focus();
+                }
+              }, 500);
+            }
+          }
         }
       } catch (error) {
         console.error('Error transcribing audio:', error);
@@ -1560,26 +1702,96 @@ function setupRemoteTranscription(peerId, stream) {
   }
 }
 
-// Toggle transcript popup visibility
+// Toggle transcript popup
 function toggleTranscriptPopup() {
-  console.log('Toggling transcript popup');
+  console.log('Toggle transcript popup clicked');
   
-  // If the popup is hidden and there are no entries, add a placeholder message
-  if (transcriptPopup.classList.contains('hidden') && transcriptPopupContent.childNodes.length === 0) {
-    const placeholderMessage = document.createElement('div');
-    placeholderMessage.className = 'transcript-placeholder';
-    placeholderMessage.textContent = 'Transcript will appear here as people speak...';
-    transcriptPopupContent.appendChild(placeholderMessage);
+  // Check if the popup is currently hidden
+  const isHidden = transcriptPopup.classList.contains('hidden');
+  
+  // If opening the popup, refresh all transcripts
+  if (isHidden) {
+    console.log('Opening transcript popup and refreshing content');
+    refreshTranscriptPopup();
+    
+    // Position the popup in the center of the screen
+    transcriptPopup.style.display = 'flex';
+    transcriptPopup.style.position = 'fixed';
+    transcriptPopup.style.top = '50%';
+    transcriptPopup.style.left = '50%';
+    transcriptPopup.style.transform = 'translate(-50%, -50%)';
+    transcriptPopup.style.zIndex = '1000';
+    transcriptPopup.style.backgroundColor = 'white';
+    transcriptPopup.style.boxShadow = '0 0 20px rgba(0, 0, 0, 0.5)';
+    transcriptPopup.style.borderRadius = '8px';
+    transcriptPopup.style.width = '80%';
+    transcriptPopup.style.maxWidth = '800px';
+    transcriptPopup.style.maxHeight = '80%';
+    
+    // Style the content area
+    transcriptPopupContent.style.overflow = 'auto';
+    transcriptPopupContent.style.width = '100%';
+    transcriptPopupContent.style.padding = '16px';
   }
   
-  // Toggle visibility
+  // Toggle the visibility
   transcriptPopup.classList.toggle('hidden');
   
-  // Update button text
-  if (transcriptPopup.classList.contains('hidden')) {
-    toggleTranscriptPopupBtn.textContent = 'Show Transcript';
-  } else {
-    toggleTranscriptPopupBtn.textContent = 'Hide Transcript';
+  // Auto-scroll to the bottom when opening
+  if (!transcriptPopup.classList.contains('hidden')) {
+    transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
+  }
+}
+
+// Refresh the transcript popup with all stored transcripts
+function refreshTranscriptPopup() {
+  console.log('Refreshing transcript popup');
+  
+  // Clear existing content
+  transcriptPopupContent.innerHTML = '';
+  
+  // Create a header if it's empty
+  const header = document.createElement('div');
+  header.className = 'transcript-popup-header-text';
+  header.textContent = 'Call Transcript';
+  header.style.fontWeight = 'bold';
+  header.style.fontSize = '18px';
+  header.style.marginBottom = '16px';
+  header.style.textAlign = 'center';
+  transcriptPopupContent.appendChild(header);
+  
+  // Compile all transcripts with timestamps
+  const allTranscripts = [];
+  
+  transcripts.forEach((entries, speaker) => {
+    entries.forEach(entry => {
+      allTranscripts.push({
+        speaker,
+        text: entry.text,
+        timestamp: entry.timestamp
+      });
+    });
+  });
+  
+  // Sort by timestamp
+  allTranscripts.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  
+  // Add them all to the popup
+  allTranscripts.forEach(entry => {
+    addTranscriptToPopup(entry.speaker, entry.text, entry.timestamp);
+  });
+  
+  console.log(`Added ${allTranscripts.length} transcript entries to popup`);
+  
+  // Add a note if no transcripts
+  if (allTranscripts.length === 0) {
+    const noTranscripts = document.createElement('div');
+    noTranscripts.className = 'no-transcripts';
+    noTranscripts.textContent = 'No transcripts available yet. Speak to generate transcriptions.';
+    noTranscripts.style.textAlign = 'center';
+    noTranscripts.style.margin = '20px 0';
+    noTranscripts.style.color = '#666';
+    transcriptPopupContent.appendChild(noTranscripts);
   }
 }
 
@@ -1587,67 +1799,139 @@ function toggleTranscriptPopup() {
 function updateTranscription(speaker, text) {
   if (!text || text.trim() === '') return;
   
-  // Find transcript container for this speaker
-  let transcriptContainer = null;
-  let overlayContainer = null;
+  console.log(`Updating transcription for ${speaker}: "${text}"`);
   
-  if (speaker === username) {
-    // Local user
-    transcriptContainer = document.querySelector('#local-transcript .transcript-content');
-    overlayContainer = document.getElementById('local-overlay-transcript');
-  } else {
-    // Remote user - find by peer name
-    const remoteVideo = document.querySelector(`.remote-video-container[data-username="${speaker}"]`);
-    if (remoteVideo) {
-      transcriptContainer = remoteVideo.querySelector('.transcript-content');
-      overlayContainer = remoteVideo.querySelector('.transcript-overlay');
-    }
-  }
-  
-  // Store transcript entry
+  // Store transcript entry in memory
   if (!transcripts.has(speaker)) {
     transcripts.set(speaker, []);
   }
   
   const timestamp = new Date().toISOString();
   transcripts.get(speaker).push({
-    timestamp,
-    text
+    text,
+    timestamp
   });
   
-  console.log(`Updating transcription for ${speaker}: "${text}"`);
+  // Find the appropriate container for this speaker
+  const isSelf = speaker === username;
+  let transcriptContainer = null;
   
-  // Add to transcript container if found
-  if (transcriptContainer) {
-    const entry = document.createElement('div');
-    entry.textContent = text;
-    transcriptContainer.appendChild(entry);
+  if (isSelf) {
+    // Use the local transcript container
+    transcriptContainer = document.querySelector('#local-transcript .transcript-content');
     
-    // Auto-scroll to the bottom
-    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
-    
-    console.log(`Added transcript to container for ${speaker}`);
+    // Also update the overlay if available
+    const localOverlay = document.getElementById('local-overlay-transcript');
+    if (localOverlay) {
+      // Make overlay more noticeable by adding the text
+      localOverlay.textContent = text;
+      localOverlay.classList.remove('hidden');
+      
+      // Make sure it's actually visible in UI
+      localOverlay.style.display = 'block';
+      
+      // Make sure it has some basic styling if not already in CSS
+      localOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+      localOverlay.style.color = 'white';
+      localOverlay.style.padding = '8px';
+      localOverlay.style.borderRadius = '4px';
+      localOverlay.style.maxWidth = '90%';
+      localOverlay.style.margin = '0 auto';
+      
+      // Hide after a few seconds
+      setTimeout(() => {
+        localOverlay.classList.add('hidden');
+        localOverlay.style.display = 'none';
+      }, 5000);
+    } else {
+      console.warn('Local overlay element not found!');
+    }
   } else {
-    console.warn(`Transcript container not found for ${speaker}`);
+    // Find the remote peer's transcript container
+    let foundPeerId = null;
+    for (const [peerId, peerUsername] of peerUsernames.entries()) {
+      if (peerUsername === speaker) {
+        foundPeerId = peerId;
+        break;
+      }
+    }
+    
+    if (foundPeerId) {
+      console.log(`Found peer ID ${foundPeerId} for speaker ${speaker}`);
+      const peerElement = document.querySelector(`.remote-video-container[data-peer-id="${foundPeerId}"]`);
+      if (peerElement) {
+        console.log(`Found container element for peer ${foundPeerId}`);
+        transcriptContainer = peerElement.querySelector('.transcript-content');
+        
+        // Also update the overlay if available
+        const overlay = document.getElementById(`transcript-overlay-${foundPeerId}`);
+        if (overlay) {
+          console.log(`Found overlay for peer ${foundPeerId}, updating it`);
+          // Make overlay more noticeable
+          overlay.textContent = text;
+          overlay.classList.remove('hidden');
+          
+          // Make sure it's actually visible in UI
+          overlay.style.display = 'block';
+          
+          // Make sure it has some basic styling if not already in CSS
+          overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+          overlay.style.color = 'white';
+          overlay.style.padding = '8px';
+          overlay.style.borderRadius = '4px';
+          overlay.style.maxWidth = '90%';
+          overlay.style.margin = '0 auto';
+          
+          // Hide after a few seconds
+          setTimeout(() => {
+            overlay.classList.add('hidden');
+            overlay.style.display = 'none';
+          }, 5000);
+        } else {
+          console.warn(`Could not find overlay element for peer ${foundPeerId}`);
+        }
+      } else {
+        console.warn(`Could not find container element for peer ${foundPeerId}`);
+      }
+    } else {
+      console.warn(`Could not find peer ID for speaker ${speaker}`);
+    }
   }
   
-  // Show in overlay for a few seconds
-  if (overlayContainer) {
-    overlayContainer.textContent = text;
-    overlayContainer.classList.remove('hidden');
+  // Update the transcript container if found
+  if (transcriptContainer) {
+    console.log(`Updating transcript container for ${speaker}`);
+    const entry = document.createElement('div');
+    entry.className = 'transcript-entry';
+    entry.textContent = text;
     
-    // Hide after a few seconds
-    setTimeout(() => {
-      overlayContainer.classList.add('hidden');
-    }, 5000);
+    // Style the entry to make it more visible
+    entry.style.padding = '4px 8px';
+    entry.style.marginBottom = '4px';
+    entry.style.backgroundColor = '#f0f0f0';
+    entry.style.borderRadius = '4px';
     
-    console.log(`Added transcript to overlay for ${speaker}`);
+    transcriptContainer.appendChild(entry);
+    
+    // Limit the number of entries to keep
+    while (transcriptContainer.children.length > 5) {
+      transcriptContainer.removeChild(transcriptContainer.firstChild);
+    }
+    
+    // Auto-scroll
+    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+    console.log(`Updated transcript container for ${speaker} with: "${text}"`);
   } else {
-    console.warn(`Overlay container not found for ${speaker}`);
+    console.warn(`Could not find transcript container for ${speaker}`);
   }
   
   // Add to transcript popup
   addTranscriptToPopup(speaker, text, timestamp);
+  
+  // Ensure the transcript popup is scrolled to the bottom if visible
+  if (!transcriptPopup.classList.contains('hidden')) {
+    transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
+  }
 }
 
 // Add transcript to popup
@@ -1674,7 +1958,7 @@ function addTranscriptToPopup(speaker, text, timestamp) {
   
   // Format timestamp
   const date = new Date(timestamp);
-  const formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   
   timeElement.textContent = formattedTime;
   entry.appendChild(timeElement);
@@ -1684,6 +1968,16 @@ function addTranscriptToPopup(speaker, text, timestamp) {
   
   // Auto-scroll to the bottom
   transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
+  
+  console.log(`Added transcript to popup: ${speaker} (${formattedTime}): "${text}"`);
+  
+  // Limit the number of entries to prevent memory issues (keep the last 100 messages)
+  const entries = transcriptPopupContent.querySelectorAll('.transcript-entry');
+  if (entries.length > 100) {
+    for (let i = 0; i < entries.length - 100; i++) {
+      transcriptPopupContent.removeChild(entries[i]);
+    }
+  }
 }
 
 // Add function to save transcripts
@@ -1871,6 +2165,15 @@ function handleAppExit() {
 // Toggle settings popup
 function toggleSettingsPopup() {
   settingsPopup.classList.toggle('hidden');
+  
+  // If opening the popup, initialize settings
+  if (!settingsPopup.classList.contains('hidden')) {
+    // Initialize device selectors
+    enumerateDevices();
+    
+    // Initialize API key input
+    initializeApiKeySettings();
+  }
 }
 
 // Update audio threshold on the main process
@@ -2180,9 +2483,6 @@ function setupDataChannel(peerId, channel) {
       console.error(`Error parsing data channel message from ${peerId}:`, error);
     }
   };
-<<<<<<< HEAD
-} 
-=======
 }
 
 // Check authentication state on startup
@@ -2406,62 +2706,3 @@ function isValidEmail(email) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
 }
-
-// Function to load the API key (masked)
-async function loadApiKey() {
-  try {
-    const response = await window.electronAPI.getApiKey();
-    
-    if (response.success) {
-      openaiApiKeyInput.placeholder = response.apiKey || 'Enter your OpenAI API key';
-    }
-  } catch (error) {
-    console.error('Error loading API key:', error);
-  }
-}
-
-// Function to save the API key
-async function handleSaveApiKey() {
-  // Clear previous status
-  apiKeyStatus.textContent = '';
-  apiKeyStatus.className = 'setting-status';
-  
-  const apiKey = openaiApiKeyInput.value.trim();
-  
-  if (!apiKey) {
-    apiKeyStatus.textContent = 'Please enter an API key';
-    apiKeyStatus.classList.add('error');
-    return;
-  }
-  
-  try {
-    // Disable button while saving
-    saveApiKeyBtn.disabled = true;
-    saveApiKeyBtn.textContent = 'Saving...';
-    
-    const response = await window.electronAPI.updateApiKey(apiKey);
-    
-    if (response.success) {
-      apiKeyStatus.textContent = 'API key saved successfully!';
-      apiKeyStatus.classList.add('success');
-      
-      // Clear the input
-      openaiApiKeyInput.value = '';
-      
-      // Load the masked key for display
-      await loadApiKey();
-    } else {
-      apiKeyStatus.textContent = response.error || 'Failed to save API key';
-      apiKeyStatus.classList.add('error');
-    }
-  } catch (error) {
-    console.error('Error saving API key:', error);
-    apiKeyStatus.textContent = error.message || 'An error occurred while saving the API key';
-    apiKeyStatus.classList.add('error');
-  } finally {
-    // Reset button state
-    saveApiKeyBtn.disabled = false;
-    saveApiKeyBtn.textContent = 'Save';
-  }
-}
->>>>>>> 3a3f440 (Move API keys to .env, fix transcript display, add API key settings)

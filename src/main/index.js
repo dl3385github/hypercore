@@ -7,28 +7,17 @@ const crypto = require('crypto');
 const fs = require('fs');
 const { OpenAI } = require('openai');
 const axios = require('axios');
-// Load environment variables
 require('dotenv').config();
 
-// OpenAI API key from environment variable
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-// PDS Configuration from environment variables
+// Configuration from environment variables
 const PDS_URL = process.env.PDS_URL || 'https://pds.hapa.ai';
-const PDS_INVITE_CODE = process.env.PDS_INVITE_CODE || 'pds-hapa-ai-2rwcw-pus4a';
+const PDS_INVITE_CODE = process.env.PDS_INVITE_CODE || '';
 
-// Application settings from environment variables
-let MIN_AUDIO_LEVEL = parseFloat(process.env.MIN_AUDIO_LEVEL || '0.05');
-const MIN_AUDIO_DURATION = parseInt(process.env.MIN_AUDIO_DURATION || '700');
-
-// Authentication data
+// Application data
 let currentUser = null;
 let sessionData = null;
-
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: OPENAI_API_KEY
-});
+let openaiApiKey = process.env.OPENAI_API_KEY || '';
+let openai = null;
 
 // Ensure storage directory exists
 if (!fs.existsSync('./storage')) {
@@ -38,6 +27,67 @@ if (!fs.existsSync('./storage')) {
 // Temporary directory for audio files
 if (!fs.existsSync('./temp')) {
   fs.mkdirSync('./temp', { recursive: true });
+}
+
+// Load API key from storage if exists
+function loadApiKey() {
+  try {
+    if (fs.existsSync('./storage/settings.json')) {
+      const settings = JSON.parse(fs.readFileSync('./storage/settings.json', 'utf8'));
+      if (settings.openaiApiKey) {
+        openaiApiKey = settings.openaiApiKey;
+        console.log('Loaded OpenAI API key from settings');
+      }
+    }
+  } catch (error) {
+    console.error('Error loading API key from storage:', error);
+  }
+  
+  // Initialize OpenAI
+  initializeOpenAI();
+}
+
+// Initialize OpenAI client with current API key
+function initializeOpenAI() {
+  if (!openaiApiKey) {
+    console.warn('OpenAI API key not set - transcription will not work');
+    openai = null;
+    return;
+  }
+  
+  openai = new OpenAI({
+    apiKey: openaiApiKey
+  });
+  
+  console.log('OpenAI client initialized');
+}
+
+// Save API key to storage
+function saveApiKey(apiKey) {
+  try {
+    const settings = {};
+    
+    // Load existing settings if any
+    if (fs.existsSync('./storage/settings.json')) {
+      Object.assign(settings, JSON.parse(fs.readFileSync('./storage/settings.json', 'utf8')));
+    }
+    
+    // Update API key
+    settings.openaiApiKey = apiKey;
+    
+    // Save settings
+    fs.writeFileSync('./storage/settings.json', JSON.stringify(settings, null, 2), 'utf8');
+    console.log('Saved OpenAI API key to settings');
+    
+    // Update current key and reinitialize client
+    openaiApiKey = apiKey;
+    initializeOpenAI();
+    
+    return true;
+  } catch (error) {
+    console.error('Error saving API key to storage:', error);
+    return false;
+  }
 }
 
 // Keep a global reference of the window object
@@ -50,6 +100,10 @@ let TOPIC = null;
 let activeSwarm = null;
 let activeConnections = new Map();
 let username = '';
+
+// Threshold for transcribing audio (minimum volume level required)
+let MIN_AUDIO_LEVEL = 0.05; // Default value, will be adjustable from UI
+const MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
 
 // Error handler for uncaught exceptions
 process.on('uncaughtException', (error) => {
@@ -87,6 +141,9 @@ function createWindow() {
     // Log when window is ready
     mainWindow.webContents.on('did-finish-load', () => {
       console.log('Window loaded successfully');
+      
+      // Check if we have a session stored
+      checkExistingSession();
     });
     
     // Log errors
@@ -101,6 +158,10 @@ function createWindow() {
 // Initialize P2P networking when app is ready
 app.whenReady().then(() => {
   console.log('App is ready, creating window');
+  
+  // Load API key from storage
+  loadApiKey();
+  
   createWindow();
 
   app.on('activate', function () {
@@ -133,8 +194,113 @@ app.on('before-quit', async () => {
   await leaveRoom();
 });
 
+// Check for existing session and authenticate
+async function checkExistingSession() {
+  try {
+    // Check if there's a saved session
+    if (fs.existsSync('./storage/session.json')) {
+      const sessionJson = fs.readFileSync('./storage/session.json', 'utf8');
+      const savedSession = JSON.parse(sessionJson);
+      
+      if (savedSession && savedSession.refreshJwt) {
+        console.log('Found existing session, trying to refresh...');
+        
+        // Try to refresh the session
+        const result = await refreshSession(savedSession.refreshJwt);
+        
+        if (result.success) {
+          console.log('Successfully refreshed session');
+          updateAuthState(result.user);
+        } else {
+          console.log('Session refresh failed, need to login again');
+          fs.unlinkSync('./storage/session.json');
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error checking existing session:', error);
+    // If there's an error, we'll just require a fresh login
+  }
+}
+
 // Set up IPC handlers
 function setupIpcHandlers() {
+  // Auth handlers
+  ipcMain.handle('auth-sign-up', async (event, handle, email, password) => {
+    try {
+      console.log('Handling sign up request for:', handle);
+      const result = await createAccount(handle, email, password);
+      
+      // Set the user state if sign up was successful
+      if (result.success) {
+        updateAuthState(result.user);
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error in sign up handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to sign up' 
+      };
+    }
+  });
+  
+  ipcMain.handle('auth-sign-in', async (event, identifier, password) => {
+    try {
+      console.log('Handling sign in request for:', identifier);
+      const result = await createSession(identifier, password);
+      
+      // Set the user state if sign in was successful
+      if (result.success) {
+        updateAuthState(result.user);
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error in sign in handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to sign in' 
+      };
+    }
+  });
+  
+  ipcMain.handle('auth-sign-out', async (event) => {
+    try {
+      console.log('Handling sign out request');
+      
+      // Clear session data
+      currentUser = null;
+      sessionData = null;
+      
+      // Remove stored session
+      if (fs.existsSync('./storage/session.json')) {
+        fs.unlinkSync('./storage/session.json');
+      }
+      
+      // Notify renderer
+      if (mainWindow) {
+        mainWindow.webContents.send('auth-state-changed', null);
+      }
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error in sign out handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to sign out' 
+      };
+    }
+  });
+  
+  ipcMain.handle('auth-get-current-user', (event) => {
+    return { 
+      success: true,
+      user: currentUser 
+    };
+  });
+
   // Handle username setting
   ipcMain.handle('set-username', (event, name) => {
     username = name;
@@ -272,136 +438,82 @@ function setupIpcHandlers() {
         console.error(`Unknown signal type or missing data:`, signal);
       }
 
-      // Send the signal data
-      const signalData = {
+      // Send the serialized signal to the peer
+      const signalMessage = {
         type: 'rtc-signal',
         from: username,
         signal: serializedSignal,
         timestamp: Date.now()
       };
-
-      connection.write(JSON.stringify(signalData));
+      
+      connection.write(JSON.stringify(signalMessage));
+      
       return { success: true };
     } catch (error) {
       console.error('Error sending signal:', error);
-      return {
-        success: false,
+      
+      mainWindow.webContents.send('network-error', {
+        message: `Failed to send signal: ${error.message}`
+      });
+      
+      return { 
+        success: false, 
         error: error.message || 'Failed to send signal'
       };
     }
   });
-
-  // Handle media permission requests
-  ipcMain.handle('get-media-stream', async (event, config) => {
-    // This just proxies the request to the renderer
-    // (actual getUserMedia happens in renderer for Electron)
-    return { success: true };
-  });
-
-  // Handle audio transcription requests
-  ipcMain.handle('transcribe-audio', async (event, audioBuffer, speaker) => {
+  
+  // Handle audio transcription
+  ipcMain.handle('transcribe-audio', async (event, audioBuffer, username) => {
     try {
-      console.log(`Received transcription request from ${speaker}, buffer type: ${typeof audioBuffer}`);
-      
-      // Debug audio buffer properties
-      if (audioBuffer) {
-        console.log(`Audio buffer properties: isArray=${Array.isArray(audioBuffer)}, isUint8Array=${audioBuffer instanceof Uint8Array}, isBuffer=${Buffer.isBuffer(audioBuffer)}, hasLength=${audioBuffer.length !== undefined}, hasSize=${audioBuffer.size !== undefined}, byteLength=${audioBuffer.byteLength || 'undefined'}`);
-      } else {
-        console.error(`Received null or undefined audio buffer from ${speaker}`);
-        return { success: false, error: 'No audio buffer provided' };
+      // Check if OpenAI client is initialized
+      if (!openai) {
+        return { 
+          success: false, 
+          error: 'OpenAI API key not set. Please configure in settings.'
+        };
       }
       
-      // Make sure audioBuffer is a buffer or convert it if needed
-      let buffer;
-      
-      if (Buffer.isBuffer(audioBuffer)) {
-        buffer = audioBuffer;
-      } else if (audioBuffer instanceof Uint8Array) {
-        buffer = Buffer.from(audioBuffer);
-      } else if (Array.isArray(audioBuffer)) {
-        buffer = Buffer.from(audioBuffer);
-      } else if (audioBuffer.buffer && audioBuffer.buffer instanceof ArrayBuffer) {
-        // Handle case where we have a typed array view
-        buffer = Buffer.from(audioBuffer.buffer);
-      } else {
-        console.error(`Unsupported audio buffer type from ${speaker}: ${typeof audioBuffer}`);
-        return { success: false, error: 'Unsupported audio buffer format' };
-      }
-      
-      // Skip transcribing if the buffer is too small
-      if (buffer.length < 1000) { // Very short audio is likely just noise
-        console.log(`Audio buffer too small from ${speaker}: ${buffer.length} bytes`);
-        return { success: false, error: 'Audio too short to transcribe' };
-      }
-      
-      console.log(`Processing audio from ${speaker} - buffer size: ${buffer.length} bytes`);
-      
-      // Generate random filename with timestamp for the WAV file
+      // Process the audio buffer and transcribe
       const timestamp = Date.now();
       const filename = `./temp/audio_${timestamp}_${Math.floor(Math.random() * 1000)}.wav`;
       
-      // Ensure temp directory exists
-      if (!fs.existsSync('./temp')) {
-        fs.mkdirSync('./temp', { recursive: true });
-      }
+      console.log(`Calling Whisper API with audio file: ${filename}`);
       
-      // Save audio buffer to a temporary file
-      fs.writeFileSync(filename, buffer);
+      // Convert buffer to Uint8Array and write to file
+      const uint8Array = Uint8Array.from(audioBuffer);
+      fs.writeFileSync(filename, Buffer.from(uint8Array));
       
-      // Call OpenAI Whisper API
+      // Call OpenAI's Whisper API
+      console.log(`Sending audio file to OpenAI Whisper: ${filename}`);
+      const transcription = await transcribeAudio(filename);
+      
+      console.log(`Transcription received: ${transcription}`);
+      
+      // Delete the temporary file
       try {
-        console.log(`Calling Whisper API with audio file: ${filename}`);
-        const transcription = await transcribeWithWhisper(filename);
-        console.log(`Whisper API returned transcription for ${speaker}: "${transcription}"`);
-        
-        // Clean up the temporary file
-        try {
-          fs.unlinkSync(filename);
-        } catch (cleanupError) {
-          console.error(`Error cleaning up temporary file ${filename}:`, cleanupError);
-        }
-        
-        // If transcription is empty or too short, skip
-        if (!transcription || transcription.trim().length < 2) {
-          console.log(`Empty or short transcription from ${speaker}: "${transcription}"`);
-          return { 
-            success: true,
-            transcription: ''
-          };
-        }
-        
-        console.log(`Valid transcription from ${speaker}: "${transcription}"`);
-        
-        // Send transcription result to renderer
-        const result = {
-          speaker,
-          text: transcription,
-          timestamp: Date.now()
-        };
-        
-        mainWindow.webContents.send('transcription-result', result);
-        
-        return { 
-          success: true, 
-          transcription,
-          username 
-        };
-      } catch (error) {
-        console.error(`Error in Whisper API call for ${username}:`, error);
-        return { 
-          success: false, 
-          error: error.message || 'Transcription failed'
-        };
+        fs.unlinkSync(filename);
+      } catch (err) {
+        console.error(`Error deleting temp file ${filename}:`, err);
       }
+      
+      return { 
+        success: true, 
+        transcription,
+        username,
+        speaker: username,
+        text: transcription,
+        timestamp 
+      };
     } catch (error) {
-      console.error('Error transcribing audio:', error);
-      return {
-        success: false,
-        error: error.message || 'Failed to transcribe audio'
+      console.error(`Error in Whisper API call for ${username}:`, error);
+      return { 
+        success: false, 
+        error: error.message || 'Transcription failed'
       };
     }
   });
-
+  
   // Update audio threshold
   ipcMain.handle('update-audio-threshold', (event, threshold) => {
     try {
@@ -418,17 +530,17 @@ function setupIpcHandlers() {
   });
   
   // Update OpenAI API key
-  ipcMain.handle('update-api-key', async (event, apiKey) => {
+  ipcMain.handle('update-openai-api-key', (event, apiKey) => {
     try {
-      if (!apiKey || typeof apiKey !== 'string' || apiKey.trim() === '') {
-        throw new Error('Invalid API key');
-      }
-      
       console.log('Updating OpenAI API key');
-      const result = await saveApiKey(apiKey.trim());
-      return result;
+      const success = saveApiKey(apiKey);
+      
+      return { 
+        success, 
+        message: success ? 'API key updated successfully' : 'Failed to save API key'
+      };
     } catch (error) {
-      console.error('Error updating API key:', error);
+      console.error('Error updating OpenAI API key:', error);
       return { 
         success: false, 
         error: error.message || 'Failed to update API key'
@@ -436,31 +548,28 @@ function setupIpcHandlers() {
     }
   });
   
-  // Get current OpenAI API key (masked)
-  ipcMain.handle('get-api-key', (event) => {
+  // Get current OpenAI API key (masked for security)
+  ipcMain.handle('get-openai-api-key', (event) => {
     try {
-      const apiKey = process.env.OPENAI_API_KEY || '';
-      
-      // Return masked version for security
-      if (apiKey.length > 8) {
-        const masked = 'sk-' + '•'.repeat(apiKey.length - 8) + apiKey.slice(-4);
+      if (!openaiApiKey) {
         return { 
           success: true, 
-          apiKey: masked
-        };
-      } else if (apiKey) {
-        return { 
-          success: true, 
-          apiKey: '•'.repeat(apiKey.length)
-        };
-      } else {
-        return { 
-          success: true, 
-          apiKey: ''
+          apiKey: '' 
         };
       }
+      
+      // Mask the API key except for the first and last 4 characters
+      const maskedKey = openaiApiKey.length > 8 
+        ? `${openaiApiKey.substring(0, 4)}...${openaiApiKey.substring(openaiApiKey.length - 4)}`
+        : '****';
+        
+      return { 
+        success: true, 
+        apiKey: maskedKey,
+        isSet: !!openaiApiKey
+      };
     } catch (error) {
-      console.error('Error getting API key:', error);
+      console.error('Error getting OpenAI API key:', error);
       return { 
         success: false, 
         error: error.message || 'Failed to get API key'
@@ -471,39 +580,35 @@ function setupIpcHandlers() {
   // Generate call summary
   ipcMain.handle('generate-call-summary', async (event, transcriptData) => {
     try {
-      if (!openai) {
-        throw new Error('OpenAI API key not set. Cannot generate summary.');
+      if (!transcriptData || transcriptData.length === 0) {
+        return { 
+          success: false, 
+          error: 'No transcript data available to summarize' 
+        };
       }
       
-      if (!transcriptData || !transcriptData.length) {
-        return { success: false, message: 'No transcript data available for summary' };
-      }
+      console.log(`Generating summary from ${transcriptData.length} transcript entries`);
       
-      console.log(`Generating call summary with GPT-4o from ${transcriptData.length} entries...`);
+      // Format the transcript data
+      const formattedTranscript = transcriptData
+        .map(entry => `${entry.username}: ${entry.text}`)
+        .join('\n');
       
-      // Format the transcript data for GPT-4o - organize by username and make it like a conversation
-      const formattedTranscript = transcriptData.map(item => 
-        `${item.username}: ${item.text}`
-      ).join('\n');
-      
-      // Log the formatted transcript for debugging
-      console.log('Formatted transcript for summary:');
-      console.log(formattedTranscript.substring(0, 500) + (formattedTranscript.length > 500 ? '...' : ''));
-      
-      // Generate a summary with GPT-4o
+      // Use OpenAI to generate a summary
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
-          {
-            role: "system",
-            content: "You are a helpful assistant that creates concise summaries of conversation transcripts. Identify key points, action items, decisions made, and important topics discussed. Format the summary with clear sections and bullet points. Make sure to attribute quotes and decisions to the correct participants."
+          { 
+            role: "system", 
+            content: "You are an assistant that summarizes meeting transcripts. Create a concise summary of the key points discussed, organized by topics. Include action items if any were mentioned." 
           },
-          {
+          { 
             role: "user", 
-            content: `Please summarize the following call transcript, showing who participated and what they talked about:\n\n${formattedTranscript}`
+            content: `Please summarize this meeting transcript:\n\n${formattedTranscript}` 
           }
         ],
-        max_tokens: 1500
+        temperature: 0.7,
+        max_tokens: 1000,
       });
       
       const summary = completion.choices[0].message.content;
@@ -514,9 +619,9 @@ function setupIpcHandlers() {
         summary 
       };
     } catch (error) {
-      console.error('Error generating summary with GPT-4o:', error);
-      return {
-        success: false,
+      console.error('Error generating summary:', error);
+      return { 
+        success: false, 
         error: error.message || 'Failed to generate summary'
       };
     }
@@ -524,88 +629,184 @@ function setupIpcHandlers() {
 }
 
 // Transcribe audio using OpenAI Whisper
-async function transcribeWithWhisper(audioFilePath) {
+async function transcribeAudio(filePath) {
   try {
-    console.log(`Sending audio file to OpenAI Whisper: ${audioFilePath}`);
-    
-    // Read the audio file
-    const audioFile = fs.createReadStream(audioFilePath);
-    
-    // Call OpenAI Whisper API
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: "whisper-1",
-      language: "en",
-      response_format: "text"
-    });
-    
-    // Filter out empty or very short transcriptions
-    const text = transcription.trim();
-    if (!text || text.length < 3) {
-      console.log('Transcription ignored (too short):', text);
-      return '';  // Return empty string to indicate no useful transcription
+    // Check if OpenAI client is initialized
+    if (!openai) {
+      throw new Error('OpenAI API key not set. Please configure in settings.');
     }
     
-    console.log('Transcription received:', text);
-    return text;
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(filePath),
+      model: "whisper-1",
+      language: "en",
+    });
+    
+    console.log(`Whisper API returned transcription: "${transcription.text}"`);
+    
+    if (!transcription.text || transcription.text.trim() === '') {
+      console.log(`Transcription ignored (too short): ${transcription.text}`);
+      return '';
+    }
+    
+    if (transcription.text.length < 2) {
+      console.log(`Empty or short transcription: "${transcription.text}"`);
+      return '';
+    }
+    
+    console.log(`Valid transcription: "${transcription.text}"`);
+    return transcription.text;
   } catch (error) {
-    console.error('Error transcribing with Whisper:', error);
+    console.error('Error in Whisper API call:', error);
     throw error;
   }
 }
 
-// Join a specific room
+// Create Hyperswarm topic from roomId
+function getRoomTopic(roomId) {
+  return crypto.createHash('sha256')
+    .update(roomId)
+    .digest();
+}
+
+// Join room with given ID
 async function joinRoom(roomId) {
   try {
-    // Create a topic from the room ID
-    TOPIC = b4a.from(
-      crypto.createHash('sha256')
-        .update(`hypercore-p2p-chat-room-${roomId}`)
-        .digest()
-    );
+    console.log(`Creating topic for room ${roomId}`);
     
-    console.log(`Created topic for room ${roomId}: ${TOPIC.toString('hex')}`);
-    
-    // Create a new swarm
+    // Create a new hyperswarm
     activeSwarm = new Hyperswarm();
+    TOPIC = getRoomTopic(roomId);
     
-    // Create a hypercore to store chat messages for this room
-    const core = new Hypercore(`./storage/chat-log-${roomId}`);
-    
-    // Join the swarm with this topic
-    activeSwarm.join(TOPIC);
     console.log(`Joined swarm with topic: ${TOPIC.toString('hex')}`);
     
-    // Listen for new connections
-    activeSwarm.on('connection', handleConnection);
+    // Join the topic
+    const discovery = activeSwarm.join(TOPIC, { server: true, client: true });
+    
+    // Set up connection handler
+    activeSwarm.on('connection', (conn, info) => {
+      handleConnection(conn, info);
+    });
+    
+    // Listen for disconnection
+    activeSwarm.on('disconnection', (conn, info) => {
+      handleDisconnection(conn, info);
+    });
     
     return { success: true };
   } catch (error) {
     console.error('Error joining room:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Unknown error joining room'
-    };
+    throw error;
   }
 }
 
-// Leave the current room
+// Handle new peer connection
+function handleConnection(conn, info) {
+  try {
+    // Get peer ID as hex
+    const peerId = info.publicKey.toString('hex');
+    console.log(`New connection from: ${peerId}`);
+    
+    // Store connection
+    activeConnections.set(peerId, conn);
+    
+    // Update peer count in UI
+    if (mainWindow) {
+      mainWindow.webContents.send('peer-connected', {
+        id: peerId,
+        connections: activeConnections.size
+      });
+    }
+    
+    // Handle incoming data
+    conn.on('data', data => {
+      try {
+        // Parse the message
+        const message = JSON.parse(data.toString());
+        
+        // Forward to UI based on message type
+        if (message.type === 'chat-message') {
+          if (mainWindow) {
+            mainWindow.webContents.send('new-message', message);
+          }
+        } else if (message.type === 'rtc-signal') {
+          if (mainWindow) {
+            mainWindow.webContents.send('signal-received', {
+              peerId,
+              signal: message.signal,
+              from: message.from
+            });
+          }
+        }
+        
+        console.log(`Received message:`, message);
+      } catch (error) {
+        console.error(`Error handling message from ${peerId}:`, error);
+      }
+    });
+    
+    // Handle connection errors
+    conn.on('error', error => {
+      console.error(`Connection error with peer ${peerId}:`, error);
+    });
+    
+    // Handle connection close
+    conn.on('close', () => {
+      console.log(`Connection closed with peer ${peerId}`);
+      activeConnections.delete(peerId);
+      
+      // Update UI
+      if (mainWindow) {
+        mainWindow.webContents.send('peer-disconnected', {
+          id: peerId,
+          connections: activeConnections.size
+        });
+      }
+    });
+  } catch (error) {
+    console.error('Error handling connection:', error);
+  }
+}
+
+// Handle peer disconnection
+function handleDisconnection(conn, info) {
+  try {
+    // Get peer ID as hex
+    const peerId = info.publicKey.toString('hex');
+    console.log(`Peer disconnected: ${peerId}`);
+    
+    // Remove from active connections
+    activeConnections.delete(peerId);
+    
+    // Update UI
+    if (mainWindow) {
+      mainWindow.webContents.send('peer-disconnected', {
+        id: peerId,
+        connections: activeConnections.size
+      });
+    }
+  } catch (error) {
+    console.error('Error handling disconnection:', error);
+  }
+}
+
+// Leave current room
 async function leaveRoom() {
   if (!activeSwarm) return;
   
   try {
     console.log('Leaving current room');
     
-    // Disconnect from all peers
+    // Close all connections
     for (const [peerId, conn] of activeConnections.entries()) {
       console.log(`Closing connection to peer: ${peerId}`);
-      conn.end();
+      conn.destroy();
     }
     
-    // Clear connections
+    // Clear connections map
     activeConnections.clear();
     
-    // Leave the topic
+    // Leave the swarm
     if (TOPIC) {
       activeSwarm.leave(TOPIC);
     }
@@ -621,66 +822,195 @@ async function leaveRoom() {
   }
 }
 
-// Handle new connections
-function handleConnection(conn) {
+// ====== AT Protocol Authentication Functions ======
+
+// Create account on PDS
+async function createAccount(handle, email, password) {
   try {
-    // Keep track of connections
-    const remotePublicKey = b4a.toString(conn.remotePublicKey, 'hex');
-    activeConnections.set(remotePublicKey, conn);
-    console.log(`New connection from: ${remotePublicKey}`);
-    
-    // Notify user of new peer
-    if (mainWindow) {
-      mainWindow.webContents.send('peer-connected', { id: remotePublicKey });
+    // Ensure handle doesn't contain domain already
+    if (handle.includes('.')) {
+      // Just use the handle as provided
+    } else {
+      // Add domain if not present
+      handle = `${handle}.hapa.ai`;
     }
     
-    // Handle incoming data
-    conn.on('data', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        console.log(`Received message: ${JSON.stringify(message)}`);
-        
-        // Handle different message types
-        if (message.type === 'chat-message') {
-          mainWindow.webContents.send('new-message', message);
-        } 
-        else if (message.type === 'rtc-signal') {
-          // Forward WebRTC signals to the renderer
-          if (mainWindow) {
-            mainWindow.webContents.send('signal-received', {
-              peerId: remotePublicKey,
-              from: message.from,
-              signal: message.signal
-            });
-          }
-        }
-      } catch (err) {
-        console.error('Failed to parse message:', err);
-      }
+    console.log(`Creating account for ${handle} on ${PDS_URL}`);
+    
+    // Make request to PDS to create account
+    const response = await axios.post(`${PDS_URL}/xrpc/com.atproto.server.createAccount`, {
+      email,
+      handle,
+      password,
+      inviteCode: PDS_INVITE_CODE
     });
     
-    // Handle disconnection
-    conn.on('close', () => {
-      console.log(`Connection closed: ${remotePublicKey}`);
-      activeConnections.delete(remotePublicKey);
-      
-      if (mainWindow) {
-        mainWindow.webContents.send('peer-disconnected', { id: remotePublicKey });
-      }
-    });
-    
-    // Send welcome message
-    if (username) {
-      const helloMsg = {
-        type: 'chat-message',
-        username,
-        message: `Hello! I just connected.`,
-        timestamp: Date.now()
-      };
-      conn.write(JSON.stringify(helloMsg));
+    if (!response.data || !response.data.did) {
+      throw new Error('Invalid response from PDS');
     }
+    
+    console.log('Account created successfully:', response.data);
+    
+    // Store session data
+    sessionData = {
+      accessJwt: response.data.accessJwt,
+      refreshJwt: response.data.refreshJwt,
+      handle: response.data.handle,
+      did: response.data.did
+    };
+    
+    // Save session for future use
+    saveSession(sessionData);
+    
+    // Create a Hypercore ID based on the DID
+    const hypercoreId = generateHypercoreIdFromDid(response.data.did);
+    
+    const userData = {
+      did: response.data.did,
+      handle: response.data.handle,
+      email,
+      hypercoreId
+    };
+    
+    return {
+      success: true,
+      user: userData
+    };
   } catch (error) {
-    console.error('Error handling connection:', error);
+    console.error('Error creating account:', error);
+    
+    // Extract error message from response if available
+    let errorMessage = 'Failed to create account';
+    if (error.response && error.response.data) {
+      errorMessage = error.response.data.message || error.response.data.error || errorMessage;
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+    
+    return {
+      success: false,
+      error: errorMessage
+    };
+  }
+}
+
+// Create session (sign in)
+async function createSession(identifier, password) {
+  try {
+    // Ensure identifier contains domain if not already present
+    if (!identifier.includes('.')) {
+      identifier = `${identifier}.hapa.ai`;
+    }
+    
+    console.log(`Creating session for ${identifier} on ${PDS_URL}`);
+    
+    // Make request to PDS to create session
+    const response = await axios.post(`${PDS_URL}/xrpc/com.atproto.server.createSession`, {
+      identifier,
+      password
+    });
+    
+    if (!response.data || !response.data.did) {
+      throw new Error('Invalid response from PDS');
+    }
+    
+    console.log('Session created successfully');
+    
+    // Store session data
+    sessionData = {
+      accessJwt: response.data.accessJwt,
+      refreshJwt: response.data.refreshJwt,
+      handle: response.data.handle,
+      did: response.data.did
+    };
+    
+    // Save session for future use
+    saveSession(sessionData);
+    
+    // Create a Hypercore ID based on the DID
+    const hypercoreId = generateHypercoreIdFromDid(response.data.did);
+    
+    const userData = {
+      did: response.data.did,
+      handle: response.data.handle,
+      hypercoreId
+    };
+    
+    return {
+      success: true,
+      user: userData
+    };
+  } catch (error) {
+    console.error('Error creating session:', error);
+    
+    // Extract error message from response if available
+    let errorMessage = 'Failed to sign in';
+    if (error.response && error.response.data) {
+      errorMessage = error.response.data.message || error.response.data.error || errorMessage;
+      
+      // Add more context if it's an authentication error
+      if (error.response.status === 401) {
+        errorMessage = 'Invalid username or password. Please try again.';
+      }
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+    
+    return {
+      success: false,
+      error: errorMessage
+    };
+  }
+}
+
+// Refresh session
+async function refreshSession(refreshJwt) {
+  try {
+    console.log('Refreshing session');
+    
+    // Make request to PDS to refresh session
+    const response = await axios.post(`${PDS_URL}/xrpc/com.atproto.server.refreshSession`, {}, {
+      headers: {
+        'Authorization': `Bearer ${refreshJwt}`
+      }
+    });
+    
+    if (!response.data || !response.data.did) {
+      throw new Error('Invalid response from PDS');
+    }
+    
+    console.log('Session refreshed successfully');
+    
+    // Store session data
+    sessionData = {
+      accessJwt: response.data.accessJwt,
+      refreshJwt: response.data.refreshJwt,
+      handle: response.data.handle,
+      did: response.data.did
+    };
+    
+    // Save session for future use
+    saveSession(sessionData);
+    
+    // Create a Hypercore ID based on the DID
+    const hypercoreId = generateHypercoreIdFromDid(response.data.did);
+    
+    const userData = {
+      did: response.data.did,
+      handle: response.data.handle,
+      hypercoreId
+    };
+    
+    return {
+      success: true,
+      user: userData
+    };
+  } catch (error) {
+    console.error('Error refreshing session:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to refresh session'
+    };
   }
 }
 
@@ -725,52 +1055,4 @@ function generateHypercoreIdFromDid(did) {
   const hash = crypto.createHash('sha256').update(did).digest('hex');
   
   return hash;
-}
-
-// Save OpenAI API key to .env file
-async function saveApiKey(apiKey) {
-  try {
-    console.log('Saving new OpenAI API key');
-    
-    // Read current .env content
-    let envContent = '';
-    if (fs.existsSync('.env')) {
-      envContent = fs.readFileSync('.env', 'utf8');
-    }
-    
-    // Update the API key line
-    const lines = envContent.split('\n');
-    let keyFound = false;
-    
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].startsWith('OPENAI_API_KEY=')) {
-        lines[i] = `OPENAI_API_KEY=${apiKey}`;
-        keyFound = true;
-        break;
-      }
-    }
-    
-    // If the key wasn't found, add it
-    if (!keyFound) {
-      lines.push(`OPENAI_API_KEY=${apiKey}`);
-    }
-    
-    // Write back to .env file
-    fs.writeFileSync('.env', lines.join('\n'), 'utf8');
-    
-    // Update the key in memory
-    process.env.OPENAI_API_KEY = apiKey;
-    
-    // Update the OpenAI client
-    openai.apiKey = apiKey;
-    
-    console.log('API key updated successfully');
-    return { success: true };
-  } catch (error) {
-    console.error('Error saving API key:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Failed to save API key'
-    };
-  }
 }

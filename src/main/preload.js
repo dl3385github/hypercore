@@ -11,6 +11,27 @@ function logEvent(eventName, ...args) {
 // Expose protected methods that allow the renderer process to use the ipcRenderer
 // without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Auth functions
+  signUp: (handle, email, password) => {
+    logEvent('signUp', handle, email);
+    return ipcRenderer.invoke('auth-sign-up', handle, email, password);
+  },
+  
+  signIn: (identifier, password) => {
+    logEvent('signIn', identifier);
+    return ipcRenderer.invoke('auth-sign-in', identifier, password);
+  },
+  
+  signOut: () => {
+    logEvent('signOut');
+    return ipcRenderer.invoke('auth-sign-out');
+  },
+  
+  getCurrentUser: () => {
+    logEvent('getCurrentUser');
+    return ipcRenderer.invoke('auth-get-current-user');
+  },
+  
   // Send username to main process
   setUsername: (name) => {
     logEvent('setUsername', name);
@@ -149,6 +170,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
   
+  // Auth events
+  onAuthStateChanged: (callback) => {
+    console.log('[Preload] Setting up onAuthStateChanged listener');
+    ipcRenderer.on('auth-state-changed', (event, user) => {
+      logEvent('auth-state-changed', user);
+      callback(user);
+    });
+    
+    return () => {
+      console.log('[Preload] Cleaning up onAuthStateChanged listener');
+      ipcRenderer.removeAllListeners('auth-state-changed');
+    };
+  },
+  
   // Generate call summary
   generateCallSummary: (transcriptData) => {
     logEvent('generateCallSummary', `Transcript data with ${transcriptData.length} entries`);
@@ -175,16 +210,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('update-audio-threshold', threshold);
   },
   
-  // Update OpenAI API key
-  updateApiKey: (apiKey) => {
-    logEvent('updateApiKey', 'API key update requested');
-    return ipcRenderer.invoke('update-api-key', apiKey);
+  // OpenAI API key management
+  getOpenAIApiKey: () => {
+    logEvent('getOpenAIApiKey', 'Requesting current API key (masked)');
+    return ipcRenderer.invoke('get-openai-api-key');
   },
   
-  // Get current OpenAI API key (masked)
-  getApiKey: () => {
-    logEvent('getApiKey', 'Retrieving masked API key');
-    return ipcRenderer.invoke('get-api-key');
+  updateOpenAIApiKey: (apiKey) => {
+    logEvent('updateOpenAIApiKey', 'Updating OpenAI API key');
+    return ipcRenderer.invoke('update-openai-api-key', apiKey);
   }
 });
 

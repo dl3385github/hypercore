@@ -1,11 +1,27 @@
+# Dependency directories
 node_modules/
-temp/
-.DS_Store
-*.log
+
+# Environment variables
+.env
+
+# Build output
+dist/
+build/
+
+# Storage
 storage/
+temp/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Transcripts
 transcripts/
 summaries/
-.env
-.env.local
-.env.development
-.env.production

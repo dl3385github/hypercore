@@ -2,79 +2,189 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>P2P Chat with Hypercore</title>
+  <title>Hypercore P2P Application</title>
   <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
   <div class="app-container">
-    <div id="login-screen" class="login-screen">
-      <h1>P2P Chat</h1>
-      <div class="login-form">
-        <input 
-          type="text" 
-          id="username-input" 
-          placeholder="Enter your username" 
-          maxlength="20"
-        >
-        <input 
-          type="text" 
-          id="room-input" 
-          placeholder="Enter room ID (or create new)" 
-          maxlength="30"
-        >
-        <button id="join-btn">Join Chat</button>
-      </div>
-    </div>
-
-    <div id="chat-screen" class="chat-screen hidden">
-      <div class="chat-header">
-        <h2>Hypercore P2P Chat</h2>
-        <div class="connection-info">
-          <span class="room-display">Room: <span id="current-room">default</span></span>
-          <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
-          <button id="save-transcript-btn" class="action-btn">Save Transcript</button>
-          <button id="toggle-transcript-popup-btn" class="action-btn">Show Transcript</button>
-          <button id="summarize-btn" class="action-btn">Generate Summary</button>
-          <button id="settings-btn" class="action-btn">Settings</button>
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="auth-screen">
+      <div class="auth-container">
+        <h1>Hapa.ai</h1>
+        
+        <div class="auth-tabs">
+          <button class="auth-tab-btn active" data-tab="signin">Sign In</button>
+          <button class="auth-tab-btn" data-tab="signup">Sign Up</button>
         </div>
-      </div>
-      
-      <div class="content-container">
-        <div class="video-container">
-          <div class="videos">
-            <div class="video-item local-video-container">
-              <div class="video-wrapper">
-                <video id="local-video" autoplay muted playsinline></video>
-                <div class="video-controls">
-                  <button id="toggle-video" class="control-btn">
-                    <span class="icon">📹</span>
-                  </button>
-                  <button id="toggle-audio" class="control-btn">
-                    <span class="icon">🎤</span>
-                  </button>
-                </div>
-                <div class="transcript-overlay hidden" id="local-overlay-transcript"></div>
-              </div>
-              <div class="participant-info">
-                <div class="participant-name">You</div>
-                <div class="transcript-container" id="local-transcript">
-                  <div class="transcript-title">Transcript</div>
-                  <div class="transcript-content"></div>
-                </div>
-              </div>
-            </div>
-            
-            <div id="remote-videos" class="remote-videos">
-              <!-- Remote videos will be added here dynamically -->
-            </div>
+        
+        <div class="auth-tab-content active" id="signin-tab">
+          <div class="auth-form">
+            <input type="text" id="signin-id" placeholder="Username or email address" maxlength="50">
+            <p class="form-hint">Enter your username (with or without .hapa.ai) or email</p>
+            <input type="password" id="signin-password" placeholder="Password">
+            <button id="signin-btn">Sign In</button>
+            <div id="signin-error" class="auth-error"></div>
           </div>
         </div>
         
-        <div class="chat-container">
-          <div id="messages-container" class="messages-container">
-            <div id="messages" class="messages"></div>
+        <div class="auth-tab-content" id="signup-tab">
+          <div class="auth-form">
+            <input type="text" id="signup-handle" placeholder="Username" maxlength="50">
+            <p class="form-hint">Enter username only - '.hapa.ai' will be added automatically</p>
+            <input type="email" id="signup-email" placeholder="Email" maxlength="100">
+            <input type="password" id="signup-password" placeholder="Password (minimum 8 characters)">
+            <input type="password" id="signup-password-confirm" placeholder="Confirm Password">
+            <button id="signup-btn">Sign Up</button>
+            <div id="signup-error" class="auth-error"></div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Navigation after login -->
+    <div id="main-app" class="main-app hidden">
+      <!-- Side Navigation -->
+      <div class="side-nav">
+        <button class="nav-btn active" data-page="video-call">
+          <span class="nav-icon">📹</span>
+          <span class="nav-label">Video Call</span>
+        </button>
+        <button class="nav-btn" data-page="chats">
+          <span class="nav-icon">💬</span>
+          <span class="nav-label">Chats</span>
+        </button>
+        <button class="nav-btn" data-page="social">
+          <span class="nav-icon">🌐</span>
+          <span class="nav-label">Social</span>
+        </button>
+        <button class="nav-btn" data-page="gatekeeper">
+          <span class="nav-icon">🔐</span>
+          <span class="nav-label">Gatekeeper</span>
+        </button>
+        <button class="nav-btn" data-page="ai-stuffs">
+          <span class="nav-icon">🤖</span>
+          <span class="nav-label">AI Stuffs</span>
+        </button>
+        <button class="nav-btn" data-page="settings">
+          <span class="nav-icon">⚙️</span>
+          <span class="nav-label">Settings</span>
+        </button>
+      </div>
+
+      <!-- Content Area -->
+      <div class="content-area">
+        <!-- Video Call Page -->
+        <div id="video-call-page" class="app-page active">
+          <div id="login-screen" class="login-screen">
+            <h1>P2P Video Chat</h1>
+            <div class="login-form">
+              <input 
+                type="text" 
+                id="username-input" 
+                placeholder="Enter your username" 
+                maxlength="20"
+              >
+              <input 
+                type="text" 
+                id="room-input" 
+                placeholder="Enter room ID (or create new)" 
+                maxlength="30"
+              >
+              <button id="join-btn">Join Chat</button>
+            </div>
+          </div>
+
+          <div id="chat-screen" class="chat-screen hidden">
+            <div class="chat-header">
+              <h2>Hypercore P2P Chat</h2>
+              <div class="connection-info">
+                <span class="room-display">Room: <span id="current-room">default</span></span>
+                <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
+                <button id="save-transcript-btn" class="action-btn">Save Transcript</button>
+                <button id="toggle-transcript-popup-btn" class="action-btn">Show Transcript</button>
+                <button id="summarize-btn" class="action-btn">Generate Summary</button>
+                <button id="settings-btn" class="action-btn">Settings</button>
+              </div>
+            </div>
+            
+            <div class="content-container">
+              <div class="video-container">
+                <div class="videos">
+                  <div class="video-item local-video-container">
+                    <div class="video-wrapper">
+                      <video id="local-video" autoplay muted playsinline></video>
+                      <div class="video-controls">
+                        <button id="toggle-video" class="control-btn">
+                          <span class="icon">📹</span>
+                        </button>
+                        <button id="toggle-audio" class="control-btn">
+                          <span class="icon">🎤</span>
+                        </button>
+                      </div>
+                      <div class="transcript-overlay hidden" id="local-overlay-transcript"></div>
+                    </div>
+                    <div class="participant-info">
+                      <div class="participant-name">You</div>
+                      <div class="transcript-container" id="local-transcript">
+                        <div class="transcript-title">Transcript</div>
+                        <div class="transcript-content"></div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div id="remote-videos" class="remote-videos">
+                    <!-- Remote videos will be added here dynamically -->
+                  </div>
+                </div>
+              </div>
+              
+              <div class="chat-container">
+                <div id="messages-container" class="messages-container">
+                  <div id="messages" class="messages"></div>
+                </div>
+
+                <div class="message-input-container">
+                  <input 
+                    type="text" 
+                    id="message-input" 
+                    placeholder="Type your message..." 
+                    maxlength="500"
+                  >
+                  <button id="send-btn">Send</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chats Page (Placeholder) -->
+        <div id="chats-page" class="app-page">
+          <h2>Chats Page</h2>
+          <p>This is a placeholder for the P2P chat features.</p>
+        </div>
+
+        <!-- Social Page (Placeholder) -->
+        <div id="social-page" class="app-page">
+          <h2>Social Page</h2>
+          <p>This is a placeholder for the AT Protocol social features.</p>
+        </div>
+
+        <!-- Gatekeeper Page (Placeholder) -->
+        <div id="gatekeeper-page" class="app-page">
+          <h2>Gatekeeper</h2>
+          <div class="gatekeeper-chat">
+            <div class="gatekeeper-messages">
+              <div class="gatekeeper-message">
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                  <div class="message-sender">Gatekeeper</div>
+                  <div class="message-text">Welcome to Hapa.ai! I'm your Gatekeeper assistant. How can I help you get started?</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <!-- AI Stuffs Page (Placeholder) -->
         <div id="ai-stuffs-page" class="app-page">
@@ -91,19 +201,6 @@
               <div id="user-did-display">DID: <span>Not available</span></div>
               <div id="user-handle-display">Handle: <span>Not available</span></div>
               <button id="logout-btn" class="action-btn">Sign Out</button>
-            </div>
-            
-            <div class="api-section">
-              <h3>API Settings</h3>
-              <div class="setting-item">
-                <label for="openai-api-key">OpenAI API Key:</label>
-                <input type="password" id="openai-api-key" placeholder="Enter your OpenAI API key">
-                <button id="save-api-key" class="action-btn">Save</button>
-                <div id="api-key-status" class="setting-status"></div>
-              </div>
-              <div class="setting-description">
-                Your API key is required for the transcription feature. It is stored locally and never shared.
-              </div>
             </div>
           </div>
         </div>
@@ -162,6 +259,21 @@
           
           <div class="setting-item">
             <button id="refresh-devices-btn" class="action-btn">Refresh Devices</button>
+          </div>
+        </div>
+        
+        <div class="settings-section">
+          <h4>AI Settings</h4>
+          <div class="setting-item">
+            <label for="openai-api-key">OpenAI API Key:</label>
+            <input type="password" id="openai-api-key" placeholder="Enter your OpenAI API key">
+          </div>
+          <div class="setting-description">
+            Your API key is stored securely on your device and is used for speech transcription.
+          </div>
+          <div class="setting-item">
+            <button id="save-api-key-btn" class="action-btn">Save API Key</button>
+            <span id="api-key-status" class="setting-status"></span>
           </div>
         </div>
       </div>
