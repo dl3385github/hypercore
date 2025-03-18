@@ -1465,8 +1465,27 @@ function setupMediaRecording() {
         // Send to main process for transcription
         const username = usernameInput.value.trim();
         const result = await window.electronAPI.transcribeAudio(buffer, username);
-        if (result.success) {
-          // Transcription will come back through the onTranscriptionResult listener
+        if (result.success && result.transcription && result.transcription.trim().length > 0) {
+          console.log(`Local transcription success: "${result.transcription}"`);
+          
+          // Directly update the local transcript UI
+          updateLocalTranscriptUI(result.transcription);
+          
+          // Also update the global transcript system
+          updateTranscription(username, result.transcription);
+          
+          // Share transcript with other peers via data channel
+          for (const [peerId, dataChannel] of dataChannels.entries()) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+              const transcriptMessage = {
+                type: 'transcript',
+                speaker: username,
+                text: result.transcription,
+                timestamp: new Date().toISOString()
+              };
+              dataChannel.send(JSON.stringify(transcriptMessage));
+            }
+          }
         } else if (result.error) {
           console.error('Transcription error:', result.error);
           
@@ -1520,6 +1539,71 @@ function setupMediaRecording() {
   } catch (error) {
     console.error('Error setting up media recording:', error);
     addSystemMessage(`Error setting up transcription: ${error.message}`);
+  }
+}
+
+// Function to directly update the local transcript UI
+function updateLocalTranscriptUI(text) {
+  console.log(`Updating local transcript UI: "${text}"`);
+  
+  // Update the local transcript container
+  const transcriptContainer = document.querySelector('#local-transcript .transcript-content');
+  if (transcriptContainer) {
+    // Create a new entry
+    const entry = document.createElement('div');
+    entry.className = 'transcript-entry';
+    entry.textContent = `You: ${text}`;
+    
+    // Style the entry for visibility
+    entry.style.padding = '4px 8px';
+    entry.style.margin = '4px 0';
+    entry.style.backgroundColor = '#e3f2fd'; // Light blue for "you"
+    entry.style.borderRadius = '4px';
+    entry.style.border = '1px solid #bbdefb';
+    entry.style.fontWeight = 'normal';
+    
+    // Add to container
+    transcriptContainer.appendChild(entry);
+    
+    // Limit to last 5 entries
+    while (transcriptContainer.children.length > 5) {
+      transcriptContainer.removeChild(transcriptContainer.firstChild);
+    }
+    
+    // Auto-scroll
+    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+    console.log('Updated local transcript container');
+  } else {
+    console.warn('Local transcript container not found');
+  }
+  
+  // Update the overlay
+  const localOverlay = document.getElementById('local-overlay-transcript');
+  if (localOverlay) {
+    localOverlay.textContent = text;
+    localOverlay.classList.remove('hidden');
+    
+    // Force visible styling
+    localOverlay.style.display = 'block';
+    localOverlay.style.position = 'absolute';
+    localOverlay.style.bottom = '10px';
+    localOverlay.style.left = '10px';
+    localOverlay.style.right = '10px';
+    localOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    localOverlay.style.color = 'white';
+    localOverlay.style.padding = '8px';
+    localOverlay.style.borderRadius = '4px';
+    localOverlay.style.zIndex = '5';
+    
+    // Hide after a few seconds
+    setTimeout(() => {
+      localOverlay.classList.add('hidden');
+      localOverlay.style.display = 'none';
+    }, 5000);
+    
+    console.log('Updated local overlay');
+  } else {
+    console.warn('Local overlay not found');
   }
 }
 
@@ -1640,7 +1724,122 @@ function setupRemoteTranscription(peerId, stream) {
           // Log the successful transcription
           console.log(`Remote transcription for ${peerUsername}: "${result.transcription}"`);
           
-          // Update our own UI with the transcript
+          // CRITICAL: Update UI with transcript text
+          // Force display in the UI by updating transcription with clear visual indicators
+          document.querySelectorAll(`.transcript-overlay`).forEach(overlay => {
+            console.log(`Checking overlay: ${overlay.id}`);
+          });
+          
+          // 1. First, ensure we have a valid transcript container for this peer
+          let peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+          if (!peerContainer) {
+            console.warn(`Could not find container for peer ${peerId}, looking for any container with username ${peerUsername}`);
+            // Try to find by username in participant-name
+            const containers = document.querySelectorAll('.remote-video-container');
+            for (const container of containers) {
+              const nameElement = container.querySelector('.participant-name');
+              if (nameElement && nameElement.textContent === peerUsername) {
+                peerContainer = container;
+                console.log(`Found container by username: ${peerUsername}`);
+                break;
+              }
+            }
+          }
+          
+          if (peerContainer) {
+            // 2. Make sure we have a transcript container inside
+            let transcriptContent = peerContainer.querySelector('.transcript-content');
+            
+            if (!transcriptContent) {
+              console.warn(`No transcript content found for ${peerUsername}, creating one`);
+              
+              // Get or create participant info section
+              let participantInfo = peerContainer.querySelector('.participant-info');
+              if (!participantInfo) {
+                participantInfo = document.createElement('div');
+                participantInfo.className = 'participant-info';
+                peerContainer.appendChild(participantInfo);
+              }
+              
+              // Create transcript container if needed
+              let transcriptContainer = participantInfo.querySelector('.transcript-container');
+              if (!transcriptContainer) {
+                transcriptContainer = document.createElement('div');
+                transcriptContainer.className = 'transcript-container';
+                participantInfo.appendChild(transcriptContainer);
+                
+                // Add title
+                const title = document.createElement('div');
+                title.className = 'transcript-title';
+                title.textContent = 'Transcript';
+                transcriptContainer.appendChild(title);
+                
+                // Add content area
+                transcriptContent = document.createElement('div');
+                transcriptContent.className = 'transcript-content';
+                transcriptContainer.appendChild(transcriptContent);
+              }
+            }
+            
+            // 3. Update the transcript overlay (for immediate visual feedback)
+            const overlay = peerContainer.querySelector('.transcript-overlay');
+            if (overlay) {
+              overlay.textContent = result.transcription;
+              overlay.classList.remove('hidden');
+              
+              // Force visible styling
+              overlay.style.display = 'block';
+              overlay.style.position = 'absolute';
+              overlay.style.bottom = '10px';
+              overlay.style.left = '10px';
+              overlay.style.right = '10px';
+              overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+              overlay.style.color = 'white';
+              overlay.style.padding = '8px';
+              overlay.style.borderRadius = '4px';
+              overlay.style.zIndex = '5';
+              
+              // Hide after a few seconds
+              setTimeout(() => {
+                overlay.classList.add('hidden');
+                overlay.style.display = 'none';
+              }, 5000);
+            } else {
+              console.warn(`No overlay found in peer container for ${peerUsername}`);
+            }
+            
+            // 4. Update the transcript content area
+            if (transcriptContent) {
+              const entry = document.createElement('div');
+              entry.className = 'transcript-entry';
+              entry.textContent = `${peerUsername}: ${result.transcription}`;
+              
+              // Style the entry for visibility
+              entry.style.padding = '4px 8px';
+              entry.style.margin = '4px 0';
+              entry.style.backgroundColor = '#f0f0f0';
+              entry.style.borderRadius = '4px';
+              entry.style.border = '1px solid #ddd';
+              entry.style.fontWeight = 'normal';
+              
+              transcriptContent.appendChild(entry);
+              
+              // Limit to last 5 entries
+              while (transcriptContent.children.length > 5) {
+                transcriptContent.removeChild(transcriptContent.firstChild);
+              }
+              
+              // Auto-scroll
+              transcriptContent.scrollTop = transcriptContent.scrollHeight;
+              console.log(`Added transcript to UI for ${peerUsername}: "${result.transcription}"`);
+            } else {
+              console.warn(`Still couldn't find transcript content for ${peerUsername}`);
+            }
+          } else {
+            console.warn(`Could not find video container for peer ${peerUsername} (${peerId})`);
+          }
+          
+          // Also update the global transcript storage and popup
           updateTranscription(peerUsername, result.transcription);
           
           // Share transcript with other peers via data channel
@@ -1936,21 +2135,37 @@ function updateTranscription(speaker, text) {
 
 // Add transcript to popup
 function addTranscriptToPopup(speaker, text, timestamp) {
+  console.log(`Adding transcript to popup: ${speaker}: "${text}"`);
+  
   // Create transcript entry
   const entry = document.createElement('div');
   entry.className = 'transcript-entry';
   
+  // Style the entry to be more visible
+  entry.style.display = 'flex';
+  entry.style.flexDirection = 'column';
+  entry.style.marginBottom = '12px';
+  entry.style.padding = '8px 12px';
+  entry.style.borderRadius = '8px';
+  entry.style.backgroundColor = speaker === username ? '#e3f2fd' : '#f5f5f5';
+  entry.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+  entry.style.borderLeft = speaker === username ? '4px solid #2196f3' : '4px solid #9e9e9e';
+  
+  // Add header row with speaker and timestamp
+  const header = document.createElement('div');
+  header.className = 'transcript-header';
+  header.style.display = 'flex';
+  header.style.justifyContent = 'space-between';
+  header.style.marginBottom = '4px';
+  
   // Add speaker name
   const speakerElement = document.createElement('div');
   speakerElement.className = 'transcript-speaker';
-  speakerElement.textContent = speaker;
-  entry.appendChild(speakerElement);
-  
-  // Add transcript text
-  const textElement = document.createElement('div');
-  textElement.className = 'transcript-text';
-  textElement.textContent = text;
-  entry.appendChild(textElement);
+  speakerElement.textContent = speaker === username ? `${speaker} (You)` : speaker;
+  speakerElement.style.fontWeight = 'bold';
+  speakerElement.style.color = speaker === username ? '#0277bd' : '#424242';
+  speakerElement.style.fontSize = '14px';
+  header.appendChild(speakerElement);
   
   // Add timestamp
   const timeElement = document.createElement('div');
@@ -1958,18 +2173,34 @@ function addTranscriptToPopup(speaker, text, timestamp) {
   
   // Format timestamp
   const date = new Date(timestamp);
-  const formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const formattedTime = date.toLocaleTimeString([], { 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    second: '2-digit' 
+  });
   
   timeElement.textContent = formattedTime;
-  entry.appendChild(timeElement);
+  timeElement.style.color = '#757575';
+  timeElement.style.fontSize = '12px';
+  header.appendChild(timeElement);
+  
+  entry.appendChild(header);
+  
+  // Add transcript text
+  const textElement = document.createElement('div');
+  textElement.className = 'transcript-text';
+  textElement.textContent = text;
+  textElement.style.marginTop = '4px';
+  textElement.style.lineHeight = '1.4';
+  textElement.style.fontSize = '15px';
+  textElement.style.color = '#212121';
+  entry.appendChild(textElement);
   
   // Add to popup content
   transcriptPopupContent.appendChild(entry);
   
   // Auto-scroll to the bottom
   transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
-  
-  console.log(`Added transcript to popup: ${speaker} (${formattedTime}): "${text}"`);
   
   // Limit the number of entries to prevent memory issues (keep the last 100 messages)
   const entries = transcriptPopupContent.querySelectorAll('.transcript-entry');
