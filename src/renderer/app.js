@@ -1377,7 +1377,25 @@ function addRemoteStream(peerId, stream) {
     
     // Setup transcription for audio tracks
     if (stream.getAudioTracks().length > 0) {
-      setupRemoteTranscription(peerId, stream);
+      console.log(`Remote stream has audio tracks, setting up transcription for peer ${peerId}`);
+      
+      // Make sure any audio tracks are enabled
+      stream.getAudioTracks().forEach(track => {
+        // Enable the track to ensure we can record it
+        if (!track.enabled) {
+          console.log(`Enabling audio track ${track.id} for transcription`);
+          track.enabled = true;
+        }
+        
+        console.log(`Audio track ${track.id} for peer ${peerId}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
+      });
+      
+      // Set up transcription with a short delay to ensure everything is initialized
+      setTimeout(() => {
+        setupRemoteTranscription(peerId, stream);
+      }, 1000);
+    } else {
+      console.warn(`No audio tracks found in remote stream for peer ${peerId}, cannot set up transcription`);
     }
     
     return remoteContainer;
@@ -1634,7 +1652,7 @@ function stopMediaRecording() {
 
 // Set up transcription for remote participants
 function setupRemoteTranscription(peerId, stream) {
-  console.log(`Setting up remote transcription for peer: ${peerId}`);
+  console.log(`Setting up remote transcription for peer: ${peerId} with stream:`, stream);
   
   const audioTracks = stream.getAudioTracks();
   
@@ -1643,6 +1661,11 @@ function setupRemoteTranscription(peerId, stream) {
     return;
   }
   
+  console.log(`Found ${audioTracks.length} audio tracks in remote stream from ${peerId}`);
+  audioTracks.forEach((track, i) => {
+    console.log(`Track ${i}: id=${track.id}, enabled=${track.enabled}, readyState=${track.readyState}, muted=${track.muted}`);
+  });
+  
   // Get peer username - use actual name if available, otherwise use ID-based placeholder
   const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
   console.log(`Setting up transcription for remote audio from ${peerUsername} (${peerId})`);
@@ -1650,19 +1673,40 @@ function setupRemoteTranscription(peerId, stream) {
   try {
     // Create a new MediaStream with just the audio track
     const audioStream = new MediaStream([audioTracks[0]]);
+    console.log(`Created audio-only stream for ${peerUsername} with track ${audioTracks[0].id}`);
+    
+    // Clean up any existing recorder for this peer
+    if (remoteRecorders.has(peerId)) {
+      try {
+        const oldRecorder = remoteRecorders.get(peerId);
+        if (oldRecorder && oldRecorder.state === 'recording') {
+          oldRecorder.stop();
+        }
+        console.log(`Cleaned up existing recorder for ${peerUsername}`);
+      } catch (e) {
+        console.warn(`Error cleaning up old recorder: ${e.message}`);
+      }
+    }
     
     // Create a new MediaRecorder for this remote stream
-    const remoteRecorder = new MediaRecorder(audioStream, { 
-      mimeType: 'audio/webm',
-      audioBitsPerSecond: 128000 // Use a higher bitrate for better quality
-    });
+    let options = { audioBitsPerSecond: 128000 };
+    
+    // Try to use webm format if supported
+    if (MediaRecorder.isTypeSupported('audio/webm')) {
+      options.mimeType = 'audio/webm';
+    } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+      options.mimeType = 'audio/mp4';
+    }
+    
+    console.log(`Creating MediaRecorder with options:`, options);
+    const remoteRecorder = new MediaRecorder(audioStream, options);
     const remoteChunks = [];
     
     // Handle data available event
     remoteRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
         remoteChunks.push(event.data);
-        console.log(`Remote audio chunk received from ${peerUsername}, size: ${event.data.size}`);
+        console.log(`Remote audio chunk received from ${peerUsername}, size: ${event.data.size}, chunks total: ${remoteChunks.length}`);
       } else {
         console.warn(`Empty audio chunk received from ${peerUsername}`);
       }
@@ -1670,12 +1714,15 @@ function setupRemoteTranscription(peerId, stream) {
     
     // Handle recording stop
     remoteRecorder.onstop = async () => {
+      console.log(`Remote recorder stopped for ${peerUsername}, processing ${remoteChunks.length} chunks`);
+      
       if (remoteChunks.length === 0) {
         console.log(`No audio chunks collected for ${peerUsername}, restarting recorder`);
         // Restart recording if still connected
         if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
           try {
-            remoteRecorder.start(3000); // 3s chunks for faster transcription
+            remoteRecorder.start(2000); // Use shorter chunks for faster transcription
+            console.log(`Restarted empty recorder for ${peerUsername}`);
           } catch (error) {
             console.error(`Error restarting recorder for ${peerUsername}:`, error);
           }
@@ -1684,9 +1731,13 @@ function setupRemoteTranscription(peerId, stream) {
       }
       
       try {
+        console.log(`Creating blob from ${remoteChunks.length} chunks for ${peerUsername}`);
         // Create a blob from the recorded chunks
-        const blob = new Blob(remoteChunks, { type: 'audio/webm' });
-        console.log(`Processing ${remoteChunks.length} audio chunks from ${peerUsername}, total size: ${blob.size} bytes`);
+        const blob = new Blob(remoteChunks, { type: remoteRecorder.mimeType || 'audio/webm' });
+        console.log(`Processing audio chunks from ${peerUsername}, total size: ${blob.size} bytes`);
+        
+        // Keep a copy of chunks before clearing
+        const currentChunks = [...remoteChunks];
         remoteChunks.length = 0; // Clear the array
         
         // Convert blob to array buffer
@@ -1698,7 +1749,8 @@ function setupRemoteTranscription(peerId, stream) {
           // Restart recording
           if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
             try {
-              remoteRecorder.start(3000);
+              remoteRecorder.start(2000);
+              console.log(`Restarted recorder after small data for ${peerUsername}`);
             } catch (error) {
               console.error(`Error restarting recorder for ${peerUsername}:`, error);
             }
@@ -2816,7 +2868,7 @@ async function handleSignIn(event) {
     // Format identifier if needed (ensure it has a domain)
     let formattedIdentifier = identifier;
     if (!identifier.includes('@') && !identifier.includes('.')) {
-      formattedIdentifier = `${identifier}.hapa.ai`;
+      formattedIdentifier = `${identifier}.pds.hapa.ai`;
     }
     
     // Call API to sign in
@@ -2858,13 +2910,13 @@ async function handleSignUp(event) {
   }
   
   // Format handle if needed
-  if (handle.includes('.hapa.ai')) {
+  if (handle.includes('.pds.hapa.ai')) {
     // Handle already has the domain, keep it as is
   } else if (handle.includes('.')) {
     signupError.textContent = 'Username can only contain letters, numbers, and underscores';
     return;
   } else {
-    // No domain, will be added by the backend
+    // No domain, will be added by the backend (as .pds.hapa.ai)
   }
   
   if (!email) {
