@@ -1,82 +1,72 @@
-# Hypercore P2P Chat with Video Calling and Transcription
+# Hypercore P2P Application
 
-A peer-to-peer chat application built with Electron, Hypercore, WebRTC, and OpenAI Whisper for real-time transcription.
+A P2P messaging and video calling application built with Electron, using the Hypercore Protocol for peer-to-peer communication and the AT Protocol for account management.
 
 ## Features
 
-- P2P text messaging using Hypercore
-- WebRTC video and audio calling
-- Real-time speech transcription with OpenAI Whisper
-- Transcript saving for each participant
-- Responsive UI with video controls
-- Multiple peer support
+- **Secure Authentication**: Sign up and sign in using AT Protocol (Bluesky ecosystem)
+- **P2P Video Calls**: Make video calls directly to other users without a central server
+- **Live Transcription**: All speech is transcribed in real-time using OpenAI's Whisper API
+- **P2P Chat**: Send text messages directly to other users
+- **Call Summaries**: Generate AI summaries of calls for later reference
 
-## Setup
+## Technologies
+
+- **Electron**: Cross-platform desktop application framework
+- **Hypercore Protocol**: Peer-to-peer data network
+- **AT Protocol**: Decentralized social networking protocol
+- **WebRTC**: Real-time communication for voice and video
+- **OpenAI Whisper**: Speech-to-text transcription
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js (v14 or higher)
+- npm (v7 or higher)
+
+### Installation
 
 1. Clone the repository
-2. Install dependencies:
-```bash
+```
+git clone https://github.com/yourusername/hypercore-p2p.git
+cd hypercore-p2p
+```
+
+2. Install dependencies
+```
 npm install
 ```
 
-3. Set up your OpenAI API key:
-
-You need a valid OpenAI API key to use the transcription feature. You can set it as an environment variable:
-
-```bash
-export OPENAI_API_KEY=your_openai_api_key_here
-```
-
-Or create a `.env` file in the project root with:
+3. Create a `.env` file in the root directory with your OpenAI API key:
 ```
 OPENAI_API_KEY=your_openai_api_key_here
+PDS_URL=https://pds.hapa.ai
+PDS_INVITE_CODE=your_invite_code_here
 ```
 
-## Running the Application
-
-Start the application:
-
-```bash
+4. Start the application
+```
 npm start
 ```
 
-Or with Electron directly:
+## Usage
 
-```bash
-npx electron .
-```
+1. Sign up for an account or sign in with your existing AT Protocol credentials
+2. Join a room using a room ID or create a new one
+3. Share the room ID with people you want to connect with
+4. Start video calling and chatting in real-time
+5. View live transcriptions during the call
+6. Generate a summary of the call when finished
 
-## Using the Application
+## Configuration
 
-1. Enter your username and a room ID (or use the generated one)
-2. Share the room ID with others to join the same chat
-3. Grant camera and microphone permissions when prompted
-4. Use the toggle buttons to control your video and audio
-5. Chat messages appear in the right panel
-6. Transcriptions appear below each participant's video
-7. Click the "Save Transcript" button to download all transcriptions
+You can customize the application by modifying the following settings in the Settings page:
 
-## Troubleshooting WebRTC Issues
+- **OpenAI API Key**: Update your API key for transcription
+- **Audio Detection Threshold**: Adjust sensitivity for speech detection
+- **Audio/Video Devices**: Select your preferred input and output devices
 
-If you encounter issues with WebRTC connections:
+## License
 
-1. Make sure you're using a modern browser
-2. Check that your camera and microphone permissions are granted
-3. Ensure all peers are using the same room ID
-4. Try using a simpler room ID (e.g., a short alphanumeric string)
-5. Check that you're not behind a restrictive NAT/firewall
-
-## Troubleshooting Whisper Transcription
-
-If transcription isn't working:
-
-1. Verify your OpenAI API key is set correctly
-2. Check that your microphone is working and enabled
-3. Speak clearly and at a normal volume
-4. Check the console for any error messages
-
-## Known Issues
-
-- Transcription may not work without a valid OpenAI API key
-- ICE connection failures can occur on some network configurations
-- Video quality degrades with many simultaneous connections 
+This project is licensed under the MIT License - see the LICENSE file for details.

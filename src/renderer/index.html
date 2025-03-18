@@ -76,14 +76,35 @@
             <div id="messages" class="messages"></div>
           </div>
 
-          <div class="message-input-container">
-            <input 
-              type="text" 
-              id="message-input" 
-              placeholder="Type your message..." 
-              maxlength="500"
-            >
-            <button id="send-btn">Send</button>
+        <!-- AI Stuffs Page (Placeholder) -->
+        <div id="ai-stuffs-page" class="app-page">
+          <h2>AI Stuffs</h2>
+          <p>This is a placeholder for AI features.</p>
+        </div>
+
+        <!-- Settings Page (Placeholder) -->
+        <div id="settings-page" class="app-page">
+          <h2>Settings</h2>
+          <div class="settings-content">
+            <div class="user-profile-section">
+              <h3>Your Account</h3>
+              <div id="user-did-display">DID: <span>Not available</span></div>
+              <div id="user-handle-display">Handle: <span>Not available</span></div>
+              <button id="logout-btn" class="action-btn">Sign Out</button>
+            </div>
+            
+            <div class="api-section">
+              <h3>API Settings</h3>
+              <div class="setting-item">
+                <label for="openai-api-key">OpenAI API Key:</label>
+                <input type="password" id="openai-api-key" placeholder="Enter your OpenAI API key">
+                <button id="save-api-key" class="action-btn">Save</button>
+                <div id="api-key-status" class="setting-status"></div>
+              </div>
+              <div class="setting-description">
+                Your API key is required for the transcription feature. It is stored locally and never shared.
+              </div>
+            </div>
           </div>
         </div>
       </div>

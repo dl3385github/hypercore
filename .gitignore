@@ -5,3 +5,7 @@ temp/
 storage/
 transcripts/
 summaries/
+.env
+.env.local
+.env.development
+.env.production

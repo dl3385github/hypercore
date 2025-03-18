@@ -6,9 +6,24 @@ const Hypercore = require('hypercore');
 const crypto = require('crypto');
 const fs = require('fs');
 const { OpenAI } = require('openai');
+const axios = require('axios');
+// Load environment variables
+require('dotenv').config();
 
-// OpenAI API key for Whisper
-const OPENAI_API_KEY = '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';
+// OpenAI API key from environment variable
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// PDS Configuration from environment variables
+const PDS_URL = process.env.PDS_URL || 'https://pds.hapa.ai';
+const PDS_INVITE_CODE = process.env.PDS_INVITE_CODE || 'pds-hapa-ai-2rwcw-pus4a';
+
+// Application settings from environment variables
+let MIN_AUDIO_LEVEL = parseFloat(process.env.MIN_AUDIO_LEVEL || '0.05');
+const MIN_AUDIO_DURATION = parseInt(process.env.MIN_AUDIO_DURATION || '700');
+
+// Authentication data
+let currentUser = null;
+let sessionData = null;
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -35,10 +50,6 @@ let TOPIC = null;
 let activeSwarm = null;
 let activeConnections = new Map();
 let username = '';
-
-// Threshold for transcribing audio (minimum volume level required)
-let MIN_AUDIO_LEVEL = 0.05; // Default value, will be adjustable from UI
-const MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
 
 // Error handler for uncaught exceptions
 process.on('uncaughtException', (error) => {
@@ -371,14 +382,15 @@ function setupIpcHandlers() {
         mainWindow.webContents.send('transcription-result', result);
         
         return { 
-          success: true,
-          transcription
+          success: true, 
+          transcription,
+          username 
         };
-      } catch (whisperError) {
-        console.error(`Error in Whisper API call for ${speaker}:`, whisperError);
-        return {
-          success: false,
-          error: `Whisper API error: ${whisperError.message}`
+      } catch (error) {
+        console.error(`Error in Whisper API call for ${username}:`, error);
+        return { 
+          success: false, 
+          error: error.message || 'Transcription failed'
         };
       }
     } catch (error) {
@@ -390,7 +402,73 @@ function setupIpcHandlers() {
     }
   });
 
-  // Add a handler for generating a summary
+  // Update audio threshold
+  ipcMain.handle('update-audio-threshold', (event, threshold) => {
+    try {
+      MIN_AUDIO_LEVEL = parseFloat(threshold);
+      console.log(`Updated audio threshold to ${MIN_AUDIO_LEVEL}`);
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating audio threshold:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to update threshold'
+      };
+    }
+  });
+  
+  // Update OpenAI API key
+  ipcMain.handle('update-api-key', async (event, apiKey) => {
+    try {
+      if (!apiKey || typeof apiKey !== 'string' || apiKey.trim() === '') {
+        throw new Error('Invalid API key');
+      }
+      
+      console.log('Updating OpenAI API key');
+      const result = await saveApiKey(apiKey.trim());
+      return result;
+    } catch (error) {
+      console.error('Error updating API key:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to update API key'
+      };
+    }
+  });
+  
+  // Get current OpenAI API key (masked)
+  ipcMain.handle('get-api-key', (event) => {
+    try {
+      const apiKey = process.env.OPENAI_API_KEY || '';
+      
+      // Return masked version for security
+      if (apiKey.length > 8) {
+        const masked = 'sk-' + '•'.repeat(apiKey.length - 8) + apiKey.slice(-4);
+        return { 
+          success: true, 
+          apiKey: masked
+        };
+      } else if (apiKey) {
+        return { 
+          success: true, 
+          apiKey: '•'.repeat(apiKey.length)
+        };
+      } else {
+        return { 
+          success: true, 
+          apiKey: ''
+        };
+      }
+    } catch (error) {
+      console.error('Error getting API key:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to get API key'
+      };
+    }
+  });
+  
+  // Generate call summary
   ipcMain.handle('generate-call-summary', async (event, transcriptData) => {
     try {
       if (!openai) {
@@ -442,13 +520,6 @@ function setupIpcHandlers() {
         error: error.message || 'Failed to generate summary'
       };
     }
-  });
-
-  // Handle audio threshold updates
-  ipcMain.handle('update-audio-threshold', (event, threshold) => {
-    console.log(`Updating audio threshold to ${threshold}`);
-    MIN_AUDIO_LEVEL = threshold;
-    return { success: true };
   });
 }
 
@@ -610,5 +681,96 @@ function handleConnection(conn) {
     }
   } catch (error) {
     console.error('Error handling connection:', error);
+  }
+}
+
+// Update auth state
+function updateAuthState(user) {
+  currentUser = user;
+  
+  // Set username to handle if available
+  if (user && user.handle) {
+    username = user.handle;
+  }
+  
+  // Notify renderer of auth state change
+  if (mainWindow) {
+    mainWindow.webContents.send('auth-state-changed', user);
+  }
+}
+
+// Save session to storage
+function saveSession(session) {
+  if (!session) return;
+  
+  try {
+    // Create storage directory if it doesn't exist
+    if (!fs.existsSync('./storage')) {
+      fs.mkdirSync('./storage', { recursive: true });
+    }
+    
+    // Save session to file
+    fs.writeFileSync('./storage/session.json', JSON.stringify(session), 'utf8');
+    console.log('Session saved to storage');
+  } catch (error) {
+    console.error('Error saving session to storage:', error);
+  }
+}
+
+// Generate a Hypercore ID from a DID
+function generateHypercoreIdFromDid(did) {
+  if (!did) return null;
+  
+  // Hash the DID to create a deterministic ID
+  const hash = crypto.createHash('sha256').update(did).digest('hex');
+  
+  return hash;
+}
+
+// Save OpenAI API key to .env file
+async function saveApiKey(apiKey) {
+  try {
+    console.log('Saving new OpenAI API key');
+    
+    // Read current .env content
+    let envContent = '';
+    if (fs.existsSync('.env')) {
+      envContent = fs.readFileSync('.env', 'utf8');
+    }
+    
+    // Update the API key line
+    const lines = envContent.split('\n');
+    let keyFound = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith('OPENAI_API_KEY=')) {
+        lines[i] = `OPENAI_API_KEY=${apiKey}`;
+        keyFound = true;
+        break;
+      }
+    }
+    
+    // If the key wasn't found, add it
+    if (!keyFound) {
+      lines.push(`OPENAI_API_KEY=${apiKey}`);
+    }
+    
+    // Write back to .env file
+    fs.writeFileSync('.env', lines.join('\n'), 'utf8');
+    
+    // Update the key in memory
+    process.env.OPENAI_API_KEY = apiKey;
+    
+    // Update the OpenAI client
+    openai.apiKey = apiKey;
+    
+    console.log('API key updated successfully');
+    return { success: true };
+  } catch (error) {
+    console.error('Error saving API key:', error);
+    return { 
+      success: false, 
+      error: error.message || 'Failed to save API key'
+    };
   }
 }

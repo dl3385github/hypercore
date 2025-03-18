@@ -173,6 +173,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateAudioThreshold: (threshold) => {
     logEvent('updateAudioThreshold', `New threshold: ${threshold}`);
     return ipcRenderer.invoke('update-audio-threshold', threshold);
+  },
+  
+  // Update OpenAI API key
+  updateApiKey: (apiKey) => {
+    logEvent('updateApiKey', 'API key update requested');
+    return ipcRenderer.invoke('update-api-key', apiKey);
+  },
+  
+  // Get current OpenAI API key (masked)
+  getApiKey: () => {
+    logEvent('getApiKey', 'Retrieving masked API key');
+    return ipcRenderer.invoke('get-api-key');
   }
 });
 

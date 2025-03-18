@@ -79,6 +79,17 @@ const appSettings = {
   audioThreshold: 0.05, // Default value
 };
 
+<<<<<<< HEAD
+=======
+// Current user state
+let currentUser = null;
+
+// DOM elements for API settings
+const openaiApiKeyInput = document.getElementById('openai-api-key');
+const saveApiKeyBtn = document.getElementById('save-api-key');
+const apiKeyStatus = document.getElementById('api-key-status');
+
+>>>>>>> 3a3f440 (Move API keys to .env, fix transcript display, add API key settings)
 // Initialize the app
 document.addEventListener('DOMContentLoaded', async () => {
   // Focus on username input
@@ -246,6 +257,65 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Handle app exit
   window.addEventListener('beforeunload', handleAppExit);
+<<<<<<< HEAD
+=======
+
+  // Set up authentication tabs
+  authTabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tabId = btn.getAttribute('data-tab');
+      
+      // Remove active class from all tabs
+      authTabBtns.forEach(tabBtn => tabBtn.classList.remove('active'));
+      authTabContents.forEach(content => content.classList.remove('active'));
+      
+      // Add active class to selected tab
+      btn.classList.add('active');
+      document.getElementById(`${tabId}-tab`).classList.add('active');
+    });
+  });
+  
+  // Set up signin form
+  signinBtn.addEventListener('click', handleSignIn);
+  
+  // Set up signup form
+  signupBtn.addEventListener('click', handleSignUp);
+  
+  // Set up navigation
+  navBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pageId = btn.getAttribute('data-page');
+      
+      // Remove active class from all navigation and pages
+      navBtns.forEach(navBtn => navBtn.classList.remove('active'));
+      appPages.forEach(page => page.classList.remove('active'));
+      
+      // Add active class to selected navigation and page
+      btn.classList.add('active');
+      document.getElementById(`${pageId}-page`).classList.add('active');
+    });
+  });
+  
+  // Set up logout button
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', handleSignOut);
+  }
+  
+  // Check if user is already signed in
+  checkAuthState();
+  
+  // Listen for auth state changes
+  window.electronAPI.onAuthStateChanged((user) => {
+    updateAuthState(user);
+  });
+  
+  // Add event listeners after the rest of the event listeners are set up
+  // Setup API key form
+  saveApiKeyBtn.addEventListener('click', handleSaveApiKey);
+  
+  // Initialize by loading the masked API key
+  loadApiKey();
+>>>>>>> 3a3f440 (Move API keys to .env, fix transcript display, add API key settings)
 });
 
 // Generate a random room ID if none provided
@@ -1496,14 +1566,47 @@ function setupRemoteTranscription(peerId, stream) {
 
 // Toggle transcript popup visibility
 function toggleTranscriptPopup() {
+  console.log('Toggling transcript popup');
+  
+  // If the popup is hidden and there are no entries, add a placeholder message
+  if (transcriptPopup.classList.contains('hidden') && transcriptPopupContent.childNodes.length === 0) {
+    const placeholderMessage = document.createElement('div');
+    placeholderMessage.className = 'transcript-placeholder';
+    placeholderMessage.textContent = 'Transcript will appear here as people speak...';
+    transcriptPopupContent.appendChild(placeholderMessage);
+  }
+  
+  // Toggle visibility
   transcriptPopup.classList.toggle('hidden');
+  
+  // Update button text
+  if (transcriptPopup.classList.contains('hidden')) {
+    toggleTranscriptPopupBtn.textContent = 'Show Transcript';
+  } else {
+    toggleTranscriptPopupBtn.textContent = 'Hide Transcript';
+  }
 }
 
 // Update transcription display
 function updateTranscription(speaker, text) {
   if (!text || text.trim() === '') return;
   
+  // Find transcript container for this speaker
+  let transcriptContainer = null;
   let overlayContainer = null;
+  
+  if (speaker === username) {
+    // Local user
+    transcriptContainer = document.querySelector('#local-transcript .transcript-content');
+    overlayContainer = document.getElementById('local-overlay-transcript');
+  } else {
+    // Remote user - find by peer name
+    const remoteVideo = document.querySelector(`.remote-video-container[data-username="${speaker}"]`);
+    if (remoteVideo) {
+      transcriptContainer = remoteVideo.querySelector('.transcript-content');
+      overlayContainer = remoteVideo.querySelector('.transcript-overlay');
+    }
+  }
   
   // Store transcript entry
   if (!transcripts.has(speaker)) {
@@ -1518,7 +1621,34 @@ function updateTranscription(speaker, text) {
   
   console.log(`Updating transcription for ${speaker}: "${text}"`);
   
-  // For now, don't show overlay transcripts since we're using the popup instead
+  // Add to transcript container if found
+  if (transcriptContainer) {
+    const entry = document.createElement('div');
+    entry.textContent = text;
+    transcriptContainer.appendChild(entry);
+    
+    // Auto-scroll to the bottom
+    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+    
+    console.log(`Added transcript to container for ${speaker}`);
+  } else {
+    console.warn(`Transcript container not found for ${speaker}`);
+  }
+  
+  // Show in overlay for a few seconds
+  if (overlayContainer) {
+    overlayContainer.textContent = text;
+    overlayContainer.classList.remove('hidden');
+    
+    // Hide after a few seconds
+    setTimeout(() => {
+      overlayContainer.classList.add('hidden');
+    }, 5000);
+    
+    console.log(`Added transcript to overlay for ${speaker}`);
+  } else {
+    console.warn(`Overlay container not found for ${speaker}`);
+  }
   
   // Add to transcript popup
   addTranscriptToPopup(speaker, text, timestamp);
@@ -2054,4 +2184,288 @@ function setupDataChannel(peerId, channel) {
       console.error(`Error parsing data channel message from ${peerId}:`, error);
     }
   };
+<<<<<<< HEAD
 } 
+=======
+}
+
+// Check authentication state on startup
+async function checkAuthState() {
+  try {
+    const response = await window.electronAPI.getCurrentUser();
+    
+    if (response.success && response.user) {
+      updateAuthState(response.user);
+    }
+  } catch (error) {
+    console.error('Error checking auth state:', error);
+  }
+}
+
+// Update UI based on auth state
+function updateAuthState(user) {
+  currentUser = user;
+  
+  if (user) {
+    // User is signed in, show main app
+    authScreen.classList.add('hidden');
+    mainApp.classList.remove('hidden');
+    
+    // Update user info in the settings page
+    if (userDidDisplay) {
+      userDidDisplay.innerHTML = `DID: <span>${user.did || 'Not available'}</span>`;
+    }
+    
+    if (userHandleDisplay) {
+      userHandleDisplay.innerHTML = `Handle: <span>${user.handle || 'Not available'}</span>`;
+    }
+    
+    // Show gatekeeper page for first-time users
+    // In a real app, you might check if this is the first login
+    const isFirstLogin = sessionStorage.getItem('hasLoggedInBefore') !== 'true';
+    if (isFirstLogin) {
+      // First login, show gatekeeper page
+      navBtns.forEach(btn => btn.classList.remove('active'));
+      appPages.forEach(page => page.classList.remove('active'));
+      
+      const gatekeeperBtn = document.querySelector('.nav-btn[data-page="gatekeeper"]');
+      if (gatekeeperBtn) gatekeeperBtn.classList.add('active');
+      
+      const gatekeeperPage = document.getElementById('gatekeeper-page');
+      if (gatekeeperPage) gatekeeperPage.classList.add('active');
+      
+      // Set flag in session storage
+      sessionStorage.setItem('hasLoggedInBefore', 'true');
+    } else {
+      // Not first login, show default page (video-call)
+      navBtns.forEach(btn => btn.classList.remove('active'));
+      appPages.forEach(page => page.classList.remove('active'));
+      
+      const videoCallBtn = document.querySelector('.nav-btn[data-page="video-call"]');
+      if (videoCallBtn) videoCallBtn.classList.add('active');
+      
+      const videoCallPage = document.getElementById('video-call-page');
+      if (videoCallPage) videoCallPage.classList.add('active');
+    }
+  } else {
+    // User is signed out, show auth screen
+    authScreen.classList.remove('hidden');
+    mainApp.classList.add('hidden');
+    
+    // Clear form fields and errors
+    signinIdInput.value = '';
+    signinPasswordInput.value = '';
+    signinError.textContent = '';
+    
+    signupHandleInput.value = '';
+    signupEmailInput.value = '';
+    signupPasswordInput.value = '';
+    signupPasswordConfirmInput.value = '';
+    signupError.textContent = '';
+  }
+}
+
+// Handle sign in
+async function handleSignIn(event) {
+  event.preventDefault();
+  
+  // Clear previous errors
+  signinError.textContent = '';
+  
+  // Validate inputs
+  const identifier = signinIdInput.value.trim();
+  const password = signinPasswordInput.value.trim();
+  
+  if (!identifier) {
+    signinError.textContent = 'Please enter your username or email';
+    return;
+  }
+  
+  if (!password) {
+    signinError.textContent = 'Please enter your password';
+    return;
+  }
+  
+  // Show loading state
+  signinBtn.disabled = true;
+  signinBtn.textContent = 'Signing in...';
+  
+  try {
+    // Format identifier if needed (ensure it has a domain)
+    let formattedIdentifier = identifier;
+    if (!identifier.includes('@') && !identifier.includes('.')) {
+      formattedIdentifier = `${identifier}.hapa.ai`;
+    }
+    
+    // Call API to sign in
+    const response = await window.electronAPI.signIn(formattedIdentifier, password);
+    
+    if (response.success) {
+      // Sign in successful
+      updateAuthState(response.user);
+    } else {
+      // Sign in failed
+      signinError.textContent = response.error || 'Failed to sign in';
+    }
+  } catch (error) {
+    console.error('Error signing in:', error);
+    signinError.textContent = error.message || 'An error occurred while signing in';
+  } finally {
+    // Reset button state
+    signinBtn.disabled = false;
+    signinBtn.textContent = 'Sign In';
+  }
+}
+
+// Handle sign up
+async function handleSignUp(event) {
+  event.preventDefault();
+  
+  // Clear previous errors
+  signupError.textContent = '';
+  
+  // Validate inputs
+  let handle = signupHandleInput.value.trim();
+  const email = signupEmailInput.value.trim();
+  const password = signupPasswordInput.value.trim();
+  const passwordConfirm = signupPasswordConfirmInput.value.trim();
+  
+  if (!handle) {
+    signupError.textContent = 'Please enter a username';
+    return;
+  }
+  
+  // Format handle if needed
+  if (handle.includes('.hapa.ai')) {
+    // Handle already has the domain, keep it as is
+  } else if (handle.includes('.')) {
+    signupError.textContent = 'Username can only contain letters, numbers, and underscores';
+    return;
+  } else {
+    // No domain, will be added by the backend
+  }
+  
+  if (!email) {
+    signupError.textContent = 'Please enter your email';
+    return;
+  }
+  
+  if (!isValidEmail(email)) {
+    signupError.textContent = 'Please enter a valid email address';
+    return;
+  }
+  
+  if (!password) {
+    signupError.textContent = 'Please enter a password';
+    return;
+  }
+  
+  if (password.length < 8) {
+    signupError.textContent = 'Password must be at least 8 characters';
+    return;
+  }
+  
+  if (password !== passwordConfirm) {
+    signupError.textContent = 'Passwords do not match';
+    return;
+  }
+  
+  // Show loading state
+  signupBtn.disabled = true;
+  signupBtn.textContent = 'Signing up...';
+  
+  try {
+    // Call API to sign up
+    const response = await window.electronAPI.signUp(handle, email, password);
+    
+    if (response.success) {
+      // Sign up successful
+      updateAuthState(response.user);
+    } else {
+      // Sign up failed
+      signupError.textContent = response.error || 'Failed to sign up';
+    }
+  } catch (error) {
+    console.error('Error signing up:', error);
+    signupError.textContent = error.message || 'An error occurred while signing up';
+  } finally {
+    // Reset button state
+    signupBtn.disabled = false;
+    signupBtn.textContent = 'Sign Up';
+  }
+}
+
+// Handle sign out
+async function handleSignOut() {
+  try {
+    await window.electronAPI.signOut();
+    updateAuthState(null);
+  } catch (error) {
+    console.error('Error signing out:', error);
+  }
+}
+
+// Validate email format
+function isValidEmail(email) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+// Function to load the API key (masked)
+async function loadApiKey() {
+  try {
+    const response = await window.electronAPI.getApiKey();
+    
+    if (response.success) {
+      openaiApiKeyInput.placeholder = response.apiKey || 'Enter your OpenAI API key';
+    }
+  } catch (error) {
+    console.error('Error loading API key:', error);
+  }
+}
+
+// Function to save the API key
+async function handleSaveApiKey() {
+  // Clear previous status
+  apiKeyStatus.textContent = '';
+  apiKeyStatus.className = 'setting-status';
+  
+  const apiKey = openaiApiKeyInput.value.trim();
+  
+  if (!apiKey) {
+    apiKeyStatus.textContent = 'Please enter an API key';
+    apiKeyStatus.classList.add('error');
+    return;
+  }
+  
+  try {
+    // Disable button while saving
+    saveApiKeyBtn.disabled = true;
+    saveApiKeyBtn.textContent = 'Saving...';
+    
+    const response = await window.electronAPI.updateApiKey(apiKey);
+    
+    if (response.success) {
+      apiKeyStatus.textContent = 'API key saved successfully!';
+      apiKeyStatus.classList.add('success');
+      
+      // Clear the input
+      openaiApiKeyInput.value = '';
+      
+      // Load the masked key for display
+      await loadApiKey();
+    } else {
+      apiKeyStatus.textContent = response.error || 'Failed to save API key';
+      apiKeyStatus.classList.add('error');
+    }
+  } catch (error) {
+    console.error('Error saving API key:', error);
+    apiKeyStatus.textContent = error.message || 'An error occurred while saving the API key';
+    apiKeyStatus.classList.add('error');
+  } finally {
+    // Reset button state
+    saveApiKeyBtn.disabled = false;
+    saveApiKeyBtn.textContent = 'Save';
+  }
+}
+>>>>>>> 3a3f440 (Move API keys to .env, fix transcript display, add API key settings)
