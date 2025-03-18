@@ -79,17 +79,13 @@ const appSettings = {
   audioThreshold: 0.05, // Default value
 };
 
-<<<<<<< HEAD
-=======
 // Current user state
 let currentUser = null;
-
 // DOM elements for API settings
 const openaiApiKeyInput = document.getElementById('openai-api-key');
 const saveApiKeyBtn = document.getElementById('save-api-key');
 const apiKeyStatus = document.getElementById('api-key-status');
 
->>>>>>> 3a3f440 (Move API keys to .env, fix transcript display, add API key settings)
 // Initialize the app
 document.addEventListener('DOMContentLoaded', async () => {
   // Focus on username input
