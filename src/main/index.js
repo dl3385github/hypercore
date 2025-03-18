@@ -832,7 +832,7 @@ async function createAccount(handle, email, password) {
       // Just use the handle as provided
     } else {
       // Add domain if not present
-      handle = `${handle}.hapa.ai`;
+      handle = `${handle}.pds.hapa.ai`;
     }
     
     console.log(`Creating account for ${handle} on ${PDS_URL}`);
@@ -899,7 +899,7 @@ async function createSession(identifier, password) {
   try {
     // Ensure identifier contains domain if not already present
     if (!identifier.includes('.')) {
-      identifier = `${identifier}.hapa.ai`;
+      identifier = `${identifier}.pds.hapa.ai`;
     }
     
     console.log(`Creating session for ${identifier} on ${PDS_URL}`);

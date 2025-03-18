@@ -874,27 +874,32 @@ function sendMediaStateViaDataChannel(dataChannel) {
 
 // Handle messages received via data channel
 function handleDataChannelMessage(peerId, message) {
-  try {
-    console.log(`Received data channel message from ${peerId}:`, message);
+  console.log(`Received data channel message from ${peerId}:`, message);
+  
+  if (message.type === 'media-state') {
+    // Update remote media state UI
+    updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
+  } else if (message.type === 'transcript') {
+    // Handle transcript message from peer
+    // Get the speaker from the message or use the peer's username
+    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
     
-    if (message.type === 'chat-message') {
-      addMessageToUI({
-        text: message.text,
-        from: message.from,
-        timestamp: message.timestamp,
-        isSystem: false
-      });
-    } else if (message.type === 'media-state') {
-      updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
-    } else if (message.type === 'transcript') {
-      // Handle transcript from remote peer
-      console.log(`Received transcript from ${peerId} (${message.speaker}): "${message.text}"`);
-      
-      // Update UI with the transcript
-      updateTranscription(message.speaker, message.text);
+    // Make sure we store this username for the peer if we don't have it already
+    if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
+      peerUsernames.set(peerId, speaker);
     }
-  } catch (error) {
-    console.error(`Error handling data channel message from ${peerId}:`, error);
+    
+    // Skip empty or very short transcriptions
+    if (!message.text || message.text.trim().length < 3) {
+      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
+      return;
+    }
+    
+    // Update UI with the transcript
+    updateTranscription(speaker, message.text);
+    
+    // No need to add to transcript map again since updateTranscription already does this
   }
 }
 
@@ -1544,10 +1549,13 @@ function updateLocalTranscriptUI(text) {
   // Update the local transcript container
   const transcriptContainer = document.querySelector('#local-transcript .transcript-content');
   if (transcriptContainer) {
+    // CHANGE: Clear existing entries, show only the latest
+    transcriptContainer.innerHTML = '';
+    
     // Create a new entry
     const entry = document.createElement('div');
     entry.className = 'transcript-entry';
-    entry.textContent = `You: ${text}`;
+    entry.textContent = `${text}`;
     
     // Style the entry for visibility
     entry.style.padding = '4px 8px';
@@ -1560,14 +1568,7 @@ function updateLocalTranscriptUI(text) {
     // Add to container
     transcriptContainer.appendChild(entry);
     
-    // Limit to last 5 entries
-    while (transcriptContainer.children.length > 5) {
-      transcriptContainer.removeChild(transcriptContainer.firstChild);
-    }
-    
-    // Auto-scroll
-    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
-    console.log('Updated local transcript container');
+    console.log('Updated local transcript container with latest transcript');
   } else {
     console.warn('Local transcript container not found');
   }
@@ -1710,149 +1711,146 @@ function setupRemoteTranscription(peerId, stream) {
         
         console.log(`Sending ${uint8Array.length} bytes of audio data from ${peerUsername} for transcription`);
         
-        try {
-          // Send to main process for transcription - pass the Uint8Array directly
-          const result = await window.electronAPI.transcribeAudio(uint8Array, peerUsername);
+        // Send to main process for transcription - pass the Uint8Array directly
+        const result = await window.electronAPI.transcribeAudio(uint8Array, peerUsername);
+        
+        console.log(`Transcription result for ${peerUsername}:`, result);
+        
+        if (result.success && result.transcription && result.transcription.trim().length > 0) {
+          // Log the successful transcription
+          console.log(`Remote transcription for ${peerUsername}: "${result.transcription}"`);
           
-          console.log(`Transcription result for ${peerUsername}:`, result);
+          // CRITICAL: Update UI with transcript text
+          // Force display in the UI by updating transcription with clear visual indicators
+          document.querySelectorAll(`.transcript-overlay`).forEach(overlay => {
+            console.log(`Checking overlay: ${overlay.id}`);
+          });
           
-          if (result.success && result.transcription && result.transcription.trim().length > 0) {
-            // Log the successful transcription
-            console.log(`Remote transcription for ${peerUsername}: "${result.transcription}"`);
+          // 1. First, ensure we have a valid transcript container for this peer
+          let peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+          if (!peerContainer) {
+            console.warn(`Could not find container for peer ${peerId}, looking for any container with username ${peerUsername}`);
+            // Try to find by username in participant-name
+            const containers = document.querySelectorAll('.remote-video-container');
+            for (const container of containers) {
+              const nameElement = container.querySelector('.participant-name');
+              if (nameElement && nameElement.textContent === peerUsername) {
+                peerContainer = container;
+                console.log(`Found container by username: ${peerUsername}`);
+                break;
+              }
+            }
+          }
+          
+          if (peerContainer) {
+            // 2. Make sure we have a transcript container inside
+            let transcriptContent = peerContainer.querySelector('.transcript-content');
             
-            // CRITICAL: Update UI with transcript text
-            // Find the remote peer's container
-            let peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-            if (!peerContainer) {
-              console.warn(`Could not find container for peer ${peerId}, looking for any container with username ${peerUsername}`);
-              // Try to find by username in participant-name
-              const containers = document.querySelectorAll('.remote-video-container');
-              for (const container of containers) {
-                const nameElement = container.querySelector('.participant-name');
-                if (nameElement && nameElement.textContent === peerUsername) {
-                  peerContainer = container;
-                  console.log(`Found container by username: ${peerUsername}`);
-                  break;
-                }
+            if (!transcriptContent) {
+              console.warn(`No transcript content found for ${peerUsername}, creating one`);
+              
+              // Get or create participant info section
+              let participantInfo = peerContainer.querySelector('.participant-info');
+              if (!participantInfo) {
+                participantInfo = document.createElement('div');
+                participantInfo.className = 'participant-info';
+                peerContainer.appendChild(participantInfo);
+              }
+              
+              // Create transcript container if needed
+              let transcriptContainer = participantInfo.querySelector('.transcript-container');
+              if (!transcriptContainer) {
+                transcriptContainer = document.createElement('div');
+                transcriptContainer.className = 'transcript-container';
+                participantInfo.appendChild(transcriptContainer);
+                
+                // Add title
+                const title = document.createElement('div');
+                title.className = 'transcript-title';
+                title.textContent = 'Transcript';
+                transcriptContainer.appendChild(title);
+                
+                // Add content area
+                transcriptContent = document.createElement('div');
+                transcriptContent.className = 'transcript-content';
+                transcriptContainer.appendChild(transcriptContent);
               }
             }
             
-            if (peerContainer) {
-              // Make sure we have a transcript container inside
-              let transcriptContent = peerContainer.querySelector('.transcript-content');
+            // 3. Update the transcript overlay (for immediate visual feedback)
+            const overlay = peerContainer.querySelector('.transcript-overlay');
+            if (overlay) {
+              overlay.textContent = result.transcription;
+              overlay.classList.remove('hidden');
               
-              if (!transcriptContent) {
-                console.warn(`No transcript content found for ${peerUsername}, creating one`);
-                
-                // Get or create participant info section
-                let participantInfo = peerContainer.querySelector('.participant-info');
-                if (!participantInfo) {
-                  participantInfo = document.createElement('div');
-                  participantInfo.className = 'participant-info';
-                  peerContainer.appendChild(participantInfo);
-                }
-                
-                // Create transcript container if needed
-                let transcriptContainer = participantInfo.querySelector('.transcript-container');
-                if (!transcriptContainer) {
-                  transcriptContainer = document.createElement('div');
-                  transcriptContainer.className = 'transcript-container';
-                  participantInfo.appendChild(transcriptContainer);
-                  
-                  // Add title
-                  const title = document.createElement('div');
-                  title.className = 'transcript-title';
-                  title.textContent = 'Transcript';
-                  transcriptContainer.appendChild(title);
-                  
-                  // Add content area
-                  transcriptContent = document.createElement('div');
-                  transcriptContent.className = 'transcript-content';
-                  transcriptContainer.appendChild(transcriptContent);
-                }
-              }
+              // Force visible styling
+              overlay.style.display = 'block';
+              overlay.style.position = 'absolute';
+              overlay.style.bottom = '10px';
+              overlay.style.left = '10px';
+              overlay.style.right = '10px';
+              overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+              overlay.style.color = 'white';
+              overlay.style.padding = '8px';
+              overlay.style.borderRadius = '4px';
+              overlay.style.zIndex = '5';
               
-              // Update the transcript overlay
-              const overlay = peerContainer.querySelector('.transcript-overlay');
-              if (overlay) {
-                overlay.textContent = result.transcription;
-                overlay.classList.remove('hidden');
-                
-                // Force visible styling
-                overlay.style.display = 'block';
-                overlay.style.position = 'absolute';
-                overlay.style.bottom = '10px';
-                overlay.style.left = '10px';
-                overlay.style.right = '10px';
-                overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-                overlay.style.color = 'white';
-                overlay.style.padding = '8px';
-                overlay.style.borderRadius = '4px';
-                overlay.style.zIndex = '5';
-                
-                // Hide after a few seconds
-                setTimeout(() => {
-                  overlay.classList.add('hidden');
-                  overlay.style.display = 'none';
-                }, 5000);
-              } else {
-                console.warn(`No overlay found in peer container for ${peerUsername}`);
-              }
-              
-              // Update the transcript content area - SHOW ONLY LATEST TRANSCRIPT
-              if (transcriptContent) {
-                // Clear the existing content
-                transcriptContent.innerHTML = '';
-                
-                // Create a new entry
-                const entry = document.createElement('div');
-                entry.className = 'transcript-entry';
-                entry.textContent = result.transcription;
-                
-                // Style the entry for visibility
-                entry.style.padding = '4px 8px';
-                entry.style.margin = '4px 0';
-                entry.style.backgroundColor = '#f0f0f0';
-                entry.style.borderRadius = '4px';
-                entry.style.border = '1px solid #ddd';
-                entry.style.fontWeight = 'normal';
-                
-                transcriptContent.appendChild(entry);
-                
-                // Auto-scroll
-                transcriptContent.scrollTop = transcriptContent.scrollHeight;
-                console.log(`Added transcript to UI for ${peerUsername}: "${result.transcription}"`);
-              } else {
-                console.warn(`Still couldn't find transcript content for ${peerUsername}`);
-              }
+              // Hide after a few seconds
+              setTimeout(() => {
+                overlay.classList.add('hidden');
+                overlay.style.display = 'none';
+              }, 5000);
             } else {
-              console.warn(`Could not find video container for peer ${peerUsername} (${peerId})`);
+              console.warn(`No overlay found in peer container for ${peerUsername}`);
             }
             
-            // Also update the global transcript storage and popup
-            updateTranscription(peerUsername, result.transcription);
-            
-            // Share transcript with other peers via data channel
-            for (const [otherPeerId, dataChannel] of dataChannels.entries()) {
-              if (dataChannel && dataChannel.readyState === 'open') {
-                const transcriptMessage = {
-                  type: 'transcript',
-                  speaker: peerUsername,
-                  text: result.transcription,
-                  timestamp: new Date().toISOString()
-                };
-                dataChannel.send(JSON.stringify(transcriptMessage));
-              }
+            // 4. Update the transcript content area
+            if (transcriptContent) {
+              // CHANGE: Clear all existing entries to show only the latest
+              transcriptContent.innerHTML = '';
+              
+              const entry = document.createElement('div');
+              entry.className = 'transcript-entry';
+              entry.textContent = `${result.transcription}`;
+              
+              // Style the entry for visibility
+              entry.style.padding = '4px 8px';
+              entry.style.margin = '4px 0';
+              entry.style.backgroundColor = '#f0f0f0';
+              entry.style.borderRadius = '4px';
+              entry.style.border = '1px solid #ddd';
+              entry.style.fontWeight = 'normal';
+              
+              transcriptContent.appendChild(entry);
+              
+              console.log(`Updated transcript display for ${peerUsername} with latest: "${result.transcription}"`);
+            } else {
+              console.warn(`Still couldn't find transcript content for ${peerUsername}`);
             }
           } else {
-            console.log(`Empty or failed transcription for ${peerUsername}:`, result);
+            console.warn(`Could not find video container for peer ${peerUsername} (${peerId})`);
           }
-        } catch (error) {
-          console.error(`Error sending audio for transcription from ${peerUsername}:`, error);
-          // Don't rethrow - just log and continue
+          
+          // Also update the global transcript storage and popup
+          updateTranscription(peerUsername, result.transcription);
+          
+          // Share transcript with other peers via data channel
+          for (const [otherPeerId, dataChannel] of dataChannels.entries()) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+              const transcriptMessage = {
+                type: 'transcript',
+                speaker: peerUsername,
+                text: result.transcription,
+                timestamp: new Date().toISOString()
+              };
+              dataChannel.send(JSON.stringify(transcriptMessage));
+            }
+          }
+        } else {
+          console.log(`Empty or failed transcription for ${peerUsername}:`, result);
         }
       } catch (error) {
-        console.error(`Error processing audio from ${peerUsername}:`, error);
+        console.error(`Error transcribing remote audio from ${peerUsername}:`, error);
       } finally {
         // Restart recording if still connected
         if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
@@ -1994,6 +1992,9 @@ function updateTranscription(speaker, text) {
   
   console.log(`Updating transcription for ${speaker}: "${text}"`);
   
+  // Get current username safely
+  const currentUsername = usernameInput ? usernameInput.value.trim() : 'You';
+  
   // Store transcript entry in memory
   if (!transcripts.has(speaker)) {
     transcripts.set(speaker, []);
@@ -2006,7 +2007,7 @@ function updateTranscription(speaker, text) {
   });
   
   // Find the appropriate container for this speaker
-  const isSelf = speaker === (username || usernameInput.value.trim());
+  const isSelf = speaker === currentUsername;
   let transcriptContainer = null;
   
   if (isSelf) {
@@ -2095,28 +2096,25 @@ function updateTranscription(speaker, text) {
   if (transcriptContainer) {
     console.log(`Updating transcript container for ${speaker}`);
     
-    // IMPORTANT: Only show the most recent transcript
-    // Clear existing content first
+    // CHANGE: Instead of appending, replace the content with just the latest entry
+    // Clear all existing entries
     transcriptContainer.innerHTML = '';
     
-    // Create a new entry for the most recent transcript
+    // Create a new entry for the latest transcript only
     const entry = document.createElement('div');
     entry.className = 'transcript-entry';
     entry.textContent = text;
     
     // Style the entry to make it more visible
     entry.style.padding = '4px 8px';
-    entry.style.margin = '4px 0';
-    entry.style.backgroundColor = isSelf ? '#e3f2fd' : '#f0f0f0';
+    entry.style.marginBottom = '4px';
+    entry.style.backgroundColor = '#f0f0f0';
     entry.style.borderRadius = '4px';
-    entry.style.border = isSelf ? '1px solid #bbdefb' : '1px solid #ddd';
-    entry.style.fontWeight = 'normal';
     
+    // Add just this single entry
     transcriptContainer.appendChild(entry);
     
-    // Auto-scroll
-    transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
-    console.log(`Updated transcript container for ${speaker} with: "${text}"`);
+    console.log(`Updated transcript container for ${speaker} with latest: "${text}"`);
   } else {
     console.warn(`Could not find transcript container for ${speaker}`);
   }
@@ -2817,12 +2815,8 @@ async function handleSignIn(event) {
   try {
     // Format identifier if needed (ensure it has a domain)
     let formattedIdentifier = identifier;
-    
-    // If it's not an email (no @) and doesn't already have a domain
     if (!identifier.includes('@') && !identifier.includes('.')) {
-      // Automatically append the pds.hapa.ai domain
-      formattedIdentifier = `${identifier}.pds.hapa.ai`;
-      console.log(`Formatted identifier: ${formattedIdentifier}`);
+      formattedIdentifier = `${identifier}.hapa.ai`;
     }
     
     // Call API to sign in
@@ -2863,17 +2857,14 @@ async function handleSignUp(event) {
     return;
   }
   
-  // Format handle - remove any existing domain as server will append .pds.hapa.ai
-  if (handle.includes('.')) {
-    // If it's already a fully qualified domain
-    if (handle.endsWith('.pds.hapa.ai')) {
-      // Strip off the domain for server processing
-      handle = handle.replace('.pds.hapa.ai', '');
-    } else {
-      // Invalid domain format
-      signupError.textContent = 'Username can only contain letters, numbers, and underscores (no periods or special characters)';
-      return;
-    }
+  // Format handle if needed
+  if (handle.includes('.hapa.ai')) {
+    // Handle already has the domain, keep it as is
+  } else if (handle.includes('.')) {
+    signupError.textContent = 'Username can only contain letters, numbers, and underscores';
+    return;
+  } else {
+    // No domain, will be added by the backend
   }
   
   if (!email) {
@@ -2906,14 +2897,12 @@ async function handleSignUp(event) {
   signupBtn.textContent = 'Signing up...';
   
   try {
-    // Call API to sign up - server will append .pds.hapa.ai
-    console.log(`Signing up with handle: ${handle} (server will append .pds.hapa.ai)`);
+    // Call API to sign up
     const response = await window.electronAPI.signUp(handle, email, password);
     
     if (response.success) {
       // Sign up successful
       updateAuthState(response.user);
-      addSystemMessage(`Welcome to Hapa.ai, ${response.user.handle}!`);
     } else {
       // Sign up failed
       signupError.textContent = response.error || 'Failed to sign up';
