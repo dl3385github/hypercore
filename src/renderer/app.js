@@ -1664,6 +1664,12 @@ function setupRemoteTranscription(peerId, stream) {
   console.log(`Found ${audioTracks.length} audio tracks in remote stream from ${peerId}`);
   audioTracks.forEach((track, i) => {
     console.log(`Track ${i}: id=${track.id}, enabled=${track.enabled}, readyState=${track.readyState}, muted=${track.muted}`);
+    
+    // Force enable the track if it's not already enabled
+    if (!track.enabled) {
+      console.log(`Enabling disabled audio track ${track.id}`);
+      track.enabled = true;
+    }
   });
   
   // Get peer username - use actual name if available, otherwise use ID-based placeholder
@@ -1691,7 +1697,7 @@ function setupRemoteTranscription(peerId, stream) {
     // Create a new MediaRecorder for this remote stream
     let options = { audioBitsPerSecond: 128000 };
     
-    // Try to use webm format if supported
+    // Try to use supported format with fallbacks
     if (MediaRecorder.isTypeSupported('audio/webm')) {
       options.mimeType = 'audio/webm';
     } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
@@ -1700,13 +1706,15 @@ function setupRemoteTranscription(peerId, stream) {
     
     console.log(`Creating MediaRecorder with options:`, options);
     const remoteRecorder = new MediaRecorder(audioStream, options);
+    
+    // Create a dedicated array for this recorder's chunks
     const remoteChunks = [];
     
     // Handle data available event
     remoteRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
         remoteChunks.push(event.data);
-        console.log(`Remote audio chunk received from ${peerUsername}, size: ${event.data.size}, chunks total: ${remoteChunks.length}`);
+        console.log(`Remote audio chunk received from ${peerUsername}, size: ${event.data.size} bytes, chunks total: ${remoteChunks.length}`);
       } else {
         console.warn(`Empty audio chunk received from ${peerUsername}`);
       }
@@ -1736,9 +1744,10 @@ function setupRemoteTranscription(peerId, stream) {
         const blob = new Blob(remoteChunks, { type: remoteRecorder.mimeType || 'audio/webm' });
         console.log(`Processing audio chunks from ${peerUsername}, total size: ${blob.size} bytes`);
         
-        // Keep a copy of chunks before clearing
-        const currentChunks = [...remoteChunks];
-        remoteChunks.length = 0; // Clear the array
+        // Clear the chunks array now that we've created the blob
+        while (remoteChunks.length > 0) {
+          remoteChunks.pop();
+        }
         
         // Convert blob to array buffer
         const arrayBuffer = await blob.arrayBuffer();
@@ -1763,185 +1772,52 @@ function setupRemoteTranscription(peerId, stream) {
         
         console.log(`Sending ${uint8Array.length} bytes of audio data from ${peerUsername} for transcription`);
         
-        // Send to main process for transcription - pass the Uint8Array directly
-        const result = await window.electronAPI.transcribeAudio(uint8Array, peerUsername);
-        
-        console.log(`Transcription result for ${peerUsername}:`, result);
-        
-        if (result.success && result.transcription && result.transcription.trim().length > 0) {
-          // Log the successful transcription
-          console.log(`Remote transcription for ${peerUsername}: "${result.transcription}"`);
+        // Send to main process for transcription
+        try {
+          const result = await window.electronAPI.transcribeAudio(uint8Array, peerUsername);
           
-          // CRITICAL: Update UI with transcript text
-          // Force display in the UI by updating transcription with clear visual indicators
-          document.querySelectorAll(`.transcript-overlay`).forEach(overlay => {
-            console.log(`Checking overlay: ${overlay.id}`);
-          });
+          console.log(`Transcription result for ${peerUsername}:`, result);
           
-          // 1. First, ensure we have a valid transcript container for this peer
-          let peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-          if (!peerContainer) {
-            console.warn(`Could not find container for peer ${peerId}, looking for any container with username ${peerUsername}`);
-            // Try to find by username in participant-name
-            const containers = document.querySelectorAll('.remote-video-container');
-            for (const container of containers) {
-              const nameElement = container.querySelector('.participant-name');
-              if (nameElement && nameElement.textContent === peerUsername) {
-                peerContainer = container;
-                console.log(`Found container by username: ${peerUsername}`);
-                break;
-              }
-            }
-          }
-          
-          if (peerContainer) {
-            // 2. Make sure we have a transcript container inside
-            let transcriptContent = peerContainer.querySelector('.transcript-content');
+          if (result.success && result.transcription && result.transcription.trim().length > 0) {
+            // Log the successful transcription
+            console.log(`Remote transcription for ${peerUsername}: "${result.transcription}"`);
             
-            if (!transcriptContent) {
-              console.warn(`No transcript content found for ${peerUsername}, creating one`);
-              
-              // Get or create participant info section
-              let participantInfo = peerContainer.querySelector('.participant-info');
-              if (!participantInfo) {
-                participantInfo = document.createElement('div');
-                participantInfo.className = 'participant-info';
-                peerContainer.appendChild(participantInfo);
-              }
-              
-              // Create transcript container if needed
-              let transcriptContainer = participantInfo.querySelector('.transcript-container');
-              if (!transcriptContainer) {
-                transcriptContainer = document.createElement('div');
-                transcriptContainer.className = 'transcript-container';
-                participantInfo.appendChild(transcriptContainer);
-                
-                // Add title
-                const title = document.createElement('div');
-                title.className = 'transcript-title';
-                title.textContent = 'Transcript';
-                transcriptContainer.appendChild(title);
-                
-                // Add content area
-                transcriptContent = document.createElement('div');
-                transcriptContent.className = 'transcript-content';
-                transcriptContainer.appendChild(transcriptContent);
-              }
-            }
-            
-            // 3. Update the transcript overlay (for immediate visual feedback)
-            const overlay = peerContainer.querySelector('.transcript-overlay');
-            if (overlay) {
-              overlay.textContent = result.transcription;
-              overlay.classList.remove('hidden');
-              
-              // Force visible styling
-              overlay.style.display = 'block';
-              overlay.style.position = 'absolute';
-              overlay.style.bottom = '10px';
-              overlay.style.left = '10px';
-              overlay.style.right = '10px';
-              overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-              overlay.style.color = 'white';
-              overlay.style.padding = '8px';
-              overlay.style.borderRadius = '4px';
-              overlay.style.zIndex = '5';
-              
-              // Hide after a few seconds
-              setTimeout(() => {
-                overlay.classList.add('hidden');
-                overlay.style.display = 'none';
-              }, 5000);
-            } else {
-              console.warn(`No overlay found in peer container for ${peerUsername}`);
-            }
-            
-            // 4. Update the transcript content area
-            if (transcriptContent) {
-              // CHANGE: Clear all existing entries to show only the latest
-              transcriptContent.innerHTML = '';
-              
-              const entry = document.createElement('div');
-              entry.className = 'transcript-entry';
-              entry.textContent = `${result.transcription}`;
-              
-              // Style the entry for visibility
-              entry.style.padding = '4px 8px';
-              entry.style.margin = '4px 0';
-              entry.style.backgroundColor = '#f0f0f0';
-              entry.style.borderRadius = '4px';
-              entry.style.border = '1px solid #ddd';
-              entry.style.fontWeight = 'normal';
-              
-              transcriptContent.appendChild(entry);
-              
-              console.log(`Updated transcript display for ${peerUsername} with latest: "${result.transcription}"`);
-            } else {
-              console.warn(`Still couldn't find transcript content for ${peerUsername}`);
-            }
+            // Update UI with transcript text
+            updateTranscription(peerUsername, result.transcription);
+          } else if (result.error) {
+            console.warn(`Transcription failed for ${peerUsername}: ${result.error}`);
           } else {
-            console.warn(`Could not find video container for peer ${peerUsername} (${peerId})`);
+            console.warn(`Empty transcription result for ${peerUsername}`);
           }
-          
-          // Also update the global transcript storage and popup
-          updateTranscription(peerUsername, result.transcription);
-          
-          // Share transcript with other peers via data channel
-          for (const [otherPeerId, dataChannel] of dataChannels.entries()) {
-            if (dataChannel && dataChannel.readyState === 'open') {
-              const transcriptMessage = {
-                type: 'transcript',
-                speaker: peerUsername,
-                text: result.transcription,
-                timestamp: new Date().toISOString()
-              };
-              dataChannel.send(JSON.stringify(transcriptMessage));
-            }
-          }
-        } else {
-          console.log(`Empty or failed transcription for ${peerUsername}:`, result);
+        } catch (error) {
+          console.error(`Error calling transcribeAudio for ${peerUsername}:`, error);
         }
       } catch (error) {
-        console.error(`Error transcribing remote audio from ${peerUsername}:`, error);
+        console.error(`Error processing audio data for ${peerUsername}:`, error);
       } finally {
-        // Restart recording if still connected
+        // Always restart the recorder if we're still connected
         if (peerConnections.has(peerId) && remoteRecorder.state !== 'recording') {
           try {
-            remoteRecorder.start(3000); // 3s chunks for faster transcription
+            remoteRecorder.start(2000);
+            console.log(`Restarted recorder for ${peerUsername} after processing`);
           } catch (error) {
             console.error(`Error restarting recorder for ${peerUsername}:`, error);
-            
-            // Try to recreate the recorder if it's in a failed state
-            if (remoteRecorder.state === 'inactive' && peerConnections.has(peerId)) {
-              console.log(`Attempting to recreate recorder for ${peerUsername}`);
-              setupRemoteTranscription(peerId, stream);
-              return;
-            }
           }
         }
       }
     };
     
-    // Handle recorder errors
-    remoteRecorder.onerror = (event) => {
-      console.error(`MediaRecorder error for ${peerUsername}:`, event.error);
-      
-      // Try to recreate the recorder if there's an error
-      if (peerConnections.has(peerId)) {
-        console.log(`Recreating recorder for ${peerUsername} after error`);
-        setupRemoteTranscription(peerId, stream);
-      }
-    };
-    
-    // Store the recorder for later cleanup
+    // Store the recorder in the map
     remoteRecorders.set(peerId, remoteRecorder);
     
     // Start recording
-    remoteRecorder.start(3000); // 3s chunks for faster transcription
+    remoteRecorder.start(2000); // Use shorter chunks (2 seconds) for more responsive transcription
+    console.log(`Started recording for ${peerUsername}`);
     
-    console.log(`Started remote transcription for ${peerUsername} (${peerId})`);
+    return remoteRecorder;
   } catch (error) {
-    console.error(`Error setting up remote transcription for ${peerUsername} (${peerId}):`, error);
+    console.error(`Error setting up remote transcription for ${peerUsername}:`, error);
+    return null;
   }
 }
 
@@ -2044,8 +1920,8 @@ function updateTranscription(speaker, text) {
   
   console.log(`Updating transcription for ${speaker}: "${text}"`);
   
-  // Get current username safely
-  const currentUsername = usernameInput ? usernameInput.value.trim() : 'You';
+  // Get current username from the currentUser object
+  const currentUsername = currentUser ? currentUser.handle : 'You';
   
   // Store transcript entry in memory
   if (!transcripts.has(speaker)) {
@@ -2184,6 +2060,9 @@ function updateTranscription(speaker, text) {
 function addTranscriptToPopup(speaker, text, timestamp) {
   console.log(`Adding transcript to popup: ${speaker}: "${text}"`);
   
+  // Get the current user's handle to determine if this is from the local user
+  const currentUsername = currentUser ? currentUser.handle : 'You';
+  
   // Create transcript entry
   const entry = document.createElement('div');
   entry.className = 'transcript-entry';
@@ -2194,9 +2073,9 @@ function addTranscriptToPopup(speaker, text, timestamp) {
   entry.style.marginBottom = '12px';
   entry.style.padding = '8px 12px';
   entry.style.borderRadius = '8px';
-  entry.style.backgroundColor = speaker === username ? '#e3f2fd' : '#f5f5f5';
+  entry.style.backgroundColor = speaker === currentUsername ? '#e3f2fd' : '#f5f5f5';
   entry.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
-  entry.style.borderLeft = speaker === username ? '4px solid #2196f3' : '4px solid #9e9e9e';
+  entry.style.borderLeft = speaker === currentUsername ? '4px solid #2196f3' : '4px solid #9e9e9e';
   
   // Add header row with speaker and timestamp
   const header = document.createElement('div');
@@ -2208,9 +2087,9 @@ function addTranscriptToPopup(speaker, text, timestamp) {
   // Add speaker name
   const speakerElement = document.createElement('div');
   speakerElement.className = 'transcript-speaker';
-  speakerElement.textContent = speaker === username ? `${speaker} (You)` : speaker;
+  speakerElement.textContent = speaker === currentUsername ? `${speaker} (You)` : speaker;
   speakerElement.style.fontWeight = 'bold';
-  speakerElement.style.color = speaker === username ? '#0277bd' : '#424242';
+  speakerElement.style.color = speaker === currentUsername ? '#0277bd' : '#424242';
   speakerElement.style.fontSize = '14px';
   header.appendChild(speakerElement);
   
@@ -2249,12 +2128,10 @@ function addTranscriptToPopup(speaker, text, timestamp) {
   // Auto-scroll to the bottom
   transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
   
-  // Limit the number of entries to prevent memory issues (keep the last 100 messages)
-  const entries = transcriptPopupContent.querySelectorAll('.transcript-entry');
-  if (entries.length > 100) {
-    for (let i = 0; i < entries.length - 100; i++) {
-      transcriptPopupContent.removeChild(entries[i]);
-    }
+  // Limit the number of entries to avoid memory issues
+  const maxEntries = 100;
+  while (transcriptPopupContent.children.length > maxEntries) {
+    transcriptPopupContent.removeChild(transcriptPopupContent.firstChild);
   }
 }
 
