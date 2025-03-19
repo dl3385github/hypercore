@@ -9,9 +9,9 @@ const { OpenAI } = require('openai');
 const axios = require('axios');
 require('dotenv').config();
 
-// Configuration from environment variables
-const PDS_URL = process.env.PDS_URL || 'https://pds.hapa.ai';
-const PDS_INVITE_CODE = process.env.PDS_INVITE_CODE || '';
+// Hard-coded PDS configuration
+const PDS_URL = 'https://pds.hapa.ai'; // .pds.hapa.ai domain for PDS service
+const PDS_INVITE_CODE = 'pds-hapa-ai-6tdtr-bgkw2'; // Hard-coded invite code
 
 // Application data
 let currentUser = null;
