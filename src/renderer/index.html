@@ -101,6 +101,7 @@
               <div class="connection-info">
                 <span class="room-display">Room: <span id="current-room">default</span></span>
                 <span class="connection-status"><span id="connection-count">0</span> peers connected</span>
+                <button id="record-video-btn" class="action-btn">Record Video</button>
                 <button id="save-transcript-btn" class="action-btn">Save Transcript</button>
                 <button id="toggle-transcript-popup-btn" class="action-btn">Show Transcript</button>
                 <button id="summarize-btn" class="action-btn">Generate Summary</button>
@@ -120,6 +121,9 @@
                         </button>
                         <button id="toggle-audio" class="control-btn">
                           <span class="icon">🎤</span>
+                        </button>
+                        <button id="share-screen" class="control-btn">
+                          <span class="icon">🖥️</span>
                         </button>
                       </div>
                       <div class="transcript-overlay hidden" id="local-overlay-transcript"></div>
@@ -207,6 +211,34 @@
       </div>
     </div>
     
+    <!-- Screen Share Source Selection Dialog -->
+    <div id="screen-share-dialog" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Select Screen to Share</h2>
+          <button id="close-screen-dialog" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="screen-share-sources" class="screen-sources-grid">
+            <!-- Sources will be populated here -->
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Screen Share Fullscreen Dialog -->
+    <div id="fullscreen-dialog" class="modal hidden">
+      <div class="modal-content fullscreen-content">
+        <div class="modal-header">
+          <h2 id="fullscreen-title">Shared Screen</h2>
+          <button id="close-fullscreen-dialog" class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body fullscreen-body">
+          <video id="fullscreen-video" autoplay playsinline></video>
+        </div>
+      </div>
+    </div>
+
     <!-- Transcript Popup -->
     <div id="transcript-popup" class="transcript-popup hidden">
       <div class="transcript-popup-header">

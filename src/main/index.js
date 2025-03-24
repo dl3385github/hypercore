@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron');
 const path = require('path');
 const Hyperswarm = require('hyperswarm');
 const b4a = require('b4a');
@@ -478,14 +478,14 @@ function setupIpcHandlers() {
       const timestamp = Date.now();
       const filename = `./temp/audio_${timestamp}_${Math.floor(Math.random() * 1000)}.wav`;
       
-      console.log(`Calling Whisper API with audio file: ${filename}`);
+      console.log(`Processing audio file for transcription: ${filename}`);
       
       // Convert buffer to Uint8Array and write to file
       const uint8Array = Uint8Array.from(audioBuffer);
       fs.writeFileSync(filename, Buffer.from(uint8Array));
       
-      // Call OpenAI's Whisper API
-      console.log(`Sending audio file to OpenAI Whisper: ${filename}`);
+      // Call OpenAI's transcription API
+      console.log(`Sending audio file to OpenAI for transcription: ${filename}`);
       const transcription = await transcribeAudio(filename);
       
       console.log(`Transcription received: ${transcription}`);
@@ -506,7 +506,7 @@ function setupIpcHandlers() {
         timestamp 
       };
     } catch (error) {
-      console.error(`Error in Whisper API call for ${username}:`, error);
+      console.error(`Error in transcription API call for ${username}:`, error);
       return { 
         success: false, 
         error: error.message || 'Transcription failed'
@@ -626,9 +626,43 @@ function setupIpcHandlers() {
       };
     }
   });
+
+  // Get display media sources for screen sharing
+  ipcMain.handle('get-screen-sources', async () => {
+    try {
+      console.log('Getting screen sources for sharing');
+      const sources = await desktopCapturer.getSources({ 
+        types: ['window', 'screen'],
+        thumbnailSize: { width: 320, height: 180 }
+      });
+      
+      // Convert sources to a format that can be sent via IPC
+      // (remove native Image objects and convert to base64)
+      const serializedSources = sources.map(source => {
+        return {
+          id: source.id,
+          name: source.name,
+          display_id: source.display_id,
+          appIcon: source.appIcon ? source.appIcon.toDataURL() : null,
+          thumbnail: source.thumbnail.toDataURL()
+        };
+      });
+      
+      return { 
+        success: true, 
+        sources: serializedSources 
+      };
+    } catch (error) {
+      console.error('Error getting screen sources:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to get screen sources' 
+      };
+    }
+  });
 }
 
-// Transcribe audio using OpenAI Whisper
+// Transcribe audio using OpenAI
 async function transcribeAudio(filePath) {
   try {
     // Check if OpenAI client is initialized
@@ -638,11 +672,11 @@ async function transcribeAudio(filePath) {
     
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(filePath),
-      model: "whisper-1",
+      model: "whisper-1",  // Using whisper-1 since gpt-4o-transcribe requires different API format
       language: "en",
     });
     
-    console.log(`Whisper API returned transcription: "${transcription.text}"`);
+    console.log(`OpenAI transcription returned: "${transcription.text}"`);
     
     if (!transcription.text || transcription.text.trim() === '') {
       console.log(`Transcription ignored (too short): ${transcription.text}`);
@@ -657,7 +691,7 @@ async function transcribeAudio(filePath) {
     console.log(`Valid transcription: "${transcription.text}"`);
     return transcription.text;
   } catch (error) {
-    console.error('Error in Whisper API call:', error);
+    console.error('Error in OpenAI transcription API call:', error);
     throw error;
   }
 }

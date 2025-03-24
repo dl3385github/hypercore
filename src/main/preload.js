@@ -62,7 +62,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('get-media-stream', config);
   },
   
-  // Transcribe audio
+  //  audio
   transcribeAudio: (audioBuffer, username) => {
     try {
       const bufferSize = audioBuffer.byteLength || audioBuffer.length || 'unknown';
@@ -219,6 +219,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateOpenAIApiKey: (apiKey) => {
     logEvent('updateOpenAIApiKey', 'Updating OpenAI API key');
     return ipcRenderer.invoke('update-openai-api-key', apiKey);
+  },
+  
+  // Screen sharing functions
+  getScreenSources: () => {
+    logEvent('getScreenSources', 'Requesting available screen sharing sources');
+    return ipcRenderer.invoke('get-screen-sources');
   }
 });
 
