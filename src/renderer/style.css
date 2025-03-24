@@ -517,14 +517,19 @@ body {
 }
 
 .remote-videos {
-  display: contents; /* This makes the children act as direct children of the parent grid */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  padding: 20px;
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
 }
 
 .video-wrapper {
   position: relative;
   width: 100%;
-  padding-top: 56.25%; /* 16:9 aspect ratio */
-  overflow: hidden;
+  height: 100%;
+  background-color: #000;
 }
 
 .video-wrapper video {
@@ -1042,12 +1047,16 @@ body {
   grid-column: span 2;
   grid-row: span 2;
   background-color: #000;
+  margin-bottom: 20px;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .screen-share-video {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  background-color: #000;
 }
 
 .screen-share-info {
@@ -1062,6 +1071,7 @@ body {
   align-items: center;
   gap: 8px;
   font-size: 14px;
+  z-index: 10;
 }
 
 .screen-share-icon {
@@ -1073,6 +1083,7 @@ body {
   width: 95%;
   height: 90vh;
   max-width: none;
+  background-color: #000;
 }
 
 .fullscreen-body {
@@ -1106,9 +1117,48 @@ body {
   align-items: center;
   font-size: 18px;
   transition: all 0.2s;
-  z-index: 5;
+  z-index: 10;
 }
 
 .fullscreen-btn:hover {
   background-color: white;
+}
+
+/* Remote Videos Grid */
+.remote-videos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  padding: 20px;
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+}
+
+/* Video Item */
+.video-item {
+  position: relative;
+  background-color: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 16/9;
+}
+
+.video-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background-color: #000;
+}
+
+/* Ensure screen share takes precedence */
+.screen-share-container {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  margin-bottom: 20px;
+  height: 400px;
+}
+
+/* Regular video containers */
+.remote-video-container {
+  height: 300px;
 } 

@@ -1385,187 +1385,86 @@ async function processIceCandidate(peerId, connection, candidate) {
 // Add remote stream to video grid
 function addRemoteStream(peerId, stream) {
   try {
-    console.log(`Adding remote stream for peer ${peerId}`);
+    console.log(`Adding remote stream from peer ${peerId}`);
     
-    // Create video container if it doesn't exist
-    let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-    
-    if (!remoteContainer) {
-      console.log(`Creating new remote container for peer ${peerId}`);
-      
-      // Get the peer's username
-      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-      
-      // Create a new container for this peer
-      remoteContainer = document.createElement('div');
-      remoteContainer.className = 'remote-video-container';
-      remoteContainer.setAttribute('data-peer-id', peerId);
-      
-      // Create video wrapper for aspect ratio
-      const videoWrapper = document.createElement('div');
-      videoWrapper.className = 'video-wrapper';
-      remoteContainer.appendChild(videoWrapper);
-      
-      // Add video element
-      const remoteVideo = document.createElement('video');
-      remoteVideo.className = 'remote-video';
-      remoteVideo.autoplay = true;
-      remoteVideo.playsInline = true;
-      videoWrapper.appendChild(remoteVideo);
-      
-      // Add transcript overlay container inside video wrapper
-      const transcriptOverlay = document.createElement('div');
-      transcriptOverlay.className = 'transcript-overlay hidden';
-      transcriptOverlay.id = `transcript-overlay-${peerId}`;
-      videoWrapper.appendChild(transcriptOverlay);
-      
-      // Add participant info section
-      const participantInfo = document.createElement('div');
-      participantInfo.className = 'participant-info';
-      remoteContainer.appendChild(participantInfo);
-      
-      // Add participant name
-      const nameElement = document.createElement('div');
-      nameElement.className = 'participant-name';
-      nameElement.textContent = peerName;
-      participantInfo.appendChild(nameElement);
-      
-      // Add transcript container
-      const transcriptContainer = document.createElement('div');
-      transcriptContainer.className = 'transcript-container';
-      participantInfo.appendChild(transcriptContainer);
-      
-      // Add transcript title
-      const transcriptTitle = document.createElement('div');
-      transcriptTitle.className = 'transcript-title';
-      transcriptTitle.textContent = 'Transcript';
-      transcriptContainer.appendChild(transcriptTitle);
-      
-      // Add transcript content
-      const transcriptContent = document.createElement('div');
-      transcriptContent.className = 'transcript-content';
-      transcriptContainer.appendChild(transcriptContent);
-      
-      // Store the username in our map if it's not a placeholder
-      if (peerName !== `Peer ${peerId.substring(0, 6)}`) {
-        peerUsernames.set(peerId, peerName);
-        console.log(`Stored username "${peerName}" for peer ${peerId}`);
-      }
-      
-      // Add video off indicator
-      const videoOffIndicator = document.createElement('div');
-      videoOffIndicator.className = 'video-off-indicator hidden';
-      videoOffIndicator.innerHTML = '📷❌';
-      videoWrapper.appendChild(videoOffIndicator);
-      
-      // Add audio off indicator
-      const audioOffIndicator = document.createElement('div');
-      audioOffIndicator.className = 'audio-off-indicator hidden';
-      audioOffIndicator.innerHTML = '🔇';
-      videoWrapper.appendChild(audioOffIndicator);
-      
-      // Add volume control
-      const volumeControl = document.createElement('div');
-      volumeControl.className = 'volume-control';
-      
-      const volumeLabel = document.createElement('label');
-      volumeLabel.textContent = 'Volume:';
-      volumeControl.appendChild(volumeLabel);
-      
-      const volumeSlider = document.createElement('input');
-      volumeSlider.type = 'range';
-      volumeSlider.min = '0';
-      volumeSlider.max = '2';
-      volumeSlider.step = '0.1';
-      volumeSlider.value = '1';
-      volumeSlider.className = 'volume-slider';
-      volumeControl.appendChild(volumeSlider);
-      
-      // Set initial volume
-      peerVolumes.set(peerId, 1.0);
-      
-      // Add event listener for volume change
-      volumeSlider.addEventListener('input', (e) => {
-        const volume = parseFloat(e.target.value);
-        peerVolumes.set(peerId, volume);
-        
-        // Find the audio element and adjust its volume
-        const videoElement = remoteContainer.querySelector('video');
-        if (videoElement) {
-          videoElement.volume = volume;
-        }
-      });
-      
-      remoteContainer.appendChild(volumeControl);
-      
-      // Add the container to the video grid
-      remoteVideosContainer.appendChild(remoteContainer);
-      
-      console.log(`Remote container for ${peerName} (${peerId}) added to DOM with transcript overlay`);
-    } else {
-      // Update the name if we now have a real username
-      const nameElement = remoteContainer.querySelector('.participant-name');
-      const currentName = nameElement.textContent;
-      
-      // If current name is a placeholder and we now have a real name
-      if (currentName.includes('Peer') && peerUsernames.has(peerId)) {
-        const realName = peerUsernames.get(peerId);
-        nameElement.textContent = realName;
-        console.log(`Updated name in DOM from "${currentName}" to "${realName}" for peer ${peerId}`);
-      }
-    }
-    
-    // Find the video element
-    const remoteVideo = remoteContainer.querySelector('.remote-video');
-    
-    // Set the srcObject to display the stream
-    remoteVideo.srcObject = stream;
-    
-    // Set the volume based on stored preference
-    if (peerVolumes.has(peerId)) {
-      remoteVideo.volume = peerVolumes.get(peerId);
-    }
-    
-    // Log active tracks
-    console.log(`Remote stream has ${stream.getTracks().length} tracks:`);
-    stream.getTracks().forEach(track => {
-      console.log(`- ${track.kind} track (${track.id}): enabled=${track.enabled}, readyState=${track.readyState}`);
+    // Check if this is a screen sharing stream
+    const videoTracks = stream.getVideoTracks();
+    const isScreenShare = videoTracks.some(track => {
+      const settings = track.getSettings();
+      return settings && 
+             ((settings.width > 1000 && settings.height > 700) || 
+              track.label.includes('screen') || 
+              stream.id.includes('screen'));
     });
     
-    // Ensure the container is visible
-    remoteContainer.classList.remove('hidden');
+    if (isScreenShare) {
+      console.log(`Detected screen share stream from peer ${peerId}`);
+      
+      // Set as active screen sharer
+      activeScreenSharePeerId = peerId;
+      
+      // Add to UI
+      addScreenShareToGrid(peerId, stream, 'Shared Screen');
+      
+      // If we were sharing, stop our share
+      if (isScreenSharing) {
+        addSystemMessage('Your screen sharing was stopped because another user started sharing');
+        stopScreenSharing();
+      }
+      
+      return;
+    }
+    
+    // Handle regular video stream
+    const remoteContainer = document.getElementById(`remote-${peerId}`);
+    if (!remoteContainer) {
+      console.log(`Creating new remote container for peer ${peerId}`);
+      const template = document.getElementById('remote-video-template');
+      const clone = template.content.cloneNode(true);
+      const container = clone.querySelector('.remote-video-container');
+      container.id = `remote-${peerId}`;
+      
+      // Set username
+      const username = peerUsernames.get(peerId) || 'Peer';
+      container.querySelector('.participant-name').textContent = username;
+      
+      // Add to remote videos container
+      document.getElementById('remote-videos').appendChild(container);
+    }
+    
+    // Get or create video element
+    const videoElement = document.querySelector(`#remote-${peerId} .remote-video`);
+    if (videoElement) {
+      videoElement.srcObject = stream;
+      
+      // Set up video status indicators
+      const videoOffIndicator = videoElement.parentElement.querySelector('.video-off-indicator');
+      const audioOffIndicator = videoElement.parentElement.querySelector('.audio-off-indicator');
+      
+      // Update video status
+      videoElement.onloadedmetadata = () => {
+        const hasVideo = stream.getVideoTracks().some(track => track.enabled && !track.muted);
+        const hasAudio = stream.getAudioTracks().some(track => track.enabled && !track.muted);
+        
+        if (videoOffIndicator) {
+          videoOffIndicator.classList.toggle('hidden', hasVideo);
+        }
+        if (audioOffIndicator) {
+          audioOffIndicator.classList.toggle('hidden', hasAudio);
+        }
+      };
+      
+      // Set up transcript container
+      const transcriptContainer = container.querySelector('.transcript-container');
+      if (transcriptContainer) {
+        setupRemoteTranscription(stream, peerId);
+      }
+    }
     
     // Update connection count
     updateConnectionCount();
-    
-    // Setup transcription for audio tracks
-    if (stream.getAudioTracks().length > 0) {
-      console.log(`Remote stream has audio tracks, setting up transcription for peer ${peerId}`);
-      
-      // Make sure any audio tracks are enabled
-      stream.getAudioTracks().forEach(track => {
-        // Enable the track to ensure we can record it
-        if (!track.enabled) {
-          console.log(`Enabling audio track ${track.id} for transcription`);
-          track.enabled = true;
-        }
-        
-        console.log(`Audio track ${track.id} for peer ${peerId}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
-      });
-      
-      // Set up transcription with a short delay to ensure everything is initialized
-      setTimeout(() => {
-        // Call with correct parameter order (stream first, then peerId)
-        setupRemoteTranscription(stream, peerId);
-      }, 1000);
-    } else {
-      console.warn(`No audio tracks found in remote stream for peer ${peerId}, cannot set up transcription`);
-    }
-    
-    return remoteContainer;
   } catch (error) {
-    console.error(`Error adding remote stream for ${peerId}:`, error);
-    return null;
+    console.error(`Error adding remote stream for peer ${peerId}:`, error);
   }
 }
 
@@ -4182,6 +4081,9 @@ function addScreenShareToGrid(peerId, stream, sourceName) {
   } else {
     remoteVideosContainer.appendChild(screenContainer);
   }
+  
+  // Ensure the container is visible
+  screenContainer.classList.remove('hidden');
 }
 
 // Remove screen share from the grid
