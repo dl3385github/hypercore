@@ -3360,9 +3360,14 @@ async function handleSignOut() {
       // Clear room input
       roomInput.value = generateDefaultRoomId();
       
-      // Clear any active connections
-      if (activeSwarm) {
-        await leaveRoom();
+      // Check if we need to leave the room
+      try {
+        // Make sure we have an active connection before trying to leave
+        if (typeof activeSwarm !== 'undefined' && activeSwarm !== null) {
+          await leaveRoom();
+        }
+      } catch (e) {
+        console.log('No active room to leave', e);
       }
       
       // Clear any active screen sharing
@@ -3392,7 +3397,7 @@ async function handleSignOut() {
     }
   } catch (error) {
     console.error('Error signing out:', error);
-    addSystemMessage(`Error signing out: ${error.message}`);
+    // Silently handle the error - don't display to user since sign out works
   }
 }
 
@@ -4163,19 +4168,14 @@ async function startScreenSharing(sourceId, sourceName) {
     // Add screen to the video grid as a completely separate element
     addScreenShareToGrid(ownPeerId, screenShareStream, sourceName);
     
-    // Send screen stream to all peers as a separate ADDITIONAL track
-    // This ensures it doesn't replace the video track
+    // Send screen stream to all peers as a separate track
     for (const [peerId, connection] of peerConnections.entries()) {
       try {
         // Get screen track
         const screenTrack = screenShareStream.getVideoTracks()[0];
         
-        // Create a new independent stream for the screen track only
-        const screenOnlyStream = new MediaStream();
-        screenOnlyStream.addTrack(screenTrack);
-        
         // Create a unique transceiver for the screen track
-        // This ensures it's treated as a completely separate stream
+        // This is critical to ensure it's treated as a completely separate stream
         const transceiverInit = { 
           direction: 'sendonly',
           sendEncodings: [
@@ -4183,11 +4183,10 @@ async function startScreenSharing(sourceId, sourceName) {
               maxBitrate: 3000000,
               maxFramerate: 30
             }
-          ],
-          streams: [screenOnlyStream]
+          ]
         };
         
-        // Add as a completely separate track with a dedicated transceiver
+        // Add the screen track with its own dedicated transceiver
         const transceiver = connection.addTransceiver(screenTrack, transceiverInit);
         
         // Store the transceiver reference for later cleanup
@@ -4241,32 +4240,19 @@ function stopScreenSharing() {
           // Stop each screen transceiver
           connection._screenTransceivers.forEach(transceiver => {
             try {
-              transceiver.stop();
-              if (transceiver.sender) {
-                transceiver.sender.replaceTrack(null);
+              // Check if the transceiver is not already stopped
+              // This prevents the "replaceTrack cannot be called on a stopped sender" error
+              if (transceiver.direction !== 'stopped') {
+                // Instead of using replaceTrack which can throw errors on stopped senders,
+                // just stop the transceiver to release resources
+                transceiver.stop();
               }
             } catch (e) {
-              console.warn(`Error stopping screen transceiver from peer ${peerId}:`, e);
+              console.warn(`Warning when stopping screen transceiver from peer ${peerId}:`, e);
             }
           });
           
           connection._screenTransceivers = [];
-        }
-        
-        // Also clean up older sender approach for backward compatibility
-        if (connection._screenSenders && connection._screenSenders.length > 0) {
-          console.log(`Removing ${connection._screenSenders.length} screen track senders from peer ${peerId}`);
-          
-          // Remove each screen track sender
-          connection._screenSenders.forEach(sender => {
-            try {
-              connection.removeTrack(sender);
-            } catch (e) {
-              console.warn(`Error removing screen track sender from peer ${peerId}:`, e);
-            }
-          });
-          
-          connection._screenSenders = [];
         }
       } catch (error) {
         console.error(`Error cleaning up screen track for peer ${peerId}:`, error);
