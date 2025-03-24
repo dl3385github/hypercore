@@ -524,15 +524,30 @@ function setupIpcHandlers() {
         };
       }
       
+      // Convert buffer to Uint8Array for audio level check
+      const audioData = new Uint8Array(audioBuffer);
+      
+      // Check if audio meets global threshold
+      if (!checkAudioLevel(audioData)) {
+        console.log(`Audio from ${username} below global threshold ${TRANSCRIPTION_THRESHOLD}, skipping transcription`);
+        return { 
+          success: true, 
+          transcription: '',
+          username,
+          speaker: username,
+          text: '',
+          timestamp: Date.now()
+        };
+      }
+      
       // Process the audio buffer and transcribe
       const timestamp = Date.now();
       const filename = `./temp/audio_${timestamp}_${Math.floor(Math.random() * 1000)}.wav`;
       
       console.log(`Processing audio file for transcription: ${filename}`);
       
-      // Convert buffer to Uint8Array and write to file
-      const uint8Array = Uint8Array.from(audioBuffer);
-      fs.writeFileSync(filename, Buffer.from(uint8Array));
+      // Write to file
+      fs.writeFileSync(filename, Buffer.from(audioData));
       
       // Call OpenAI's transcription API
       console.log(`Sending audio file to OpenAI for transcription: ${filename}`);
@@ -584,7 +599,7 @@ function setupIpcHandlers() {
   ipcMain.handle('update-transcription-threshold', (event, threshold) => {
     try {
       TRANSCRIPTION_THRESHOLD = parseFloat(threshold);
-      console.log(`Updated transcription threshold to ${TRANSCRIPTION_THRESHOLD}`);
+      console.log(`Updated global transcription threshold to ${TRANSCRIPTION_THRESHOLD}`);
       saveSettings();
       return { success: true };
     } catch (error) {
@@ -1156,4 +1171,17 @@ function generateHypercoreIdFromDid(did) {
   const hash = crypto.createHash('sha256').update(did).digest('hex');
   
   return hash;
+}
+
+// Function to check if audio level meets threshold
+function checkAudioLevel(audioData) {
+  // Calculate RMS (Root Mean Square) of audio data
+  let sum = 0;
+  for (let i = 0; i < audioData.length; i++) {
+    sum += audioData[i] * audioData[i];
+  }
+  const rms = Math.sqrt(sum / audioData.length);
+  
+  // Check against global transcription threshold
+  return rms >= TRANSCRIPTION_THRESHOLD;
 }
