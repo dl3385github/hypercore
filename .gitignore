@@ -17,7 +17,6 @@ temp/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-Enter.code-profile
 
 # OS specific files
 .DS_Store
