@@ -1385,14 +1385,51 @@ async function processIceCandidate(peerId, connection, candidate) {
 // Add remote stream to video grid
 function addRemoteStream(peerId, stream) {
   try {
-    console.log(`Adding remote stream for peer ${peerId}`);
+    console.log(`Adding remote stream from peer ${peerId}`);
     
-    // Create video container if it doesn't exist
+    // Check if this might be a screen sharing stream
+    const videoTracks = stream.getVideoTracks();
+    
+    // Check if this is a screen share stream by looking at track settings
+    if (videoTracks.length > 0) {
+      const track = videoTracks[0];
+      const settings = track.getSettings();
+      
+      // Screen share tracks typically have different aspect ratios and higher resolutions
+      // or might have special labels/constraints
+      if (settings && 
+          ((settings.width > 1000 && settings.height > 700) || 
+           track.label.includes('screen') || 
+           stream.id.includes('screen'))) {
+        
+        console.log(`Detected screen share track from peer ${peerId} with settings:`, settings);
+        
+        // Set as active screen share peer
+        activeScreenSharePeerId = peerId;
+        
+        // Add to UI as a screen share
+        addScreenShareToGrid(peerId, stream, 'Shared Screen');
+        
+        // Add system message
+        const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+        addSystemMessage(`${peerName} started sharing their screen`);
+        
+        // Setup audio transcription separately if there are audio tracks
+        if (stream.getAudioTracks().length > 0) {
+          setTimeout(() => {
+            setupRemoteTranscription(stream, peerId);
+          }, 1000);
+        }
+        
+        return;
+      }
+    }
+    
+    // If we're here, this is a regular video stream, not a screen share
+    // Find an existing container for this peer or create a new one
     let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
     
     if (!remoteContainer) {
-      console.log(`Creating new remote container for peer ${peerId}`);
-      
       // Get the peer's username
       const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
       
@@ -1489,7 +1526,7 @@ function addRemoteStream(peerId, stream) {
         const volume = parseFloat(e.target.value);
         peerVolumes.set(peerId, volume);
         
-        // Find the audio element and adjust its volume
+        // Find the audio element
         const videoElement = remoteContainer.querySelector('video');
         if (videoElement) {
           videoElement.volume = volume;
@@ -3412,8 +3449,9 @@ function startVideoRecording() {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     
-    // Make canvas globally accessible so screen sharing can access it
+    // Make canvas and context globally accessible
     window.recordingCanvas = canvas;
+    window.recordingCtx = ctx;
     
     // Set canvas size with higher resolution for better quality
     // Use 1080p resolution regardless of container size for better quality
@@ -4019,6 +4057,13 @@ async function handleScreenShareClick() {
       return;
     }
     
+    // Check if someone else is already sharing
+    if (activeScreenSharePeerId && activeScreenSharePeerId !== ownPeerId) {
+      const peerName = peerUsernames.get(activeScreenSharePeerId) || `Peer ${activeScreenSharePeerId.substring(0, 6)}`;
+      addSystemMessage(`Cannot start screen sharing: ${peerName} is already sharing their screen.`);
+      return;
+    }
+    
     // Get screen sources from main process
     const result = await window.electronAPI.getScreenSources();
     
@@ -4103,17 +4148,21 @@ async function startScreenSharing(sourceId, sourceName) {
     shareScreenButton.querySelector('.icon').textContent = '⏹️';
     addSystemMessage(`Screen sharing started: ${sourceName}`);
     
-    // Add screen to the video grid as a separate element
+    // Add screen to the video grid as a completely separate element
     addScreenShareToGrid(ownPeerId, screenShareStream, sourceName);
     
-    // Send screen stream to all peers as a separate track
+    // Send screen stream to all peers as a separate ADDITIONAL track
+    // This ensures it doesn't replace the video track
     for (const [peerId, connection] of peerConnections.entries()) {
       try {
         // Get screen track
         const screenTrack = screenShareStream.getVideoTracks()[0];
         
-        // Add as a new track, not replacing existing video
-        const sender = connection.addTrack(screenTrack, screenShareStream);
+        // Create a new stream for the screen track only
+        const screenOnlyStream = new MediaStream([screenTrack]);
+        
+        // Add as a completely separate track with its own stream
+        const sender = connection.addTrack(screenTrack, screenOnlyStream);
         
         // Store the sender reference for later cleanup
         if (!connection._screenSenders) {
@@ -4121,7 +4170,7 @@ async function startScreenSharing(sourceId, sourceName) {
         }
         connection._screenSenders.push(sender);
         
-        console.log(`Added screen track to peer connection: ${peerId} as a separate track`);
+        console.log(`Added screen track to peer connection: ${peerId} as a completely separate track`);
       } catch (error) {
         console.error(`Error adding screen track to peer ${peerId}:`, error);
       }
