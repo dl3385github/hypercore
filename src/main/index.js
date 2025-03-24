@@ -29,7 +29,24 @@ if (!fs.existsSync('./temp')) {
   fs.mkdirSync('./temp', { recursive: true });
 }
 
-// Load API key from storage if exists
+// Threshold for transcribing audio (minimum volume level required)
+let MIN_AUDIO_LEVEL = 0.05; // Default value for mic activation threshold
+let TRANSCRIPTION_THRESHOLD = 0.05; // Default value for transcription threshold
+const MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
+
+// Error handler for uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  
+  // Send to renderer if we have a window
+  if (mainWindow) {
+    mainWindow.webContents.send('network-error', {
+      message: `Uncaught error: ${error.message}`
+    });
+  }
+});
+
+// Load API key and settings from storage
 function loadApiKey() {
   try {
     if (fs.existsSync('./storage/settings.json')) {
@@ -38,9 +55,20 @@ function loadApiKey() {
         openaiApiKey = settings.openaiApiKey;
         console.log('Loaded OpenAI API key from settings');
       }
+      
+      // Load threshold values if they exist
+      if (settings.audioThreshold !== undefined) {
+        MIN_AUDIO_LEVEL = settings.audioThreshold;
+        console.log(`Loaded audio threshold from settings: ${MIN_AUDIO_LEVEL}`);
+      }
+      
+      if (settings.transcriptionThreshold !== undefined) {
+        TRANSCRIPTION_THRESHOLD = settings.transcriptionThreshold;
+        console.log(`Loaded transcription threshold from settings: ${TRANSCRIPTION_THRESHOLD}`);
+      }
     }
   } catch (error) {
-    console.error('Error loading API key from storage:', error);
+    console.error('Error loading settings from storage:', error);
   }
   
   // Initialize OpenAI
@@ -90,6 +118,32 @@ function saveApiKey(apiKey) {
   }
 }
 
+// Save all settings to storage
+function saveSettings() {
+  try {
+    const settings = {};
+    
+    // Load existing settings if any
+    if (fs.existsSync('./storage/settings.json')) {
+      Object.assign(settings, JSON.parse(fs.readFileSync('./storage/settings.json', 'utf8')));
+    }
+    
+    // Update with current values
+    settings.audioThreshold = MIN_AUDIO_LEVEL;
+    settings.transcriptionThreshold = TRANSCRIPTION_THRESHOLD;
+    settings.openaiApiKey = openaiApiKey;
+    
+    // Save settings
+    fs.writeFileSync('./storage/settings.json', JSON.stringify(settings, null, 2), 'utf8');
+    console.log('Saved all settings to storage');
+    
+    return true;
+  } catch (error) {
+    console.error('Error saving settings to storage:', error);
+    return false;
+  }
+}
+
 // Keep a global reference of the window object
 let mainWindow;
 
@@ -100,10 +154,6 @@ let TOPIC = null;
 let activeSwarm = null;
 let activeConnections = new Map();
 let username = '';
-
-// Threshold for transcribing audio (minimum volume level required)
-let MIN_AUDIO_LEVEL = 0.05; // Default value, will be adjustable from UI
-const MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
 
 // Error handler for uncaught exceptions
 process.on('uncaughtException', (error) => {
@@ -519,12 +569,29 @@ function setupIpcHandlers() {
     try {
       MIN_AUDIO_LEVEL = parseFloat(threshold);
       console.log(`Updated audio threshold to ${MIN_AUDIO_LEVEL}`);
+      saveSettings();
       return { success: true };
     } catch (error) {
       console.error('Error updating audio threshold:', error);
       return { 
         success: false, 
         error: error.message || 'Failed to update threshold'
+      };
+    }
+  });
+  
+  // Update transcription threshold
+  ipcMain.handle('update-transcription-threshold', (event, threshold) => {
+    try {
+      TRANSCRIPTION_THRESHOLD = parseFloat(threshold);
+      console.log(`Updated transcription threshold to ${TRANSCRIPTION_THRESHOLD}`);
+      saveSettings();
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating transcription threshold:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to update transcription threshold'
       };
     }
   });

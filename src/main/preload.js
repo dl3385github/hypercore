@@ -210,6 +210,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('update-audio-threshold', threshold);
   },
   
+  // Update transcription threshold
+  updateTranscriptionThreshold: (threshold) => {
+    logEvent('updateTranscriptionThreshold', `New threshold: ${threshold}`);
+    return ipcRenderer.invoke('update-transcription-threshold', threshold);
+  },
+  
   // OpenAI API key management
   getOpenAIApiKey: () => {
     logEvent('getOpenAIApiKey', 'Requesting current API key (masked)');

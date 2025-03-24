@@ -260,12 +260,21 @@
         <div class="settings-section">
           <h4>Audio Settings</h4>
           <div class="setting-item">
-            <label for="audio-threshold">Audio Detection Threshold:</label>
+            <label for="audio-threshold">My Microphone Threshold:</label>
             <input type="range" id="audio-threshold" min="0.01" max="0.5" step="0.01" value="0.05">
             <span id="threshold-value">0.05</span>
           </div>
           <div class="setting-description">
-            Higher values require louder sounds to be detected. Adjust if background noise is being transcribed or your voice isn't being detected.
+            Higher values require louder sounds for your voice to be sent to others. Adjust to filter out background noise.
+          </div>
+          
+          <div class="setting-item">
+            <label for="transcription-threshold">Transcription Threshold:</label>
+            <input type="range" id="transcription-threshold" min="0.01" max="0.5" step="0.01" value="0.05">
+            <span id="transcription-threshold-value">0.05</span>
+          </div>
+          <div class="setting-description">
+            Higher values require louder sounds to be transcribed. Increase to avoid false transcriptions during silence.
           </div>
           
           <div class="setting-item">

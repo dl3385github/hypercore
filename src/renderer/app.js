@@ -26,6 +26,8 @@ const settingsPopup = document.getElementById('settings-popup');
 const closeSettingsPopupBtn = document.getElementById('close-settings-popup');
 const audioThresholdSlider = document.getElementById('audio-threshold');
 const thresholdValueDisplay = document.getElementById('threshold-value');
+const transcriptionThresholdSlider = document.getElementById('transcription-threshold');
+const transcriptionThresholdValueDisplay = document.getElementById('transcription-threshold-value');
 const microphoneSelect = document.getElementById('microphone-select');
 const speakerSelect = document.getElementById('speaker-select');
 const webcamSelect = document.getElementById('webcam-select');
@@ -115,8 +117,74 @@ let availableDevices = {
 
 // App settings
 const appSettings = {
-  audioThreshold: 0.05, // Default value
+  audioThreshold: 0.05, // Default microphone threshold
+  transcriptionThreshold: 0.05, // Default transcription threshold
 };
+
+// Save settings to localStorage
+function saveSettings() {
+  try {
+    // Store device selections
+    const settingsToSave = {
+      ...appSettings,
+      selectedMicrophone: selectedMicrophoneId,
+      selectedWebcam: selectedWebcamId,
+      selectedSpeaker: selectedSpeakerId
+    };
+    
+    localStorage.setItem('appSettings', JSON.stringify(settingsToSave));
+    console.log('Settings saved to localStorage');
+  } catch (error) {
+    console.error('Error saving settings to localStorage:', error);
+  }
+}
+
+// Load settings from localStorage
+function loadSettings() {
+  try {
+    const savedSettings = localStorage.getItem('appSettings');
+    if (savedSettings) {
+      const parsedSettings = JSON.parse(savedSettings);
+      
+      // Update app settings
+      if (parsedSettings.audioThreshold) {
+        appSettings.audioThreshold = parsedSettings.audioThreshold;
+      }
+      
+      if (parsedSettings.transcriptionThreshold) {
+        appSettings.transcriptionThreshold = parsedSettings.transcriptionThreshold;
+      }
+      
+      // Restore device selections
+      if (parsedSettings.selectedMicrophone) {
+        selectedMicrophoneId = parsedSettings.selectedMicrophone;
+      }
+      
+      if (parsedSettings.selectedWebcam) {
+        selectedWebcamId = parsedSettings.selectedWebcam;
+      }
+      
+      if (parsedSettings.selectedSpeaker) {
+        selectedSpeakerId = parsedSettings.selectedSpeaker;
+      }
+      
+      console.log('Settings loaded from localStorage');
+    }
+  } catch (error) {
+    console.error('Error loading settings from localStorage:', error);
+  }
+}
+
+// Function to update transcription threshold on the main process
+function updateTranscriptionThreshold(value) {
+  window.electronAPI.updateTranscriptionThreshold(value)
+    .then(() => {
+      console.log(`Transcription threshold updated to ${value}`);
+    })
+    .catch(error => {
+      console.error('Error updating transcription threshold:', error);
+    });
+}
 
 // Current user state
 let currentUser = null;
@@ -144,6 +212,9 @@ let screenVideoElement = null;
 
 // Initialize the app
 document.addEventListener('DOMContentLoaded', async () => {
+  // Load saved settings
+  loadSettings();
+  
   // Focus on username input
   usernameInput.focus();
   
@@ -205,11 +276,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   audioThresholdSlider.value = appSettings.audioThreshold;
   thresholdValueDisplay.textContent = appSettings.audioThreshold;
   
+  // Initialize transcription threshold slider
+  transcriptionThresholdSlider.value = appSettings.transcriptionThreshold;
+  transcriptionThresholdValueDisplay.textContent = appSettings.transcriptionThreshold;
+  
   audioThresholdSlider.addEventListener('input', (e) => {
     const newValue = parseFloat(e.target.value);
     appSettings.audioThreshold = newValue;
     thresholdValueDisplay.textContent = newValue.toFixed(2);
     updateAudioThreshold(newValue);
+    saveSettings();
+  });
+  
+  transcriptionThresholdSlider.addEventListener('input', (e) => {
+    const newValue = parseFloat(e.target.value);
+    appSettings.transcriptionThreshold = newValue;
+    transcriptionThresholdValueDisplay.textContent = newValue.toFixed(2);
+    updateTranscriptionThreshold(newValue);
+    saveSettings();
   });
   
   // Device selection listeners
@@ -217,18 +301,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     selectedMicrophoneId = e.target.value;
     console.log(`Selected microphone: ${selectedMicrophoneId}`);
     applyDeviceSelection();
+    saveSettings();
   });
   
   webcamSelect.addEventListener('change', (e) => {
     selectedWebcamId = e.target.value;
     console.log(`Selected webcam: ${selectedWebcamId}`);
     applyDeviceSelection();
+    saveSettings();
   });
   
   speakerSelect.addEventListener('change', (e) => {
     selectedSpeakerId = e.target.value;
     console.log(`Selected speaker: ${selectedSpeakerId}`);
     applyDeviceSelection();
+    saveSettings();
   });
   
   refreshDevicesBtn.addEventListener('click', () => {
@@ -1543,9 +1630,13 @@ function setupMediaRecording() {
     const bufferLength = analyzer.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
     
-    // Volume threshold for audio processing - use the value from settings
+    // Volume threshold for audio detection - use the value from settings
     const volumeThreshold = appSettings.audioThreshold || 0.05;
-    console.log(`Audio volume threshold set to ${volumeThreshold}`);
+    console.log(`Audio detection threshold set to ${volumeThreshold}`);
+    
+    // Separate threshold for transcription to reduce false positives
+    const transcriptionThreshold = appSettings.transcriptionThreshold || 0.05;
+    console.log(`Transcription threshold set to ${transcriptionThreshold}`);
     
     // Variables to track silence
     let isSilent = true;
@@ -1565,24 +1656,58 @@ function setupMediaRecording() {
       // Detect if audio is silent based on threshold
       const currentlyIsSilent = normalizedVolume < volumeThreshold;
       
-      // If state changed from silent to not silent, log it
+      // Check if audio meets the higher transcription threshold
+      const meetsTranscriptionThreshold = normalizedVolume >= transcriptionThreshold;
+      
+      // If state changed from silent to not silent, start recording
       if (isSilent && !currentlyIsSilent) {
-        console.log(`Audio level above threshold: ${normalizedVolume.toFixed(3)} (threshold: ${volumeThreshold})`);
+        console.log(`Audio level above threshold: ${normalizedVolume.toFixed(3)}`);
         isSilent = false;
         silentFrameCount = 0;
-        hasSpokenDuringRecording = true;
+        
+        // Only mark as spoken if it meets the higher transcription threshold
+        if (meetsTranscriptionThreshold) {
+          hasSpokenDuringRecording = true;
+        }
+        
+        // Start recording if not already recording and audio is enabled
+        if (!isRecording && isAudioEnabled) {
+          isRecording = true;
+          try {
+            mediaRecorder.start();
+            console.log('Started recording audio for transcription');
+          } catch (error) {
+            console.error('Error starting media recorder:', error);
+            isRecording = false;
+          }
+        }
       } 
-      // If state changed from not silent to silent, log it
-      else if (!isSilent && currentlyIsSilent) {
-        isSilent = true;
-        console.log(`Audio level below threshold: ${normalizedVolume.toFixed(3)} (threshold: ${volumeThreshold})`);
+      // If not silent but below transcription threshold, just note it
+      else if (!isSilent && !currentlyIsSilent && !meetsTranscriptionThreshold) {
+        // Audio is still above detection threshold but below transcription threshold
+        if (Math.random() < 0.05) { // Log occasionally
+          console.log(`Audio continues above detection threshold but below transcription threshold: ${normalizedVolume.toFixed(3)}`);
+        }
       }
-      
-      // If silent, increment counter
-      if (currentlyIsSilent) {
+      // If state changed from not silent to silent, prepare to stop recording
+      else if (!isSilent && currentlyIsSilent) {
         silentFrameCount++;
-      } else {
-        silentFrameCount = 0;
+        
+        if (silentFrameCount >= 10) { // About 0.5 seconds of silence (if interval is 50ms)
+          isSilent = true;
+          console.log(`Audio level below threshold: ${normalizedVolume.toFixed(3)}`);
+          
+          // Stop recording if we were recording
+          if (isRecording) {
+            console.log('Stopping recording after silence');
+            isRecording = false;
+            try {
+              mediaRecorder.stop();
+            } catch (error) {
+              console.error('Error stopping media recorder:', error);
+            }
+          }
+        }
       }
     }, 200); // Check every 200ms
     
@@ -1885,9 +2010,13 @@ function setupRemoteTranscription(stream, peerId) {
     // Store these for cleanup later
     remoteRecorder._audioContext = audioContext;
     
-    // Volume threshold - use setting or default
+    // Volume threshold for audio detection - use setting or default
     const volumeThreshold = appSettings.audioThreshold || 0.05;
-    console.log(`Remote audio volume threshold for ${peerUsername} set to ${volumeThreshold}`);
+    console.log(`Remote audio detection threshold for ${peerUsername} set to ${volumeThreshold}`);
+    
+    // Separate threshold for transcription to reduce false positives
+    const transcriptionThreshold = appSettings.transcriptionThreshold || 0.05;
+    console.log(`Remote transcription threshold for ${peerUsername} set to ${transcriptionThreshold}`);
     
     // Variables to track silence
     let isSilent = true;
@@ -1912,12 +2041,25 @@ function setupRemoteTranscription(stream, peerId) {
       // Detect if audio is silent based on threshold
       const currentlyIsSilent = normalizedVolume < volumeThreshold;
       
+      // Check if audio meets the higher transcription threshold
+      const meetsTranscriptionThreshold = normalizedVolume >= transcriptionThreshold;
+      
       // If state changed from silent to not silent, log it
       if (isSilent && !currentlyIsSilent) {
         console.log(`Remote audio level above threshold for ${peerUsername}: ${normalizedVolume.toFixed(3)}`);
         isSilent = false;
-        hasSpokenDuringRecording = true;
+        
+        // Only mark as spoken if it meets the higher transcription threshold
+        if (meetsTranscriptionThreshold) {
+          hasSpokenDuringRecording = true;
+          console.log(`Remote audio meets transcription threshold for ${peerUsername}: ${normalizedVolume.toFixed(3)}`);
+        }
       } 
+      // If not silent but now meets transcription threshold
+      else if (!isSilent && !currentlyIsSilent && meetsTranscriptionThreshold && !hasSpokenDuringRecording) {
+        hasSpokenDuringRecording = true;
+        console.log(`Remote audio now meets transcription threshold for ${peerUsername}: ${normalizedVolume.toFixed(3)}`);
+      }
       // If state changed from not silent to silent, log it
       else if (!isSilent && currentlyIsSilent) {
         isSilent = true;
@@ -3897,13 +4039,22 @@ async function startScreenSharing(sourceId, sourceName) {
     // Add screen to the video grid
     addScreenShareToGrid(ownPeerId, screenShareStream, sourceName);
     
-    // Send screen stream to all peers
+    // Send screen stream to all peers - as a separate stream, not replacing video
     for (const [peerId, connection] of peerConnections.entries()) {
       try {
-        // Add screen track to existing peer connection
+        // Get screen track
         const screenTrack = screenShareStream.getVideoTracks()[0];
-        connection.addTrack(screenTrack, screenShareStream);
-        console.log(`Added screen track to peer connection: ${peerId}`);
+        
+        // Add as a new track, not replacing existing video
+        const sender = connection.addTrack(screenTrack, screenShareStream);
+        
+        // Store the sender reference for later cleanup
+        if (!connection._screenSenders) {
+          connection._screenSenders = [];
+        }
+        connection._screenSenders.push(sender);
+        
+        console.log(`Added screen track to peer connection: ${peerId} as a separate track`);
       } catch (error) {
         console.error(`Error adding screen track to peer ${peerId}:`, error);
       }
@@ -3937,6 +4088,29 @@ function stopScreenSharing() {
     screenShareStream.getTracks().forEach(track => {
       track.stop();
     });
+    
+    // Remove screen tracks from peer connections if we saved the senders
+    for (const [peerId, connection] of peerConnections.entries()) {
+      try {
+        if (connection._screenSenders && connection._screenSenders.length > 0) {
+          console.log(`Removing ${connection._screenSenders.length} screen track senders from peer ${peerId}`);
+          
+          // Remove each screen track sender
+          connection._screenSenders.forEach(sender => {
+            try {
+              connection.removeTrack(sender);
+            } catch (e) {
+              console.warn(`Error removing screen track sender from peer ${peerId}:`, e);
+            }
+          });
+          
+          // Clear the senders array
+          connection._screenSenders = [];
+        }
+      } catch (error) {
+        console.error(`Error cleaning up screen track for peer ${peerId}:`, error);
+      }
+    }
     
     // Reset state
     screenShareStream = null;
