@@ -1200,4 +1200,21 @@ body {
   background: rgba(0, 0, 0, 0.7);
   color: #fff;
   text-align: center;
+}
+
+.remember-me-container {
+  display: flex;
+  align-items: center;
+  margin-bottom: 15px;
+  font-size: 14px;
+}
+
+.remember-me-container input[type="checkbox"] {
+  margin-right: 10px;
+  transform: scale(1.2);
+}
+
+.remember-me-container label {
+  color: #f0f0f0;
+  cursor: pointer;
 } 

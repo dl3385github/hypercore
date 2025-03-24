@@ -3208,6 +3208,7 @@ async function handleSignIn(event) {
   // Validate inputs
   const identifier = signinIdInput.value.trim();
   const password = signinPasswordInput.value.trim();
+  const rememberMe = document.getElementById('remember-me').checked;
   
   if (!identifier) {
     signinError.textContent = 'Please enter your username or email';
@@ -3236,6 +3237,13 @@ async function handleSignIn(event) {
     if (response.success) {
       // Sign in successful
       updateAuthState(response.user);
+      
+      // Save credentials if "Remember Me" is checked
+      if (rememberMe) {
+        saveCredentials(identifier, password);
+      } else {
+        clearCredentials();
+      }
     } else {
       // Sign in failed
       signinError.textContent = response.error || 'Failed to sign in';
@@ -3338,6 +3346,9 @@ async function handleSignOut() {
       
       // Clear auth state
       updateAuthState(null);
+      
+      // Clear saved credentials
+      clearCredentials();
       
       // Show auth screen and hide main app
       document.getElementById('auth-screen').classList.remove('hidden');
@@ -4118,7 +4129,8 @@ async function startScreenSharing(sourceId, sourceName) {
   try {
     // Check if anyone else is already sharing
     if (activeScreenSharePeerId && activeScreenSharePeerId !== ownPeerId) {
-      addSystemMessage(`Cannot start screen sharing: Someone else is already sharing their screen.`);
+      const peerName = peerUsernames.get(activeScreenSharePeerId) || `Peer ${activeScreenSharePeerId.substring(0, 6)}`;
+      addSystemMessage(`Cannot start screen sharing: ${peerName} is already sharing their screen.`);
       return;
     }
     
@@ -4158,19 +4170,33 @@ async function startScreenSharing(sourceId, sourceName) {
         // Get screen track
         const screenTrack = screenShareStream.getVideoTracks()[0];
         
-        // Create a new stream for the screen track only
-        const screenOnlyStream = new MediaStream([screenTrack]);
+        // Create a new independent stream for the screen track only
+        const screenOnlyStream = new MediaStream();
+        screenOnlyStream.addTrack(screenTrack);
         
-        // Add as a completely separate track with its own stream
-        const sender = connection.addTrack(screenTrack, screenOnlyStream);
+        // Create a unique transceiver for the screen track
+        // This ensures it's treated as a completely separate stream
+        const transceiverInit = { 
+          direction: 'sendonly',
+          sendEncodings: [
+            {
+              maxBitrate: 3000000,
+              maxFramerate: 30
+            }
+          ],
+          streams: [screenOnlyStream]
+        };
         
-        // Store the sender reference for later cleanup
-        if (!connection._screenSenders) {
-          connection._screenSenders = [];
+        // Add as a completely separate track with a dedicated transceiver
+        const transceiver = connection.addTransceiver(screenTrack, transceiverInit);
+        
+        // Store the transceiver reference for later cleanup
+        if (!connection._screenTransceivers) {
+          connection._screenTransceivers = [];
         }
-        connection._screenSenders.push(sender);
+        connection._screenTransceivers.push(transceiver);
         
-        console.log(`Added screen track to peer connection: ${peerId} as a completely separate track`);
+        console.log(`Added screen track to peer connection: ${peerId} as a completely independent track`);
       } catch (error) {
         console.error(`Error adding screen track to peer ${peerId}:`, error);
       }
@@ -4205,9 +4231,29 @@ function stopScreenSharing() {
       track.stop();
     });
     
-    // Remove screen tracks from peer connections if we saved the senders
+    // Remove screen tracks from peer connections
     for (const [peerId, connection] of peerConnections.entries()) {
       try {
+        // Clean up transceivers (newer approach)
+        if (connection._screenTransceivers && connection._screenTransceivers.length > 0) {
+          console.log(`Removing ${connection._screenTransceivers.length} screen transceivers from peer ${peerId}`);
+          
+          // Stop each screen transceiver
+          connection._screenTransceivers.forEach(transceiver => {
+            try {
+              transceiver.stop();
+              if (transceiver.sender) {
+                transceiver.sender.replaceTrack(null);
+              }
+            } catch (e) {
+              console.warn(`Error stopping screen transceiver from peer ${peerId}:`, e);
+            }
+          });
+          
+          connection._screenTransceivers = [];
+        }
+        
+        // Also clean up older sender approach for backward compatibility
         if (connection._screenSenders && connection._screenSenders.length > 0) {
           console.log(`Removing ${connection._screenSenders.length} screen track senders from peer ${peerId}`);
           
@@ -4220,7 +4266,6 @@ function stopScreenSharing() {
             }
           });
           
-          // Clear the senders array
           connection._screenSenders = [];
         }
       } catch (error) {
@@ -4493,3 +4538,120 @@ window.renderFrame = function() {
   // This is a placeholder that will be replaced when recording starts
   // But having it defined prevents reference errors
 };
+
+// Save credentials to localStorage when "Remember Me" is checked
+function saveCredentials(identifier, password) {
+  try {
+    const credentials = {
+      identifier,
+      password
+    };
+    localStorage.setItem('savedCredentials', JSON.stringify(credentials));
+    console.log('Credentials saved to localStorage');
+  } catch (error) {
+    console.error('Error saving credentials to localStorage:', error);
+  }
+}
+
+// Load credentials from localStorage
+function loadCredentials() {
+  try {
+    const savedCredentials = localStorage.getItem('savedCredentials');
+    if (savedCredentials) {
+      return JSON.parse(savedCredentials);
+    }
+    return null;
+  } catch (error) {
+    console.error('Error loading credentials from localStorage:', error);
+    return null;
+  }
+}
+
+// Clear saved credentials from localStorage
+function clearCredentials() {
+  try {
+    localStorage.removeItem('savedCredentials');
+    console.log('Credentials cleared from localStorage');
+  } catch (error) {
+    console.error('Error clearing credentials from localStorage:', error);
+  }
+}
+
+// Check authentication state
+async function checkAuthState() {
+  try {
+    const result = await window.electronAPI.getCurrentUser();
+    if (result.success && result.user) {
+      currentUser = result.user;
+      updateAuthState(result.user);
+      
+      // Hide auth screen and show main app
+      document.getElementById('auth-screen').classList.add('hidden');
+      document.getElementById('main-app').classList.remove('hidden');
+      
+      // Set username for video chat
+      usernameInput.value = result.user.handle;
+      
+      // Load saved settings
+      loadSettings();
+      
+      // Enumerate devices
+      enumerateDevices();
+    } else {
+      // No valid session, check for saved credentials
+      const savedCredentials = loadCredentials();
+      if (savedCredentials) {
+        console.log('Found saved credentials, attempting auto-login...');
+        // Pre-fill the login form
+        signinIdInput.value = savedCredentials.identifier;
+        signinPasswordInput.value = savedCredentials.password;
+        
+        // Attempt to sign in
+        try {
+          // Format identifier if needed (ensure it has a domain)
+          let formattedIdentifier = savedCredentials.identifier;
+          if (!formattedIdentifier.includes('@') && !formattedIdentifier.includes('.')) {
+            formattedIdentifier = `${formattedIdentifier}.pds.hapa.ai`;
+          }
+          
+          const response = await window.electronAPI.signIn(formattedIdentifier, savedCredentials.password);
+          
+          if (response.success) {
+            // Sign in successful
+            updateAuthState(response.user);
+            
+            // Hide auth screen and show main app
+            document.getElementById('auth-screen').classList.add('hidden');
+            document.getElementById('main-app').classList.remove('hidden');
+            
+            // Set username for video chat
+            usernameInput.value = response.user.handle;
+            
+            // Load saved settings
+            loadSettings();
+            
+            // Enumerate devices
+            enumerateDevices();
+            
+            return; // Exit the function as we've successfully logged in
+          } else {
+            console.error('Auto-login failed:', response.error);
+            // Show auth screen (will happen below)
+          }
+        } catch (error) {
+          console.error('Error during auto-login:', error);
+          // Show auth screen (will happen below)
+        }
+      }
+      
+      // Show auth screen if auto-login failed or no saved credentials
+      document.getElementById('auth-screen').classList.remove('hidden');
+      document.getElementById('main-app').classList.add('hidden');
+    }
+  } catch (error) {
+    console.error('Error checking auth state:', error);
+    // On error, show auth screen
+    document.getElementById('auth-screen').classList.remove('hidden');
+    document.getElementById('main-app').classList.add('hidden');
+  }
+}
