@@ -1384,50 +1384,42 @@ async function processIceCandidate(peerId, connection, candidate) {
 
 // Add remote stream to video grid
 function addRemoteStream(peerId, stream) {
-  try {
-    console.log(`Adding remote stream from peer ${peerId}`);
-    
-    // Check if this might be a screen sharing stream
-    const videoTracks = stream.getVideoTracks();
-    
-    // Check if this is a screen share stream by looking at track settings
-    if (videoTracks.length > 0) {
-      const track = videoTracks[0];
-      const settings = track.getSettings();
-      
-      // Screen share tracks typically have different aspect ratios and higher resolutions
-      // or might have special labels/constraints
-      if (settings && 
-          ((settings.width > 1000 && settings.height > 700) || 
-           track.label.includes('screen') || 
-           stream.id.includes('screen'))) {
-        
-        console.log(`Detected screen share track from peer ${peerId} with settings:`, settings);
-        
-        // Set as active screen share peer
-        activeScreenSharePeerId = peerId;
-        
-        // Add to UI as a screen share
-        addScreenShareToGrid(peerId, stream, 'Shared Screen');
-        
-        // Add system message
-        const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-        addSystemMessage(`${peerName} started sharing their screen`);
-        
-        // Setup audio transcription separately if there are audio tracks
-        if (stream.getAudioTracks().length > 0) {
-          setTimeout(() => {
-            setupRemoteTranscription(stream, peerId);
-          }, 1000);
-        }
-        
-        return;
-      }
+  console.log(`Adding remote stream from peer: ${peerId}`, stream);
+  
+  // Skip if this is a screen sharing stream - it will be handled separately
+  const videoTracks = stream.getVideoTracks();
+  let isScreenShareStream = false;
+  
+  // Check if any video track has been marked as a screen share
+  for (const track of videoTracks) {
+    if (track._processedAsScreenShare) {
+      console.log(`Stream contains a track already processed as screen share, skipping duplicate processing`);
+      isScreenShareStream = true;
+      break;
     }
     
-    // If we're here, this is a regular video stream, not a screen share
+    // Also check if it might be a screen share based on characteristics
+    const settings = track.getSettings();
+    if (settings && 
+        ((settings.width > 1000 && settings.height > 700) || 
+         track.label.includes('screen') || 
+         stream.id.includes('screen'))) {
+      
+      // This might be a screen share, but let's not skip it here
+      // We'll mark it during processing in onTrack
+      console.log(`Stream may contain a screen share track, will be processed separately`);
+    }
+  }
+  
+  // If this is purely a screen share stream, don't add it as a regular peer video
+  if (isScreenShareStream && videoTracks.length === 1) {
+    console.log(`Stream appears to be a dedicated screen share, skipping video container creation`);
+    return;
+  }
+  
+  try {
     // Find an existing container for this peer or create a new one
-    let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+    let remoteContainer = document.getElementById(`peer-${peerId}`);
     
     if (!remoteContainer) {
       // Get the peer's username
@@ -1435,53 +1427,18 @@ function addRemoteStream(peerId, stream) {
       
       // Create a new container for this peer
       remoteContainer = document.createElement('div');
-      remoteContainer.className = 'remote-video-container';
+      remoteContainer.className = 'video-item remote-video-container';
+      remoteContainer.id = `peer-${peerId}`;
       remoteContainer.setAttribute('data-peer-id', peerId);
       
-      // Create video wrapper for aspect ratio
-      const videoWrapper = document.createElement('div');
-      videoWrapper.className = 'video-wrapper';
-      remoteContainer.appendChild(videoWrapper);
+      // Use template to create remote video item
+      const template = document.getElementById('remote-video-template');
+      const content = template.content.cloneNode(true);
+      remoteContainer.appendChild(content);
       
-      // Add video element
-      const remoteVideo = document.createElement('video');
-      remoteVideo.className = 'remote-video';
-      remoteVideo.autoplay = true;
-      remoteVideo.playsInline = true;
-      videoWrapper.appendChild(remoteVideo);
-      
-      // Add transcript overlay container inside video wrapper
-      const transcriptOverlay = document.createElement('div');
-      transcriptOverlay.className = 'transcript-overlay hidden';
-      transcriptOverlay.id = `transcript-overlay-${peerId}`;
-      videoWrapper.appendChild(transcriptOverlay);
-      
-      // Add participant info section
-      const participantInfo = document.createElement('div');
-      participantInfo.className = 'participant-info';
-      remoteContainer.appendChild(participantInfo);
-      
-      // Add participant name
-      const nameElement = document.createElement('div');
-      nameElement.className = 'participant-name';
+      // Update the name element
+      const nameElement = remoteContainer.querySelector('.participant-name');
       nameElement.textContent = peerName;
-      participantInfo.appendChild(nameElement);
-      
-      // Add transcript container
-      const transcriptContainer = document.createElement('div');
-      transcriptContainer.className = 'transcript-container';
-      participantInfo.appendChild(transcriptContainer);
-      
-      // Add transcript title
-      const transcriptTitle = document.createElement('div');
-      transcriptTitle.className = 'transcript-title';
-      transcriptTitle.textContent = 'Transcript';
-      transcriptContainer.appendChild(transcriptTitle);
-      
-      // Add transcript content
-      const transcriptContent = document.createElement('div');
-      transcriptContent.className = 'transcript-content';
-      transcriptContainer.appendChild(transcriptContent);
       
       // Store the username in our map if it's not a placeholder
       if (peerName !== `Peer ${peerId.substring(0, 6)}`) {
@@ -1489,56 +1446,11 @@ function addRemoteStream(peerId, stream) {
         console.log(`Stored username "${peerName}" for peer ${peerId}`);
       }
       
-      // Add video off indicator
-      const videoOffIndicator = document.createElement('div');
-      videoOffIndicator.className = 'video-off-indicator hidden';
-      videoOffIndicator.innerHTML = '📷❌';
-      videoWrapper.appendChild(videoOffIndicator);
-      
-      // Add audio off indicator
-      const audioOffIndicator = document.createElement('div');
-      audioOffIndicator.className = 'audio-off-indicator hidden';
-      audioOffIndicator.innerHTML = '🔇';
-      videoWrapper.appendChild(audioOffIndicator);
-      
-      // Add volume control
-      const volumeControl = document.createElement('div');
-      volumeControl.className = 'volume-control';
-      
-      const volumeLabel = document.createElement('label');
-      volumeLabel.textContent = 'Volume:';
-      volumeControl.appendChild(volumeLabel);
-      
-      const volumeSlider = document.createElement('input');
-      volumeSlider.type = 'range';
-      volumeSlider.min = '0';
-      volumeSlider.max = '2';
-      volumeSlider.step = '0.1';
-      volumeSlider.value = '1';
-      volumeSlider.className = 'volume-slider';
-      volumeControl.appendChild(volumeSlider);
-      
-      // Set initial volume
-      peerVolumes.set(peerId, 1.0);
-      
-      // Add event listener for volume change
-      volumeSlider.addEventListener('input', (e) => {
-        const volume = parseFloat(e.target.value);
-        peerVolumes.set(peerId, volume);
-        
-        // Find the audio element
-        const videoElement = remoteContainer.querySelector('video');
-        if (videoElement) {
-          videoElement.volume = volume;
-        }
-      });
-      
-      remoteContainer.appendChild(volumeControl);
-      
       // Add the container to the video grid
+      const remoteVideosContainer = document.getElementById('remote-videos');
       remoteVideosContainer.appendChild(remoteContainer);
       
-      console.log(`Remote container for ${peerName} (${peerId}) added to DOM with transcript overlay`);
+      console.log(`Remote container for ${peerName} (${peerId}) added to DOM`);
     } else {
       // Update the name if we now have a real username
       const nameElement = remoteContainer.querySelector('.participant-name');
@@ -1592,7 +1504,6 @@ function addRemoteStream(peerId, stream) {
       
       // Set up transcription with a short delay to ensure everything is initialized
       setTimeout(() => {
-        // Call with correct parameter order (stream first, then peerId)
         setupRemoteTranscription(stream, peerId);
       }, 1000);
     } else {
@@ -3360,14 +3271,14 @@ async function handleSignOut() {
       // Clear room input
       roomInput.value = generateDefaultRoomId();
       
-      // Check if we need to leave the room
+      // Leave any active chat room
       try {
-        // Make sure we have an active connection before trying to leave
-        if (typeof activeSwarm !== 'undefined' && activeSwarm !== null) {
+        // Check if we're in a room before trying to leave it
+        if (typeof leaveRoom === 'function') {
           await leaveRoom();
         }
       } catch (e) {
-        console.log('No active room to leave', e);
+        console.log("Not in an active room, nothing to leave");
       }
       
       // Clear any active screen sharing
@@ -3397,7 +3308,7 @@ async function handleSignOut() {
     }
   } catch (error) {
     console.error('Error signing out:', error);
-    // Silently handle the error - don't display to user since sign out works
+    addSystemMessage(`Error signing out: ${error.message}`);
   }
 }
 
@@ -4168,14 +4079,19 @@ async function startScreenSharing(sourceId, sourceName) {
     // Add screen to the video grid as a completely separate element
     addScreenShareToGrid(ownPeerId, screenShareStream, sourceName);
     
-    // Send screen stream to all peers as a separate track
+    // Send screen stream to all peers as a separate ADDITIONAL track
+    // This ensures it doesn't replace the video track
     for (const [peerId, connection] of peerConnections.entries()) {
       try {
         // Get screen track
         const screenTrack = screenShareStream.getVideoTracks()[0];
         
+        // Create a new independent stream for the screen track only
+        const screenOnlyStream = new MediaStream();
+        screenOnlyStream.addTrack(screenTrack);
+        
         // Create a unique transceiver for the screen track
-        // This is critical to ensure it's treated as a completely separate stream
+        // This ensures it's treated as a completely separate stream
         const transceiverInit = { 
           direction: 'sendonly',
           sendEncodings: [
@@ -4183,10 +4099,11 @@ async function startScreenSharing(sourceId, sourceName) {
               maxBitrate: 3000000,
               maxFramerate: 30
             }
-          ]
+          ],
+          streams: [screenOnlyStream]
         };
         
-        // Add the screen track with its own dedicated transceiver
+        // Add as a completely separate track with a dedicated transceiver
         const transceiver = connection.addTransceiver(screenTrack, transceiverInit);
         
         // Store the transceiver reference for later cleanup
@@ -4240,19 +4157,35 @@ function stopScreenSharing() {
           // Stop each screen transceiver
           connection._screenTransceivers.forEach(transceiver => {
             try {
-              // Check if the transceiver is not already stopped
-              // This prevents the "replaceTrack cannot be called on a stopped sender" error
-              if (transceiver.direction !== 'stopped') {
-                // Instead of using replaceTrack which can throw errors on stopped senders,
-                // just stop the transceiver to release resources
+              // Check if the transceiver and its sender are valid and not already stopped
+              if (transceiver.sender && transceiver.sender.track && transceiver.direction !== 'stopped') {
+                transceiver.sender.replaceTrack(null);
+                transceiver.stop();
+              } else if (transceiver.direction !== 'stopped') {
                 transceiver.stop();
               }
             } catch (e) {
-              console.warn(`Warning when stopping screen transceiver from peer ${peerId}:`, e);
+              console.warn(`Error stopping screen transceiver from peer ${peerId}:`, e);
             }
           });
           
           connection._screenTransceivers = [];
+        }
+        
+        // Also clean up older sender approach for backward compatibility
+        if (connection._screenSenders && connection._screenSenders.length > 0) {
+          console.log(`Removing ${connection._screenSenders.length} screen track senders from peer ${peerId}`);
+          
+          // Remove each screen track sender
+          connection._screenSenders.forEach(sender => {
+            try {
+              connection.removeTrack(sender);
+            } catch (e) {
+              console.warn(`Error removing screen track sender from peer ${peerId}:`, e);
+            }
+          });
+          
+          connection._screenSenders = [];
         }
       } catch (error) {
         console.error(`Error cleaning up screen track for peer ${peerId}:`, error);
@@ -4400,7 +4333,7 @@ handleDataChannelMessage = function(peerId, message) {
 // Update the addTrack handler to detect incoming screen share tracks
 const originalOnTrack = window.onTrack;
 window.onTrack = function(event, peerId) {
-  // Also call the original handler
+  // Also call the original handler for regular video/audio tracks
   if (originalOnTrack) {
     originalOnTrack(event, peerId);
   }
@@ -4415,24 +4348,39 @@ window.onTrack = function(event, peerId) {
       const settings = track.getSettings();
       
       // Screen share tracks typically have different aspect ratios and higher resolutions
+      // or are identified by special track labels/ids
       if (settings && 
           ((settings.width > 1000 && settings.height > 700) || 
            track.label.includes('screen') || 
            stream.id.includes('screen'))) {
         
-        console.log(`Detected likely screen share track from peer ${peerId}:`, settings);
+        console.log(`Detected screen share track from peer ${peerId}:`, settings);
+        
+        // Create a new MediaStream containing only this track to keep it separate
+        const screenOnlyStream = new MediaStream();
+        screenOnlyStream.addTrack(track);
+        
+        // Add to UI as a completely separate element - give it a generic name since we don't know the source
+        const sourceName = `Shared Screen (${settings.width}×${settings.height})`;
+        
+        // If there is already a screen share from this peer, remove it first
+        const existingScreenContainer = document.getElementById(`screen-share-${peerId}`);
+        if (existingScreenContainer) {
+          existingScreenContainer.remove();
+        }
+        
+        // Add the new screen share to the grid
+        addScreenShareToGrid(peerId, screenOnlyStream, sourceName);
         
         // Set as active screen sharer
         activeScreenSharePeerId = peerId;
         
-        // Add to UI - give it a generic name since we don't know the source
-        addScreenShareToGrid(peerId, stream, 'Shared Screen');
+        // Don't stop our own sharing if someone else starts sharing
+        // This allows multiple people to share screens simultaneously
         
-        // If we were sharing, stop our share
-        if (isScreenSharing) {
-          addSystemMessage('Your screen sharing was stopped because another user started sharing');
-          stopScreenSharing();
-        }
+        // Don't process this track as a regular video - we've handled it as a screen share
+        // Add a flag to the track to mark it as handled
+        track._processedAsScreenShare = true;
         
         break;
       }
