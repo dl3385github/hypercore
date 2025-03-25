@@ -4306,32 +4306,43 @@ async function startScreenShare(sourceId) {
     shareScreenButton.textContent = 'Stop Sharing';
     shareScreenButton.classList.add('active');
     
-    // Add the screen to our own video grid as a separate entity
-    addScreenShareToGrid(ownPeerId, screenStream, 'Screen Share', false);
+    // Create an entirely new stream for the screen share that's completely independent
+    // from any camera video stream
+    const screenTrack = screenStream.getVideoTracks()[0];
     
-    // Add ourselves to the set of screen sharing peers
+    // Create a new dedicated stream for screen sharing
+    const dedicatedScreenStream = new MediaStream();
+    dedicatedScreenStream.addTrack(screenTrack);
+    
+    // Add to the set of screen sharing peers
     screenSharingPeers.add(ownPeerId);
     
+    // Add to the video grid as a completely separate video element
+    addScreenShareToGrid(ownPeerId, dedicatedScreenStream, 'Screen Share', false);
+    
     // Add the screen track to all peer connections
-    const videoTrack = screenStream.getVideoTracks()[0];
     for (const [peerId, connection] of peerConnections.entries()) {
       try {
         console.log(`Adding screen share track to peer ${peerId}`);
         
+        // Always add as a separate track to a separate stream
+        const newScreenStream = new MediaStream();
+        newScreenStream.addTrack(screenTrack);
+        
         // Create a separate sender for the screen share track
-        const sender = connection.addTrack(videoTrack, screenStream);
+        // This is crucial - by creating a new stream each time, we ensure it's handled separately
+        const sender = connection.addTrack(screenTrack, newScreenStream);
         
         // Store the sender to be able to remove it later
-        if (!screenTrackSenders.has(peerId)) {
-          screenTrackSenders.set(peerId, sender);
-        }
+        screenTrackSenders.set(peerId, sender);
         
         // Send a message about the screen share
         const dataChannel = dataChannels.get(peerId);
         if (dataChannel && dataChannel.readyState === 'open') {
           const message = JSON.stringify({
             type: 'screen-share-started',
-            username: usernameInput.value
+            username: usernameInput.value,
+            isScreenShare: true // Explicitly mark as screen share
           });
           dataChannel.send(message);
         }
@@ -4343,8 +4354,8 @@ async function startScreenShare(sourceId) {
     // Add system message
     addSystemMessage('You started sharing your screen');
     
-    // Add a handler for screen share ending (e.g., when user clicks "Stop sharing" in Chrome UI)
-    screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+    // Add a handler for screen share ending
+    screenTrack.addEventListener('ended', () => {
       console.log('Screen share track ended');
       stopScreenShare();
     });
@@ -4969,11 +4980,12 @@ function handleTrackEvent(event, peerId) {
     return;
   }
   
-  console.log(`Received ${track.kind} track from peer ${peerId}`, track);
+  console.log(`Received ${track.kind} track from peer ${peerId} with label: ${track.label}`);
   
   // If this is a video track, check if it's a screen share
   if (track.kind === 'video') {
     const settings = track.getSettings();
+    console.log(`Track settings for peer ${peerId}:`, settings);
     
     // Check for screen share indicators
     const isScreenShare = 
@@ -4988,31 +5000,33 @@ function handleTrackEvent(event, peerId) {
       (remoteStream.id && remoteStream.id.toLowerCase().includes('screen'));
     
     if (isScreenShare) {
-      console.log(`Detected screen share track from peer ${peerId}`);
+      console.log(`Detected screen share track from peer ${peerId} - creating separate video element`);
       
-      // Create a new separate stream just for this screen share track
+      // Create a completely independent stream just for screen sharing
       const screenStream = new MediaStream();
       screenStream.addTrack(track);
       
       // Get peer's name
       const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+      console.log(`Adding screen share from ${peerName} to video grid`);
       
       // Add to the set of screen sharing peers
       screenSharingPeers.add(peerId);
       
-      // Add to UI as separate video element
+      // Add as a completely separate video in the UI
       addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
       
       // Notify user
       addSystemMessage(`${peerName} started sharing their screen`);
       
-      // We've handled the screen share track separately, but still add regular video track
-      // to the peer's video element below if they have one
+      // Return early - DO NOT add the screen share track to the regular video element
+      return;
     }
   }
   
-  // Always handle non-screen tracks separately
-  // This ensures camera feed is always visible even when screen sharing
+  // This code will only execute for non-screen share tracks
+  // Handle audio tracks or regular video tracks
+  console.log(`Adding regular ${track.kind} track to peer ${peerId}'s video element`);
   
   // Check if we already have a video container for this peer
   const existingContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
