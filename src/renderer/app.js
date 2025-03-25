@@ -1226,7 +1226,7 @@ async function createOffer(peerId, peerConnection) {
     
     // Wait a moment to ensure the local description is fully set
     // This is important as sometimes the localDescription might not be immediately available
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise(resolve => setTimeout(resolve, 100));
     
     // Ensure we have a valid local description before sending
     if (!peerConnection.localDescription) {
@@ -1237,10 +1237,13 @@ async function createOffer(peerId, peerConnection) {
     // Send the offer immediately to avoid delays
     const signal = {
       type: 'offer',
-      sdp: peerConnection.localDescription // Send the entire RTCSessionDescription object
+      sdp: {
+        type: peerConnection.localDescription.type,
+        sdp: peerConnection.localDescription.sdp
+      }
     };
     
-    console.log(`Sending offer to peer ${peerId}`, JSON.stringify(signal));
+    console.log(`Sending offer to peer ${peerId}`, signal);
     window.electronAPI.sendSignal(peerId, signal).then(result => {
       if (!result.success) {
         console.error(`Failed to send offer to ${peerId}:`, result.error);
@@ -1279,30 +1282,17 @@ async function handleSignalReceived(peerId, from, signal) {
     
     // Handle different signal types
     if (signal.type === 'offer') {
-      // Check if we received a direct RTCSessionDescription object
-      let rtcSessionDescription;
-      
-      if (signal.sdp) {
-        // Make sure we have a valid SDP object
-        if (typeof signal.sdp === 'object' && signal.sdp.type && signal.sdp.sdp) {
-          // Regular format with nested type and sdp fields
-          rtcSessionDescription = new RTCSessionDescription({
-            type: signal.sdp.type,
-            sdp: signal.sdp.sdp
-          });
-        } else if (signal.sdp.type === 'offer' && typeof signal.sdp.sdp === 'string') {
-          // Direct RTCSessionDescription object
-          rtcSessionDescription = signal.sdp;
-        } else {
-          console.error('Invalid SDP format in offer:', signal.sdp);
-          return;
-        }
-      } else {
-        console.error('Missing SDP in offer:', signal);
+      // Make sure we have a valid SDP object
+      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+        console.error('Invalid SDP in offer:', signal.sdp);
         return;
       }
       
       console.log(`Setting remote description (offer) from ${peerId}`);
+      const rtcSessionDescription = new RTCSessionDescription({
+        type: signal.sdp.type,
+        sdp: signal.sdp.sdp
+      });
       console.log(`Created RTCSessionDescription for offer:`, rtcSessionDescription);
       
       try {
@@ -1325,7 +1315,7 @@ async function handleSignalReceived(peerId, from, signal) {
         await peerConnection.setLocalDescription(answer);
         
         // Wait a moment to ensure the local description is fully set
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 100));
         
         // Ensure we have a valid local description before sending
         if (!peerConnection.localDescription) {
@@ -1336,10 +1326,13 @@ async function handleSignalReceived(peerId, from, signal) {
         // Send the answer
         const answerSignal = {
           type: 'answer',
-          sdp: peerConnection.localDescription // Send the entire RTCSessionDescription object
+          sdp: {
+            type: peerConnection.localDescription.type,
+            sdp: peerConnection.localDescription.sdp
+          }
         };
         
-        console.log(`Sending answer to peer ${peerId}`, JSON.stringify(answerSignal));
+        console.log(`Sending answer to peer ${peerId}`);
         window.electronAPI.sendSignal(peerId, answerSignal).then(result => {
           if (!result.success) {
             console.error(`Failed to send answer to ${peerId}:`, result.error);
@@ -1353,30 +1346,17 @@ async function handleSignalReceived(peerId, from, signal) {
         console.error(`Error processing offer from ${peerId}:`, error);
       }
     } else if (signal.type === 'answer') {
-      // Check if we received a direct RTCSessionDescription object
-      let rtcSessionDescription;
-      
-      if (signal.sdp) {
-        // Make sure we have a valid SDP object
-        if (typeof signal.sdp === 'object' && signal.sdp.type && signal.sdp.sdp) {
-          // Regular format with nested type and sdp fields
-          rtcSessionDescription = new RTCSessionDescription({
-            type: signal.sdp.type,
-            sdp: signal.sdp.sdp
-          });
-        } else if (signal.sdp.type === 'answer' && typeof signal.sdp.sdp === 'string') {
-          // Direct RTCSessionDescription object
-          rtcSessionDescription = signal.sdp;
-        } else {
-          console.error('Invalid SDP format in answer:', signal.sdp);
-          return;
-        }
-      } else {
-        console.error('Missing SDP in answer:', signal);
+      // Make sure we have a valid SDP object
+      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+        console.error('Invalid SDP in answer:', signal.sdp);
         return;
       }
       
       console.log(`Setting remote description (answer) from ${peerId}`);
+      const rtcSessionDescription = new RTCSessionDescription({
+        type: signal.sdp.type,
+        sdp: signal.sdp.sdp
+      });
       
       try {
         await peerConnection.setRemoteDescription(rtcSessionDescription);
