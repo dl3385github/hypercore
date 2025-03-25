@@ -742,6 +742,26 @@ function setupIpcHandlers() {
       };
     }
   });
+
+  // Handle start screen share request
+  ipcMain.handle('start-screen-share', async (event, sourceId) => {
+    try {
+      console.log(`Starting screen share with source ID: ${sourceId}`);
+      
+      // We'll need to pass this back to the renderer to handle with getUserMedia
+      // since we can't create MediaStreams directly in the main process
+      return {
+        success: true,
+        sourceId: sourceId
+      };
+    } catch (error) {
+      console.error('Error starting screen share:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to start screen share'
+      };
+    }
+  });
 }
 
 // Transcribe audio using OpenAI
