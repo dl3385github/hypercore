@@ -4296,8 +4296,11 @@ async function startScreenShare(sourceId) {
     // Mark as active screen sharer
     activeScreenSharePeerId = ownPeerId;
     
-    // Create a separate screen share container if localVideo doesn't exist or has no srcObject
-    let useVideoContainer = localVideo && localVideo.srcObject;
+    // Check if we can use the local video container
+    // We need both the localVideo element to exist AND have a valid stream
+    const localVideoExists = localVideo && localVideo.parentElement;
+    const hasLocalStream = localStream && localStream.active && localStream.getVideoTracks().length > 0;
+    const useVideoContainer = localVideoExists && hasLocalStream;
     
     if (useVideoContainer) {
       // Replace the local video stream with the screen stream
@@ -4338,6 +4341,7 @@ async function startScreenShare(sourceId) {
       }
     } else {
       // No local video or no stream - create a separate container for the screen share
+      console.log('Creating separate container for screen share (no camera or disabled camera)');
       const screenContainer = addScreenShareToGrid(ownPeerId, screenStream, 'Your Screen', false);
       
       // Store reference for later
@@ -4415,9 +4419,12 @@ function stopScreenShare() {
     
     // Check if we used the local video or created a separate container
     const screenshareContainer = document.getElementById(`screen-share-${ownPeerId}`);
+    
+    // If we have a camera, we might have used the localVideo element
     const usedLocalVideo = !screenshareContainer && localVideo && localVideo.srcObject === screenShareStream;
     
     if (usedLocalVideo) {
+      console.log('Restoring camera view after screen share');
       // Remove screen share info overlay from local video
       const localVideoContainer = localVideo.closest('.video-container');
       const infoOverlay = localVideoContainer.querySelector('.screen-share-info');
@@ -4426,7 +4433,7 @@ function stopScreenShare() {
       }
       
       // Restore the previous camera stream if it exists
-      if (previousLocalStream) {
+      if (previousLocalStream && previousLocalStream.active) {
         console.log('Restoring previous camera stream');
         localVideo.srcObject = previousLocalStream;
         
@@ -4476,7 +4483,8 @@ function stopScreenShare() {
         }
       }
     } else if (screenshareContainer) {
-      // Remove the dedicated screen share container
+      // We created a dedicated screen share container, remove it
+      console.log('Removing dedicated screen share container');
       screenshareContainer.remove();
       
       // Handle the track replacement in peer connections
@@ -4492,13 +4500,19 @@ function stopScreenShare() {
             console.log(`Removing screen share track for peer ${peerId}`);
             // If we don't have a camera track to replace with, just remove this track
             if (!previousLocalStream || !previousLocalStream.getVideoTracks().length) {
-              connection.removeTrack(videoSender);
+              try {
+                connection.removeTrack(videoSender);
+              } catch (error) {
+                console.error(`Failed to remove track, may already be removed: ${error.message}`);
+              }
             }
           }
         } catch (error) {
           console.error(`Error handling screen track removal for peer ${peerId}:`, error);
         }
       }
+    } else {
+      console.warn('Could not find screen share container or local video - may have been removed already');
     }
     
     // Clear stored variables
@@ -5005,7 +5019,7 @@ async function leaveRoom() {
     
     // Stop any screen sharing if active
     if (isScreenSharing) {
-      stopScreenSharing();
+      stopScreenShare(); // Fixed function name from stopScreenSharing to stopScreenShare
     }
     
     // Stop video recording if active
