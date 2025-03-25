@@ -1291,16 +1291,16 @@ async function createOffer(peerId, peerConnection) {
 async function handleSignalReceived(peerId, from, signal) {
   try {
     console.log(`Received signal from ${from} (${peerId}):`, signal.type);
-    console.log(`Signal content:`, signal);
     
-    // Check if this is a screen sharing signal
-    if (signal.isScreenShare) {
-      console.log(`This is a screen sharing signal from ${peerId}`);
+    // IMPORTANT: First check if this is a screen sharing signal
+    // Screen share signals have the isScreenShare flag
+    if (signal.isScreenShare === true) {
+      console.log(`Redirecting screen sharing signal to dedicated handler`);
       await handleScreenShareSignal(peerId, from, signal);
-      return;
+      return; // Exit early - don't process this as a regular signal
     }
     
-    // If we don't have a connection to this peer yet, create one
+    // Continue with regular signal processing for camera/audio
     let peerConnection;
     if (!peerConnections.has(peerId)) {
       console.log(`Creating new peer connection for ${peerId} due to incoming signal`);
@@ -1322,7 +1322,6 @@ async function handleSignalReceived(peerId, from, signal) {
         type: signal.sdp.type,
         sdp: signal.sdp.sdp
       });
-      console.log(`Created RTCSessionDescription for offer:`, rtcSessionDescription);
       
       try {
         await peerConnection.setRemoteDescription(rtcSessionDescription);
@@ -1362,13 +1361,7 @@ async function handleSignalReceived(peerId, from, signal) {
         };
         
         console.log(`Sending answer to peer ${peerId}`);
-        window.electronAPI.sendSignal(peerId, answerSignal).then(result => {
-          if (!result.success) {
-            console.error(`Failed to send answer to ${peerId}:`, result.error);
-          } else {
-            console.log(`Successfully sent answer to ${peerId}`);
-          }
-        }).catch(err => {
+        window.electronAPI.sendSignal(peerId, answerSignal).catch(err => {
           console.error(`Error sending answer to ${peerId}:`, err);
         });
       } catch (error) {
@@ -1404,12 +1397,36 @@ async function handleSignalReceived(peerId, from, signal) {
         console.error(`Error setting remote description for ${peerId}:`, error);
       }
     } else if (signal.type === 'ice-candidate') {
-      // Process the ICE candidate
-      if (signal.candidate) {
-        console.log(`Received ICE candidate from ${peerId}:`, signal.candidate);
-        await processIceCandidate(peerId, peerConnection, signal.candidate);
+      // Check if this is a screen sharing ICE candidate
+      if (signal.isScreenShare === true) {
+        console.log(`Received screen share ICE candidate from ${peerId}`);
+        
+        // Get the dedicated screen sharing connection
+        if (!screenSharingConnections || !screenSharingConnections.has(peerId)) {
+          console.warn(`No screen sharing connection found for ${peerId}, buffering ICE candidate`);
+          // Buffer the ICE candidate in case we receive the offer later
+          if (!pendingIceCandidates.has(`screen-${peerId}`)) {
+            pendingIceCandidates.set(`screen-${peerId}`, []);
+          }
+          pendingIceCandidates.get(`screen-${peerId}`).push({
+            candidate: signal.candidate,
+            isScreenShare: true
+          });
+          return;
+        }
+        
+        const screenConnection = screenSharingConnections.get(peerId);
+        // Process the ICE candidate for the screen sharing connection
+        await processIceCandidate(peerId, screenConnection, signal.candidate, true);
       } else {
-        console.warn(`Received empty ICE candidate from ${peerId}`);
+        // Regular (non-screen-share) ICE candidate
+        // Process the ICE candidate
+        if (signal.candidate) {
+          console.log(`Received regular ICE candidate from ${peerId}`);
+          await processIceCandidate(peerId, peerConnection, signal.candidate, false);
+        } else {
+          console.warn(`Received empty ICE candidate from ${peerId}`);
+        }
       }
     } else {
       console.warn(`Unknown signal type from ${peerId}: ${signal.type}`);
@@ -1422,13 +1439,13 @@ async function handleSignalReceived(peerId, from, signal) {
 // Handle screen sharing specific signals
 async function handleScreenShareSignal(peerId, from, signal) {
   try {
-    console.log(`Processing screen share signal from ${peerId}, type: ${signal.type}`);
+    debugScreenShare(`Processing signal from ${peerId}, type: ${signal.type}`);
     
     // Always create a new connection for screen sharing offers to avoid SDP conflicts
     if (signal.type === 'offer') {
       // Close and remove any existing connection for this peer to avoid conflicts
       if (screenSharingConnections && screenSharingConnections.has(peerId)) {
-        console.log(`Closing existing screen share connection for ${peerId} to create a fresh one`);
+        debugScreenShare(`Closing existing connection for ${peerId} to create a fresh one`);
         const oldConnection = screenSharingConnections.get(peerId);
         oldConnection.onicecandidate = null;
         oldConnection.ontrack = null;
@@ -1446,6 +1463,7 @@ async function handleScreenShareSignal(peerId, from, signal) {
       }
       
       // Create a new dedicated connection for this screen share
+      debugScreenShare(`Creating new RTCPeerConnection for screen share from ${peerId}`);
       const screenConnection = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -1457,34 +1475,13 @@ async function handleScreenShareSignal(peerId, from, signal) {
       // Store connection for future reference
       screenSharingConnections.set(peerId, screenConnection);
       
-      // Handle ICE candidates for this screen share connection
-      screenConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log(`Generated ICE candidate for screen share`);
-          
-          const iceSignal = {
-            type: 'ice-candidate',
-            isScreenShare: true,
-            candidate: {
-              candidate: event.candidate.candidate,
-              sdpMid: event.candidate.sdpMid,
-              sdpMLineIndex: event.candidate.sdpMLineIndex,
-              usernameFragment: event.candidate.usernameFragment
-            }
-          };
-          
-          window.electronAPI.sendSignal(peerId, iceSignal).catch(err => {
-            console.error(`Error sending screen share ICE candidate:`, err);
-          });
-        }
-      };
-      
       // Handle incoming tracks (the screen share video)
       screenConnection.ontrack = (event) => {
-        console.log(`Received screen share track from ${peerId}`);
+        debugScreenShare(`Received track from ${peerId}`);
         
         if (event.streams && event.streams[0]) {
           const screenStream = event.streams[0];
+          debugScreenShare(`Got screen stream with ID: ${screenStream.id}`);
           
           // Add to the set of screen sharing peers
           if (!screenSharingPeers) {
@@ -1498,14 +1495,14 @@ async function handleScreenShareSignal(peerId, from, signal) {
           // Check if UI already exists and update it
           const existingScreenShare = document.getElementById(`screen-share-${peerId}`);
           if (existingScreenShare) {
-            console.log(`Updating existing screen share UI for ${peerName}`);
+            debugScreenShare(`Updating existing UI for ${peerName}`);
             const videoElement = existingScreenShare.querySelector('video');
             if (videoElement) {
               videoElement.srcObject = screenStream;
             }
           } else {
             // Create new UI for the screen share
-            console.log(`Creating new UI for screen share from ${peerName}`);
+            debugScreenShare(`Creating new UI for screen share from ${peerName}`);
             addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
             addSystemMessage(`${peerName} is sharing their screen`);
           }
@@ -1551,6 +1548,17 @@ async function handleScreenShareSignal(peerId, from, signal) {
         // Set the remote description (the offer)
         console.log('Setting remote description for screen share');
         await screenConnection.setRemoteDescription(rtcSessionDescription);
+        
+        // Process any pending ICE candidates specifically for this screen share connection
+        const screenPendingCandidatesKey = `screen-${peerId}`;
+        if (pendingIceCandidates.has(screenPendingCandidatesKey)) {
+          console.log(`Processing ${pendingIceCandidates.get(screenPendingCandidatesKey).length} pending screen share ICE candidates`);
+          const candidates = pendingIceCandidates.get(screenPendingCandidatesKey);
+          for (const { candidate } of candidates) {
+            await processIceCandidate(peerId, screenConnection, candidate, true);
+          }
+          pendingIceCandidates.delete(screenPendingCandidatesKey);
+        }
         
         // Create an answer
         console.log('Creating answer for screen share');
@@ -1651,22 +1659,22 @@ async function handleScreenShareSignal(peerId, from, signal) {
 }
 
 // Process an ICE candidate received from a peer
-async function processIceCandidate(peerId, connection, candidate) {
+async function processIceCandidate(peerId, connection, candidate, isScreenShare = false) {
   try {
-    // If we don't have a remote description yet, buffer the ICE candidate
+    console.log(`Processing ${isScreenShare ? 'screen share' : 'regular'} ICE candidate for ${peerId}`);
+    
+    // If we don't have a remote description yet, buffer the candidate
     if (!connection.remoteDescription || !connection.remoteDescription.type) {
       console.log(`Buffering ICE candidate for ${peerId} until remote description is set`);
       if (!pendingIceCandidates.has(peerId)) {
         pendingIceCandidates.set(peerId, []);
       }
-      pendingIceCandidates.get(peerId).push(candidate);
+      pendingIceCandidates.get(peerId).push({candidate, isScreenShare});
       return;
     }
     
     // Ensure the candidate has the necessary properties
     if (candidate.candidate && (candidate.sdpMid !== undefined || candidate.sdpMLineIndex !== undefined)) {
-      console.log(`Processing ICE candidate for ${peerId}:`, candidate);
-      
       // Create an RTCIceCandidate object
       const iceCandidate = new RTCIceCandidate({
         candidate: candidate.candidate,
@@ -1675,8 +1683,6 @@ async function processIceCandidate(peerId, connection, candidate) {
         usernameFragment: candidate.usernameFragment
       });
       
-      console.log(`Created RTCIceCandidate object:`, iceCandidate);
-      
       try {
         await connection.addIceCandidate(iceCandidate);
         console.log(`Successfully added ICE candidate for ${peerId}`);
@@ -1684,7 +1690,7 @@ async function processIceCandidate(peerId, connection, candidate) {
         console.error(`Error adding ICE candidate for ${peerId}:`, err);
       }
     } else {
-      console.warn(`Skipping invalid ICE candidate for ${peerId}: missing sdpMid or sdpMLineIndex`, candidate);
+      console.warn(`Skipping invalid ICE candidate for ${peerId}: missing sdpMid or sdpMLineIndex`);
     }
   } catch (err) {
     // Only log error if connection is still viable
@@ -4592,19 +4598,21 @@ async function handleScreenShareClick() {
 // Start screen sharing for the selected source
 async function startScreenShare(sourceId) {
   try {
-    console.log(`Starting screen share with source ID: ${sourceId}`);
+    debugScreenShare(`Starting with source ID: ${sourceId}`);
     
     // Stop any existing screen share first
     if (isScreenSharing) {
+      debugScreenShare(`Stopping existing screen share first`);
       await stopScreenShare();
       // Small delay to ensure cleanup is complete
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
     
     // Use the modern getDisplayMedia API when available, or fall back to desktopCapturer for Electron
     let screenStream;
     try {
       // For Electron specific implementation
+      debugScreenShare(`Attempting to get stream with Electron method`);
       screenStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
@@ -4619,9 +4627,10 @@ async function startScreenShare(sourceId) {
         }
       });
     } catch (err) {
-      console.error('Error capturing screen with Electron method:', err);
+      debugScreenShare(`Electron method failed: ${err.message}`);
       // Try standard approach as fallback
       try {
+        debugScreenShare(`Trying standard getDisplayMedia as fallback`);
         screenStream = await navigator.mediaDevices.getDisplayMedia({
           video: {
             width: { ideal: 1920 },
@@ -4662,18 +4671,21 @@ async function startScreenShare(sourceId) {
     const videoTrack = screenStream.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.onended = () => {
-        console.log('Screen sharing video track ended');
+        debugScreenShare(`Video track ended by user`);
         stopScreenShare();
       };
     }
     
     // For each connected peer, create a dedicated screen sharing connection
-    console.log(`Setting up screen sharing for ${peers.size} connected peers`);
+    debugScreenShare(`Setting up screen sharing for ${peers.size} connected peers`);
     
     for (const peerId of peers) {
       try {
+        debugScreenShare(`Setting up screen share for peer ${peerId}`);
+        
         // Clean up any existing screen sharing connection
         if (screenSharingConnections && screenSharingConnections.has(peerId)) {
+          debugScreenShare(`Closing existing connection for ${peerId}`);
           const oldConn = screenSharingConnections.get(peerId);
           oldConn.onicecandidate = null;
           oldConn.ontrack = null;
@@ -4709,11 +4721,11 @@ async function startScreenShare(sourceId) {
         // Handle ICE candidates
         screenConnection.onicecandidate = (event) => {
           if (event.candidate) {
-            console.log(`Generated ICE candidate for screen share to ${peerId}`);
+            debugScreenShare(`Generated ICE candidate for screen share to ${peerId}`);
             
             const iceSignal = {
               type: 'ice-candidate',
-              isScreenShare: true,
+              isScreenShare: true, // This MUST be true to route correctly
               candidate: {
                 candidate: event.candidate.candidate,
                 sdpMid: event.candidate.sdpMid,
@@ -4722,6 +4734,7 @@ async function startScreenShare(sourceId) {
               }
             };
             
+            debugScreenShare(`Sending screen share ICE candidate`, iceSignal);
             window.electronAPI.sendSignal(peerId, iceSignal).catch(err => {
               console.error(`Error sending screen share ICE candidate:`, err);
             });
@@ -4754,7 +4767,7 @@ async function startScreenShare(sourceId) {
         // Send the offer with a screen share flag
         const signal = {
           type: 'offer',
-          isScreenShare: true,
+          isScreenShare: true, // IMPORTANT: This flag must be exactly true
           sdp: {
             type: screenConnection.localDescription.type,
             sdp: screenConnection.localDescription.sdp
@@ -5892,3 +5905,13 @@ if (saveAllSettingsBtn) {
 
 // Initialize the app after authentication
 checkAuthState();
+
+// Debug log function to make it easier to trace screen sharing issues
+function debugScreenShare(message, data = null) {
+  const prefix = '🖥️ SCREEN SHARE: ';
+  if (data) {
+    console.log(prefix + message, data);
+  } else {
+    console.log(prefix + message);
+  }
+}
