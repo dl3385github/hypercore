@@ -1475,9 +1475,10 @@ function addRemoteStream(peerId, stream) {
         console.log(`Stored username "${peerName}" for peer ${peerId}`);
       }
       
-      // Add video off indicator
+      // Add video off indicator - always show initially until we know
+      // whether the stream has video tracks
       const videoOffIndicator = document.createElement('div');
-      videoOffIndicator.className = 'video-off-indicator hidden';
+      videoOffIndicator.className = 'video-off-indicator';
       videoOffIndicator.innerHTML = '📷❌';
       videoWrapper.appendChild(videoOffIndicator);
       
@@ -1544,6 +1545,19 @@ function addRemoteStream(peerId, stream) {
     // Set the srcObject to display the stream
     remoteVideo.srcObject = stream;
     
+    // Check if the stream has video tracks
+    const hasVideoTracks = stream.getVideoTracks().length > 0;
+    
+    // Show or hide the video off indicator based on whether there are video tracks
+    const videoOffIndicator = remoteContainer.querySelector('.video-off-indicator');
+    if (videoOffIndicator) {
+      if (hasVideoTracks) {
+        videoOffIndicator.classList.add('hidden');
+      } else {
+        videoOffIndicator.classList.remove('hidden');
+      }
+    }
+    
     // Set the volume based on stored preference
     if (peerVolumes.has(peerId)) {
       remoteVideo.volume = peerVolumes.get(peerId);
@@ -1557,6 +1571,10 @@ function addRemoteStream(peerId, stream) {
     
     // Ensure the container is visible
     remoteContainer.classList.remove('hidden');
+    
+    // Add fullscreen button regardless of whether there are video tracks or not
+    // This way users can click fullscreen even if video is initially off
+    addFullscreenButtonToContainer(remoteContainer, stream, peerId);
     
     // Update connection count
     updateConnectionCount();
@@ -4579,48 +4597,18 @@ handleDataChannelMessage = function(peerId, message) {
       // Also track as the active screen sharer for certain features
       activeScreenSharePeerId = peerId;
       
-      // Find the peer's video container and add screen share info overlay
-      const peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-      if (peerContainer) {
-        const videoWrapper = peerContainer.querySelector('.video-wrapper');
-        if (videoWrapper) {
-          // Add or update screen share info overlay
-          let infoOverlay = videoWrapper.querySelector('.screen-share-info');
-          if (!infoOverlay) {
-            infoOverlay = document.createElement('div');
-            infoOverlay.className = 'screen-share-info';
-            infoOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-            infoOverlay.style.color = 'white';
-            infoOverlay.style.padding = '8px';
-            infoOverlay.style.position = 'absolute';
-            infoOverlay.style.bottom = '0';
-            infoOverlay.style.left = '0';
-            infoOverlay.style.right = '0';
-            infoOverlay.style.height = 'auto';
-            infoOverlay.style.zIndex = '2';
-            infoOverlay.style.pointerEvents = 'none'; // Allow clicks to pass through
-            videoWrapper.appendChild(infoOverlay);
-          }
-          
-          // Update overlay text
-          infoOverlay.innerHTML = `
-            <span class="screen-share-icon">🖥️</span>
-            <span>${data.username}'s Screen: ${data.sourceName}</span>
-          `;
-        }
-      }
+      // The actual screen share container will be created when the track arrives
+      // No need to modify the existing video container since we always use separate
+      // containers for screen shares
       
     } else if (data.type === 'screen-share-stopped') {
       console.log(`Peer ${peerId} stopped screen sharing`);
       addSystemMessage(`${data.username} stopped sharing their screen`);
       
-      // Remove screen share info overlay
-      const peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-      if (peerContainer) {
-        const infoOverlay = peerContainer.querySelector('.screen-share-info');
-        if (infoOverlay) {
-          infoOverlay.remove();
-        }
+      // Find and remove the screen share container
+      const screenContainer = document.getElementById(`screen-share-${peerId}`);
+      if (screenContainer) {
+        screenContainer.remove();
       }
       
       // Remove this peer from the set of screen sharing peers
@@ -5069,7 +5057,7 @@ function handleTrackEvent(event, peerId) {
       activeScreenSharePeerId = peerId;
       
       // Add a separate container for this screen share
-      addScreenShareToGrid(peerId, screenStream, 'Screen', true);
+      const screenContainer = addScreenShareToGrid(peerId, screenStream, 'Screen', true);
       
       // Notify user
       addSystemMessage(`${peerName} started sharing their screen`);
@@ -5085,7 +5073,12 @@ function handleTrackEvent(event, peerId) {
   
   if (!existingContainer) {
     // No existing container, add the stream with camera and audio
-    addRemoteStream(peerId, remoteStream);
+    const container = addRemoteStream(peerId, remoteStream);
+    
+    // Make sure there's a fullscreen button even if there's no video
+    if (container && !container.querySelector('.fullscreen-btn')) {
+      addFullscreenButtonToContainer(container, remoteStream, peerId);
+    }
   } else {
     // Already have a container, update the stream
     const videoElement = existingContainer.querySelector('video');
@@ -5102,20 +5095,30 @@ function handleTrackEvent(event, peerId) {
           // For video tracks, we should check if we're replacing the right kind
           // Only update if this is a camera feed replacing a camera feed
           videoElement.srcObject = remoteStream;
+          
+          // If this is a video track, update the video off indicator
+          const videoOffIndicator = existingContainer.querySelector('.video-off-indicator');
+          if (videoOffIndicator) {
+            videoOffIndicator.classList.add('hidden');
+          }
         }
       } else {
         // No existing stream or it's a compatible update
         videoElement.srcObject = remoteStream;
+        
+        // Update video off indicator if this is a video track
+        if (track.kind === 'video') {
+          const videoOffIndicator = existingContainer.querySelector('.video-off-indicator');
+          if (videoOffIndicator) {
+            videoOffIndicator.classList.add('hidden');
+          }
+        }
       }
-    }
-  }
-  
-  // Add fullscreen button for video tracks if it doesn't exist
-  if (track.kind === 'video') {
-    const container = existingContainer || 
-                     document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-    if (container) {
-      addFullscreenButtonToContainer(container, remoteStream, peerId);
+      
+      // Make sure there's a fullscreen button
+      if (!existingContainer.querySelector('.fullscreen-btn')) {
+        addFullscreenButtonToContainer(existingContainer, remoteStream, peerId);
+      }
     }
   }
 }
