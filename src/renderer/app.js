@@ -120,6 +120,7 @@ let availableDevices = {
 const appSettings = {
   audioThreshold: 0.05, // Default microphone threshold
   transcriptionThreshold: 0.05, // Default transcription threshold
+  transcriptionModel: 'whisper-1', // Default transcription model
 };
 
 // Save settings to localStorage
@@ -154,6 +155,10 @@ function loadSettings() {
       
       if (parsedSettings.transcriptionThreshold) {
         appSettings.transcriptionThreshold = parsedSettings.transcriptionThreshold;
+      }
+      
+      if (parsedSettings.transcriptionModel) {
+        appSettings.transcriptionModel = parsedSettings.transcriptionModel;
       }
       
       // Restore device selections
@@ -194,6 +199,7 @@ let currentUser = null;
 const openaiApiKeyInput = document.getElementById('openai-api-key');
 const saveApiKeyBtn = document.getElementById('save-api-key-btn');
 const apiKeyStatus = document.getElementById('api-key-status');
+const transcriptionModelSelect = document.getElementById('transcription-model');
 
 // DOM elements - add screen sharing elements
 const shareScreenButton = document.getElementById('share-screen');
@@ -282,6 +288,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize transcription threshold slider
   transcriptionThresholdSlider.value = appSettings.transcriptionThreshold;
   transcriptionThresholdValueDisplay.textContent = appSettings.transcriptionThreshold;
+  
+  // Initialize transcription model selector
+  if (transcriptionModelSelect) {
+    transcriptionModelSelect.value = appSettings.transcriptionModel || 'whisper-1';
+    
+    transcriptionModelSelect.addEventListener('change', (e) => {
+      const selectedModel = e.target.value;
+      appSettings.transcriptionModel = selectedModel;
+      console.log(`Transcription model updated to ${selectedModel}`);
+      saveSettings();
+      // Send the new model choice to the main process
+      updateTranscriptionModel(selectedModel);
+    });
+  }
+  
+  function updateTranscriptionModel(model) {
+    try {
+      window.electronAPI.updateTranscriptionModel(model)
+        .then(() => {
+          console.log(`Transcription model updated to ${model}`);
+        })
+        .catch(error => {
+          console.error('Error updating transcription model:', error);
+        });
+    } catch (error) {
+      console.error('Error updating transcription model:', error);
+    }
+  }
   
   audioThresholdSlider.addEventListener('input', (e) => {
     const newValue = parseFloat(e.target.value);
@@ -1411,6 +1445,13 @@ async function handleScreenShareSignal(peerId, from, signal) {
     // Handle different screen share signal types
     if (signal.type === 'offer') {
       console.log(`Processing screen share offer from ${peerId}`);
+      
+      // Make sure we have a valid SDP object
+      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+        console.error(`Invalid SDP in screen share offer:`, signal.sdp);
+        return;
+      }
+      
       const rtcSessionDescription = new RTCSessionDescription({
         type: signal.sdp.type,
         sdp: signal.sdp.sdp
@@ -1422,18 +1463,31 @@ async function handleScreenShareSignal(peerId, from, signal) {
       const answer = await screenConnection.createAnswer();
       await screenConnection.setLocalDescription(answer);
       
+      // Wait for the local description to be fully set
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       // Send answer with screen share flag
       const answerSignal = {
         type: 'answer',
-        isScreenShare: true, // Mark this as a screen share candidate
-        sdp: screenConnection.localDescription
+        isScreenShare: true,
+        sdp: {
+          type: screenConnection.localDescription.type,
+          sdp: screenConnection.localDescription.sdp
+        }
       };
       
-      console.log(`Sending screen share answer to ${peerId}`);
+      console.log(`Sending screen share answer to ${peerId}`, answerSignal);
       await window.electronAPI.sendSignal(peerId, answerSignal);
       
     } else if (signal.type === 'answer') {
       console.log(`Processing screen share answer from ${peerId}`);
+      
+      // Make sure we have a valid SDP object
+      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+        console.error(`Invalid SDP in screen share answer:`, signal.sdp);
+        return;
+      }
+      
       const rtcSessionDescription = new RTCSessionDescription({
         type: signal.sdp.type,
         sdp: signal.sdp.sdp
@@ -4503,14 +4557,20 @@ async function startScreenShare(sourceId) {
         const offer = await screenConnection.createOffer();
         await screenConnection.setLocalDescription(offer);
         
+        // Wait a moment to ensure the local description is fully set
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
         // Send the offer with screen share flag
         const signal = {
           type: 'offer',
           isScreenShare: true, // Mark as screen share offer
-          sdp: screenConnection.localDescription
+          sdp: {
+            type: screenConnection.localDescription.type,
+            sdp: screenConnection.localDescription.sdp
+          }
         };
         
-        console.log(`Sending screen share offer to ${peerId}`);
+        console.log(`Sending screen share offer to ${peerId}`, signal);
         await window.electronAPI.sendSignal(peerId, signal);
         
         // Also notify via data channel that we're sharing screen
@@ -4717,7 +4777,8 @@ handleDataChannelMessage = function(peerId, message) {
   
   // Handle screen sharing messages
   try {
-    const data = JSON.parse(message);
+    // Check if message is already a parsed object (which is likely since the original function would have parsed it)
+    const data = typeof message === 'object' ? message : JSON.parse(message);
     
     if (data.type === 'screen-share-started') {
       console.log(`Peer ${peerId} started screen sharing: ${data.sourceName}`);
@@ -5393,7 +5454,7 @@ function renderFrame() {
       const testLine = line + (line ? ' ' : '') + word;
       const testWidth = ctx.measureText(testLine).width;
       
-      if (testWidth > maxWidth && line) {
+      if (testWidth > maxWidth && line !== '') {
         // Draw the current line
         ctx.fillText(line, textX, lineY);
         // Start a new line
@@ -5478,3 +5539,43 @@ function renderFrame() {
   videoCanvas._lastFrameTime = Date.now();
   return videoCanvas;
 }
+
+// Add API key settings
+saveApiKeyBtn.addEventListener('click', saveOpenAIApiKey);
+
+// Add Save All Settings button event listener
+const saveAllSettingsBtn = document.getElementById('save-all-settings-btn');
+if (saveAllSettingsBtn) {
+  saveAllSettingsBtn.addEventListener('click', () => {
+    // Save audio threshold
+    updateAudioThreshold(appSettings.audioThreshold);
+    
+    // Save transcription threshold
+    updateTranscriptionThreshold(appSettings.transcriptionThreshold);
+    
+    // Save transcription model
+    if (transcriptionModelSelect) {
+      updateTranscriptionModel(appSettings.transcriptionModel);
+    }
+    
+    // Save API key
+    saveOpenAIApiKey();
+    
+    // Save all settings to localStorage
+    saveSettings();
+    
+    // Show success message
+    const statusMessage = document.createElement('span');
+    statusMessage.classList.add('setting-status', 'success');
+    statusMessage.textContent = 'All settings saved!';
+    saveAllSettingsBtn.parentNode.appendChild(statusMessage);
+    
+    // Remove message after 3 seconds
+    setTimeout(() => {
+      statusMessage.remove();
+    }, 3000);
+  });
+}
+
+// Initialize the app after authentication
+checkAuthState();

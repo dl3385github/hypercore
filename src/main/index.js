@@ -31,7 +31,9 @@ if (!fs.existsSync('./temp')) {
 
 // Threshold for transcribing audio (minimum volume level required)
 let MIN_AUDIO_LEVEL = 0.05; // Default value for mic activation threshold
+let NOISE_DETECTION_THRESHOLD = 0.025; // Default value for noise detection
 let TRANSCRIPTION_THRESHOLD = 0.05; // Default value for transcription threshold
+let TRANSCRIPTION_MODEL = 'whisper-1'; // Default transcription model
 const MIN_AUDIO_DURATION = 700; // Minimum milliseconds of audio to transcribe
 
 // Error handler for uncaught exceptions
@@ -65,6 +67,11 @@ function loadApiKey() {
       if (settings.transcriptionThreshold !== undefined) {
         TRANSCRIPTION_THRESHOLD = settings.transcriptionThreshold;
         console.log(`Loaded transcription threshold from settings: ${TRANSCRIPTION_THRESHOLD}`);
+      }
+      
+      if (settings.transcriptionModel !== undefined) {
+        TRANSCRIPTION_MODEL = settings.transcriptionModel;
+        console.log(`Loaded transcription model from settings: ${TRANSCRIPTION_MODEL}`);
       }
     }
   } catch (error) {
@@ -131,6 +138,7 @@ function saveSettings() {
     // Update with current values
     settings.audioThreshold = MIN_AUDIO_LEVEL;
     settings.transcriptionThreshold = TRANSCRIPTION_THRESHOLD;
+    settings.transcriptionModel = TRANSCRIPTION_MODEL;
     settings.openaiApiKey = openaiApiKey;
     
     // Save settings
@@ -611,6 +619,22 @@ function setupIpcHandlers() {
     }
   });
   
+  // Update transcription model
+  ipcMain.handle('update-transcription-model', (event, model) => {
+    try {
+      TRANSCRIPTION_MODEL = model;
+      console.log(`Updated transcription model to ${TRANSCRIPTION_MODEL}`);
+      saveSettings();
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating transcription model:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to update transcription model'
+      };
+    }
+  });
+  
   // Update OpenAI API key
   ipcMain.handle('update-openai-api-key', (event, apiKey) => {
     try {
@@ -772,13 +796,15 @@ async function transcribeAudio(filePath) {
       throw new Error('OpenAI API key not set. Please configure in settings.');
     }
     
+    console.log(`Using transcription model: ${TRANSCRIPTION_MODEL}`);
+    
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(filePath),
-      model: "whisper-1",  // Using whisper-1 since gpt-4o-transcribe requires different API format
+      model: TRANSCRIPTION_MODEL,
       language: "en",
     });
     
-    console.log(`OpenAI transcription returned: "${transcription.text}"`);
+    console.log(`OpenAI transcription returned using model ${TRANSCRIPTION_MODEL}: "${transcription.text}"`);
     
     if (!transcription.text || transcription.text.trim() === '') {
       console.log(`Transcription ignored (too short): ${transcription.text}`);

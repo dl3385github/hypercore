@@ -216,6 +216,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('update-transcription-threshold', threshold);
   },
   
+  // Update transcription model
+  updateTranscriptionModel: (model) => {
+    logEvent('updateTranscriptionModel', `New model: ${model}`);
+    return ipcRenderer.invoke('update-transcription-model', model);
+  },
+  
   // OpenAI API key management
   getOpenAIApiKey: () => {
     logEvent('getOpenAIApiKey', 'Requesting current API key (masked)');
