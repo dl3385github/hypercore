@@ -1047,14 +1047,29 @@ function sendMediaStateViaDataChannel(dataChannel) {
 function handleDataChannelMessage(peerId, message) {
   console.log(`Received data channel message from ${peerId}:`, message);
   
-  if (message.type === 'media-state') {
+  // If message is a string, try to parse it as JSON
+  let data;
+  if (typeof message === 'string') {
+    try {
+      data = JSON.parse(message);
+    } catch (e) {
+      console.error(`Error parsing data channel message from ${peerId} as JSON:`, e);
+      // Not a valid JSON string, use as-is
+      data = message;
+    }
+  } else {
+    // Already an object, use as-is
+    data = message;
+  }
+  
+  if (data.type === 'media-state') {
     // Update remote media state UI
-    updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
-  } else if (message.type === 'transcript') {
+    updateRemoteMediaState(peerId, data.username, data.videoEnabled, data.audioEnabled);
+  } else if (data.type === 'transcript') {
     // Handle transcript message from peer
     // Get the speaker from the message or use the peer's username
-    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
-    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
+    const speaker = data.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+    console.log(`Received transcript message from ${speaker}: "${data.text}"`);
     
     // Make sure we store this username for the peer if we don't have it already
     if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
@@ -1062,26 +1077,26 @@ function handleDataChannelMessage(peerId, message) {
     }
     
     // Skip empty or very short transcriptions
-    if (!message.text || message.text.trim().length < 3) {
-      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
+    if (!data.text || data.text.trim().length < 3) {
+      console.log(`Ignoring short transcript from ${speaker}: "${data.text}"`);
       return;
     }
     
     // Update UI with the transcript
-    updateTranscription(speaker, message.text);
+    updateTranscription(speaker, data.text);
     
     // No need to add to transcript map again since updateTranscription already does this
-  } else if (message.type === 'screen-share-started') {
-    console.log(`Peer ${peerId} started screen sharing: ${message.sourceName}`);
-    addSystemMessage(`${message.username} started sharing their screen: ${message.sourceName}`);
+  } else if (data.type === 'screen-share-started') {
+    console.log(`Peer ${peerId} started screen sharing: ${data.sourceName}`);
+    addSystemMessage(`${data.username} started sharing their screen: ${data.sourceName}`);
     
     // Update active screen sharer
     activeScreenSharePeerId = peerId;
     
     // No longer stopping our own share - we support multiple simultaneous shares
-  } else if (message.type === 'screen-share-stopped') {
+  } else if (data.type === 'screen-share-stopped') {
     console.log(`Peer ${peerId} stopped screen sharing`);
-    addSystemMessage(`${message.username} stopped sharing their screen`);
+    addSystemMessage(`${data.username} stopped sharing their screen`);
     
     // Remove the screen share from grid
     const screenContainer = document.getElementById(`screen-share-${peerId}`);
@@ -1465,17 +1480,30 @@ async function handleScreenShareSignal(peerId, from, signal) {
     if (signal.type === 'offer') {
       console.log(`Processing screen share offer from ${peerId}`);
       
-      // Make sure we have a valid SDP object
-      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
-        console.error(`Invalid SDP in screen share offer:`, signal.sdp);
+      // Check if we received a direct RTCSessionDescription object
+      let rtcSessionDescription;
+      
+      if (signal.sdp) {
+        // Make sure we have a valid SDP object
+        if (typeof signal.sdp === 'object' && signal.sdp.type && signal.sdp.sdp) {
+          // Regular format with nested type and sdp fields
+          rtcSessionDescription = new RTCSessionDescription({
+            type: signal.sdp.type,
+            sdp: signal.sdp.sdp
+          });
+        } else if (signal.sdp.type === 'offer' && typeof signal.sdp.sdp === 'string') {
+          // Direct RTCSessionDescription object
+          rtcSessionDescription = signal.sdp;
+        } else {
+          console.error(`Invalid SDP format in screen share offer:`, signal.sdp);
+          return;
+        }
+      } else {
+        console.error(`Missing SDP in screen share offer:`, signal);
         return;
       }
       
-      const rtcSessionDescription = new RTCSessionDescription({
-        type: signal.sdp.type,
-        sdp: signal.sdp.sdp
-      });
-      
+      console.log(`Setting remote description for screen share from ${peerId}`);
       await screenConnection.setRemoteDescription(rtcSessionDescription);
       
       // Create and send answer
@@ -1483,35 +1511,45 @@ async function handleScreenShareSignal(peerId, from, signal) {
       await screenConnection.setLocalDescription(answer);
       
       // Wait for the local description to be fully set
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // Send answer with screen share flag
       const answerSignal = {
         type: 'answer',
         isScreenShare: true,
-        sdp: {
-          type: screenConnection.localDescription.type,
-          sdp: screenConnection.localDescription.sdp
-        }
+        sdp: screenConnection.localDescription // Send the entire RTCSessionDescription object
       };
       
-      console.log(`Sending screen share answer to ${peerId}`, answerSignal);
+      console.log(`Sending screen share answer to ${peerId}`, JSON.stringify(answerSignal));
       await window.electronAPI.sendSignal(peerId, answerSignal);
       
     } else if (signal.type === 'answer') {
       console.log(`Processing screen share answer from ${peerId}`);
       
-      // Make sure we have a valid SDP object
-      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
-        console.error(`Invalid SDP in screen share answer:`, signal.sdp);
+      // Check if we received a direct RTCSessionDescription object
+      let rtcSessionDescription;
+      
+      if (signal.sdp) {
+        // Make sure we have a valid SDP object
+        if (typeof signal.sdp === 'object' && signal.sdp.type && signal.sdp.sdp) {
+          // Regular format with nested type and sdp fields
+          rtcSessionDescription = new RTCSessionDescription({
+            type: signal.sdp.type,
+            sdp: signal.sdp.sdp
+          });
+        } else if (signal.sdp.type === 'answer' && typeof signal.sdp.sdp === 'string') {
+          // Direct RTCSessionDescription object
+          rtcSessionDescription = signal.sdp;
+        } else {
+          console.error(`Invalid SDP format in screen share answer:`, signal.sdp);
+          return;
+        }
+      } else {
+        console.error(`Missing SDP in screen share answer:`, signal);
         return;
       }
       
-      const rtcSessionDescription = new RTCSessionDescription({
-        type: signal.sdp.type,
-        sdp: signal.sdp.sdp
-      });
-      
+      console.log(`Setting remote description for screen share answer from ${peerId}`);
       await screenConnection.setRemoteDescription(rtcSessionDescription);
       
     } else if (signal.type === 'ice-candidate') {
@@ -4489,19 +4527,22 @@ async function startScreenShare(sourceId) {
         await screenConnection.setLocalDescription(offer);
         
         // Wait a moment to ensure the local description is fully set
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 500)); // Increased timeout for better reliability
+        
+        // Make sure we have a valid local description
+        if (!screenConnection.localDescription) {
+          console.error(`No local description available for screen share to ${peerId}`);
+          continue;
+        }
         
         // Send the offer with screen share flag
         const signal = {
           type: 'offer',
           isScreenShare: true, // Mark as screen share offer
-          sdp: {
-            type: screenConnection.localDescription.type,
-            sdp: screenConnection.localDescription.sdp
-          }
+          sdp: screenConnection.localDescription // Send the entire RTCSessionDescription object
         };
         
-        console.log(`Sending screen share offer to ${peerId}`, signal);
+        console.log(`Sending screen share offer to ${peerId}`, JSON.stringify(signal));
         await window.electronAPI.sendSignal(peerId, signal);
         
         // Also notify via data channel that we're sharing screen
