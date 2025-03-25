@@ -3667,6 +3667,167 @@ function startVideoRecording() {
         }
       }
       
+      // Draw remote video feeds in a grid layout
+      // Calculate grid layout for remaining peers
+      const remotePeers = Array.from(peerUsernames.keys());
+      
+      if (remotePeers.length > 0) {
+        // Create a grid layout (always starts at the top right)
+        const gridStartX = localVideoRect.x + localVideoRect.width + 20; // Right of local video
+        let gridX = gridStartX;
+        let gridY = 10;
+        const gridItemWidth = Math.floor((videoAreaWidth - gridStartX - 10) / 2); // 2 columns max
+        const gridItemHeight = Math.floor((canvas.height - 20) / 3); // 3 rows max
+        let colCounter = 0;
+        
+        // Draw each remote peer
+        remotePeers.forEach(peerId => {
+          // Get username
+          const username = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+          
+          // Calculate position
+          const remoteRect = {
+            x: gridX,
+            y: gridY,
+            width: gridItemWidth,
+            height: gridItemHeight
+          };
+          
+          // Find the video element for this peer
+          const peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+          const remoteVideo = peerContainer ? peerContainer.querySelector('video') : null;
+          const videoHasContent = remoteVideo && remoteVideo.videoWidth > 0;
+          
+          // Check if we have a valid video feed to display
+          if (videoHasContent) {
+            // Calculate aspect ratio preserving dimensions
+            const aspectRatio = remoteVideo.videoWidth / remoteVideo.videoHeight;
+            
+            // Calculate dimensions that preserve aspect ratio
+            let width = remoteRect.width;
+            let height = width / aspectRatio;
+            
+            // If height exceeds max height, adjust width accordingly
+            if (height > remoteRect.height) {
+              height = remoteRect.height;
+              width = height * aspectRatio;
+            }
+            
+            // Center in allocated space
+            const x = remoteRect.x + Math.floor((remoteRect.width - width) / 2);
+            const y = remoteRect.y + Math.floor((remoteRect.height - height) / 2);
+            
+            // Update rect with actual dimensions
+            remoteRect.x = x;
+            remoteRect.y = y;
+            remoteRect.width = width;
+            remoteRect.height = height;
+            
+            // Draw the video
+            ctx.drawImage(
+              remoteVideo, 
+              remoteRect.x, 
+              remoteRect.y, 
+              remoteRect.width, 
+              remoteRect.height
+            );
+          } else {
+            // Draw placeholder for video-off or not yet connected
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(
+              remoteRect.x, 
+              remoteRect.y, 
+              remoteRect.width, 
+              remoteRect.height
+            );
+            
+            // Add camera off icon
+            ctx.fillStyle = '#999999';
+            ctx.font = 'bold 36px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('📷❌', 
+              remoteRect.x + remoteRect.width/2, 
+              remoteRect.y + remoteRect.height/2);
+            ctx.textAlign = 'left';
+          }
+          
+          // Add border
+          ctx.strokeStyle = '#4CAF50';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(
+            remoteRect.x, 
+            remoteRect.y, 
+            remoteRect.width, 
+            remoteRect.height
+          );
+          
+          // Add username with better visibility
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.fillRect(
+            remoteRect.x, 
+            remoteRect.y + remoteRect.height - 30,
+            remoteRect.width,
+            30
+          );
+          
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 18px Arial';
+          ctx.fillText(
+            username, 
+            remoteRect.x + 10, 
+            remoteRect.y + remoteRect.height - 10
+          );
+          
+          // Draw recent transcript for this user if available
+          if (transcripts.has(username)) {
+            const peerTranscripts = transcripts.get(username);
+            if (peerTranscripts && peerTranscripts.length > 0) {
+              const latestTranscript = peerTranscripts[peerTranscripts.length - 1];
+              
+              // Only show if less than 5 seconds old
+              const transcriptAge = Date.now() - new Date(latestTranscript.timestamp).getTime();
+              if (transcriptAge < 5000) {
+                // Create transcript background
+                const maxWidth = remoteRect.width - 20;
+                const transcriptText = latestTranscript.text;
+                
+                ctx.font = '16px Arial';
+                const textMetrics = ctx.measureText(transcriptText);
+                const textWidth = Math.min(maxWidth, textMetrics.width);
+                
+                // Background for transcript
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                ctx.fillRect(
+                  remoteRect.x, 
+                  remoteRect.y + remoteRect.height - 60,
+                  textWidth + 20,
+                  30
+                );
+                
+                // Transcript text
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(
+                  transcriptText, 
+                  remoteRect.x + 10, 
+                  remoteRect.y + remoteRect.height - 40
+                );
+              }
+            }
+          }
+          
+          // Move to next grid position
+          colCounter++;
+          if (colCounter % 2 === 0) {
+            // Move to next row
+            gridX = gridStartX;
+            gridY += gridItemHeight + 10;
+          } else {
+            // Move to next column
+            gridX += gridItemWidth + 10;
+          }
+        });
+      }
+      
       // Draw chat & transcript area with background
       ctx.fillStyle = 'rgba(30, 30, 30, 0.8)';
       ctx.fillRect(chatAreaX, 0, chatAreaWidth, canvas.height);
@@ -4035,14 +4196,17 @@ async function handleScreenShareClick() {
     screenShareSources.innerHTML = '';
     
     // Get available screen sources from main process
-    const sources = await window.electronAPI.getScreenSources();
+    const result = await window.electronAPI.getScreenSources();
     
-    if (!sources || sources.length === 0) {
-      console.error('No screen sources found');
+    // Check if result is successful and has sources
+    if (!result || !result.success || !result.sources || result.sources.length === 0) {
+      console.error('No screen sources found', result);
       addSystemMessage('No screen sources available for sharing');
       return;
     }
     
+    // Use the sources array from the result object
+    const sources = result.sources;
     console.log(`Found ${sources.length} screen sources`);
     
     // Add note about camera state
@@ -4703,7 +4867,7 @@ async function leaveRoom() {
     
     // Clean up all peer connections
     for (const peerId of peers) {
-      cleanupPeer(peerId);
+      cleanupPeerConnection(peerId);
     }
     
     // Stop any screen sharing if active
