@@ -232,34 +232,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     roomInput.value = generateDefaultRoomId();
   }
   
-  // Add fullscreen button to local video
-  const localVideoContainer = document.querySelector('.local-video-container');
-  if (localVideoContainer) {
-    const localFullscreenBtn = document.createElement('button');
-    localFullscreenBtn.className = 'fullscreen-btn';
-    localFullscreenBtn.innerHTML = '🔍';
-    localFullscreenBtn.title = 'View fullscreen';
-    localFullscreenBtn.style.position = 'absolute';
-    localFullscreenBtn.style.top = '8px';
-    localFullscreenBtn.style.right = '8px';
-    localFullscreenBtn.style.zIndex = '2';
-    localFullscreenBtn.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
-    localFullscreenBtn.style.color = '#fff';
-    localFullscreenBtn.style.border = 'none';
-    localFullscreenBtn.style.borderRadius = '50%';
-    localFullscreenBtn.style.width = '36px';
-    localFullscreenBtn.style.height = '36px';
-    localFullscreenBtn.style.cursor = 'pointer';
-    
-    localFullscreenBtn.addEventListener('click', () => {
-      if (localStream) {
-        openFullscreenView(localStream, 'Your Camera', 'local');
-      }
-    });
-    
-    localVideoContainer.appendChild(localFullscreenBtn);
-  }
-  
   // Set up join button event
   joinButton.addEventListener('click', joinChat);
   usernameInput.addEventListener('keypress', (e) => {
@@ -1450,107 +1422,227 @@ async function handleSignalReceived(peerId, from, signal) {
 // Handle screen sharing specific signals
 async function handleScreenShareSignal(peerId, from, signal) {
   try {
-    console.log('Processing screen share signal:', signal.type, 'from:', from);
-
-    // Get or create screen share connection for this peer
-    let screenConnection = screenShareConnections.get(from);
+    console.log(`Processing screen share signal type: ${signal.type} from peer: ${peerId}`);
     
-    // For offers, always create a fresh connection
+    // For offers, always create a new dedicated connection
     if (signal.type === 'offer') {
-      // Clean up existing connection if any
-      if (screenConnection) {
-        console.log('Cleaning up existing screen share connection for:', from);
-        screenConnection.onicecandidate = null;
-        screenConnection.close();
-        screenShareConnections.delete(from);
+      // First clean up any existing connection to avoid conflicts
+      if (screenSharingConnections && screenSharingConnections.has(peerId)) {
+        const oldConnection = screenSharingConnections.get(peerId);
+        console.log(`Closing existing screen share connection for ${peerId}`);
+        
+        try {
+          // Remove all event listeners to prevent memory leaks
+          oldConnection.onicecandidate = null;
+          oldConnection.ontrack = null;
+          oldConnection.oniceconnectionstatechange = null;
+          oldConnection.close();
+        } catch (err) {
+          console.warn(`Error cleaning up old screen connection:`, err);
+        }
+        
+        screenSharingConnections.delete(peerId);
+        
+        // Also remove any existing screen share UI from this peer
+        removeScreenShareFromGrid(peerId);
       }
-
-      // Create new connection
-      screenConnection = new RTCPeerConnection({
+      
+      // Initialize connections map if needed
+      if (!screenSharingConnections) {
+        screenSharingConnections = new Map();
+      }
+      
+      console.log(`Creating fresh screen share connection for ${peerId}`);
+      
+      // Create a completely new connection with standard STUN servers
+      const screenConnection = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' }
         ]
       });
-
-      // Store the connection
-      screenShareConnections.set(from, screenConnection);
-
-      // Handle incoming tracks
-      screenConnection.ontrack = (event) => {
-        console.log('Received screen share track from:', from);
-        const stream = event.streams[0];
-        if (stream) {
-          // Add screen share to grid
-          addScreenShareToGrid(from, stream, getPeerUsername(from), true);
-        }
-      };
-
-      // Handle ICE candidates
+      
+      // Save it to our map
+      screenSharingConnections.set(peerId, screenConnection);
+      
+      // Set up event handlers
+      
+      // 1. ICE candidates
       screenConnection.onicecandidate = (event) => {
         if (event.candidate) {
-          sendSignal(from, {
+          console.log(`Generated screen share ICE candidate`);
+          const iceSignal = {
             type: 'ice-candidate',
-            candidate: event.candidate,
-            isScreenShare: true
-          });
+            isScreenShare: true, // Important flag for routing
+            candidate: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              usernameFragment: event.candidate.usernameFragment
+            }
+          };
+          
+          window.electronAPI.sendSignal(peerId, iceSignal);
         }
       };
-
-      // Handle connection state changes
+      
+      // 2. Track arrival handler - this is where we get the screen share video
+      screenConnection.ontrack = (event) => {
+        console.log(`Received screen share track from ${peerId}`);
+        
+        // Ensure we have streams
+        if (event.streams && event.streams.length > 0) {
+          const screenStream = event.streams[0];
+          console.log(`Got screen share stream with ID: ${screenStream.id}`);
+          
+          // Register this peer as a screen sharer
+          if (!screenSharingPeers) {
+            screenSharingPeers = new Set();
+          }
+          screenSharingPeers.add(peerId);
+          
+          // Get the peer's name for display
+          const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+          
+          // Always create a fresh UI element for this screen share
+          console.log(`Creating UI for screen share from ${peerName}`);
+          removeScreenShareFromGrid(peerId); // Remove any existing first
+          addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
+          addSystemMessage(`${peerName} is sharing their screen`);
+        }
+      };
+      
+      // 3. Connection state monitoring
       screenConnection.oniceconnectionstatechange = () => {
         const state = screenConnection.iceConnectionState;
-        console.log(`Screen share connection state for ${from}: ${state}`);
+        console.log(`Screen share connection state for ${peerId}: ${state}`);
         
+        // Clean up on failure/disconnection
         if (state === 'failed' || state === 'closed' || state === 'disconnected') {
-          console.log(`Screen share connection to ${from} ${state}`);
-          removeScreenShareFromGrid(from);
+          console.log(`Screen share connection ${state}, removing UI`);
+          removeScreenShareFromGrid(peerId);
+          
+          // Clean up resources
+          if (screenSharingConnections && screenSharingConnections.has(peerId)) {
+            screenSharingConnections.delete(peerId);
+          }
+          if (screenSharingPeers && screenSharingPeers.has(peerId)) {
+            screenSharingPeers.delete(peerId);
+          }
         }
       };
-
-      // Set remote description
-      const remoteDesc = new RTCSessionDescription(signal.sdp);
-      await screenConnection.setRemoteDescription(remoteDesc);
-
-      // Create and send answer
-      const answer = await screenConnection.createAnswer();
-      await screenConnection.setLocalDescription(answer);
-
-      // Wait for local description to be set
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      // Send the answer
-      sendSignal(from, {
-        type: 'answer',
-        sdp: {
-          type: screenConnection.localDescription.type,
-          sdp: screenConnection.localDescription.sdp
-        },
-        isScreenShare: true
-      });
-
-      console.log('Sent screen share answer to:', from);
+      
+      // Now process the offer
+      try {
+        // Validate the SDP
+        if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+          throw new Error('Invalid SDP format in screen share offer');
+        }
+        
+        // Create the session description
+        const sdp = new RTCSessionDescription({
+          type: signal.sdp.type,
+          sdp: signal.sdp.sdp
+        });
+        
+        // Set as remote description
+        console.log(`Setting remote description for screen share`);
+        await screenConnection.setRemoteDescription(sdp);
+        
+        // Create answer
+        console.log(`Creating screen share answer`);
+        const answer = await screenConnection.createAnswer();
+        
+        // Set as local description
+        await screenConnection.setLocalDescription(answer);
+        
+        // Give time for the local description to be fully set
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (!screenConnection.localDescription) {
+          throw new Error('Local description not set after timeout');
+        }
+        
+        // Send the answer
+        console.log(`Sending screen share answer to ${peerId}`);
+        await window.electronAPI.sendSignal(peerId, {
+          type: 'answer',
+          isScreenShare: true, // Important flag for routing
+          sdp: {
+            type: screenConnection.localDescription.type,
+            sdp: screenConnection.localDescription.sdp
+          }
+        });
+        
+      } catch (error) {
+        console.error(`Error processing screen share offer:`, error);
+        // Clean up on error
+        if (screenSharingConnections && screenSharingConnections.has(peerId)) {
+          screenSharingConnections.delete(peerId);
+        }
+      }
     }
-    // Handle answers
-    else if (signal.type === 'answer' && screenConnection) {
-      const remoteDesc = new RTCSessionDescription(signal.sdp);
-      await screenConnection.setRemoteDescription(remoteDesc);
-      console.log('Set remote description for screen share answer from:', from);
+    // Handle screen share ICE candidates
+    else if (signal.type === 'ice-candidate' && signal.isScreenShare) {
+      console.log(`Received screen share ICE candidate from ${peerId}`);
+      
+      // Get the connection if it exists
+      if (!screenSharingConnections || !screenSharingConnections.has(peerId)) {
+        console.warn(`No screen sharing connection found for ${peerId}, ignoring ICE candidate`);
+        return;
+      }
+      
+      const screenConnection = screenSharingConnections.get(peerId);
+      
+      try {
+        if (signal.candidate) {
+          // Create and add the ICE candidate
+          const candidate = new RTCIceCandidate({
+            candidate: signal.candidate.candidate,
+            sdpMid: signal.candidate.sdpMid, 
+            sdpMLineIndex: signal.candidate.sdpMLineIndex,
+            usernameFragment: signal.candidate.usernameFragment
+          });
+          
+          await screenConnection.addIceCandidate(candidate);
+          console.log(`Added screen share ICE candidate successfully`);
+        }
+      } catch (error) {
+        console.error(`Error adding screen share ICE candidate:`, error);
+      }
     }
-    // Handle ICE candidates
-    else if (signal.type === 'ice-candidate' && screenConnection) {
-      await screenConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
-      console.log('Added ICE candidate for screen share from:', from);
+    // Handle screen share answers
+    else if (signal.type === 'answer' && signal.isScreenShare) {
+      console.log(`Received screen share answer from ${peerId}`);
+      
+      // Get the connection if it exists
+      if (!screenSharingConnections || !screenSharingConnections.has(peerId)) {
+        console.warn(`No screen sharing connection found for ${peerId}, ignoring answer`);
+        return;
+      }
+      
+      const screenConnection = screenSharingConnections.get(peerId);
+      
+      try {
+        // Validate the SDP
+        if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+          throw new Error('Invalid SDP in screen share answer');
+        }
+        
+        // Create and set the remote description
+        const sdp = new RTCSessionDescription({
+          type: signal.sdp.type,
+          sdp: signal.sdp.sdp
+        });
+        
+        await screenConnection.setRemoteDescription(sdp);
+        console.log(`Successfully set remote description for screen share`);
+      } catch (error) {
+        console.error(`Error processing screen share answer:`, error);
+      }
     }
   } catch (error) {
-    console.error('Error processing screen share signal:', error);
-    // Clean up on error
-    if (screenConnection) {
-      screenConnection.onicecandidate = null;
-      screenConnection.close();
-      screenShareConnections.delete(from);
-    }
-    removeScreenShareFromGrid(from);
+    console.error(`Unhandled error in screen share signal processing:`, error);
   }
 }
 
@@ -1600,270 +1692,78 @@ async function processIceCandidate(peerId, connection, candidate) {
 
 // Add remote stream to video grid
 function addRemoteStream(peerId, stream) {
-  try {
-    console.log(`Adding remote stream from peer ${peerId}`);
-    
-    // Check if this might be a screen sharing stream
-    const videoTracks = stream.getVideoTracks();
-    
-    // Check if this is a screen share stream by looking at track settings
-    if (videoTracks.length > 0) {
-      const track = videoTracks[0];
-      const settings = track.getSettings();
-      
-      // Screen share tracks typically have different aspect ratios and higher resolutions
-      // or might have special labels/constraints
-      if (settings && 
-          ((settings.width > 1000 && settings.height > 700) || 
-           track.label.includes('screen') || 
-           stream.id.includes('screen'))) {
-        
-        console.log(`Detected screen share track from peer ${peerId} with settings:`, settings);
-        
-        // Add to UI as a completely separate screen share element
-        addScreenShareToGrid(peerId, stream, 'Shared Screen');
-        
-        // Add system message
-        const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-        addSystemMessage(`${peerName} started sharing their screen`);
-        
-        // Setup audio transcription separately if there are audio tracks
-        if (stream.getAudioTracks().length > 0) {
-          setTimeout(() => {
-            setupRemoteTranscription(stream, peerId);
-          }, 1000);
-        }
-        
-        // Continue processing - do not return, so we don't skip video processing
-        // Just track that this peer has a screen share
-        if (!screenSharingPeers) {
-          screenSharingPeers = new Set();
-        }
-        screenSharingPeers.add(peerId);
-      }
-    }
-    
-    // Always process as a potential camera video, regardless of screen sharing
-    // Find an existing container for this peer or create a new one
-    let remoteContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-    
-    if (!remoteContainer) {
-      // Get the peer's username
-      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-      
-      // Create a new container for this peer
-      remoteContainer = document.createElement('div');
-      remoteContainer.className = 'remote-video-container';
-      remoteContainer.setAttribute('data-peer-id', peerId);
-      
-      // Create video wrapper for aspect ratio
-      const videoWrapper = document.createElement('div');
-      videoWrapper.className = 'video-wrapper';
-      remoteContainer.appendChild(videoWrapper);
-      
-      // Add video element
-      const remoteVideo = document.createElement('video');
-      remoteVideo.className = 'remote-video';
-      remoteVideo.autoplay = true;
-      remoteVideo.playsInline = true;
-      videoWrapper.appendChild(remoteVideo);
-      
-      // Add fullscreen button for camera video
-      const fullscreenBtn = document.createElement('button');
-      fullscreenBtn.className = 'fullscreen-btn';
-      fullscreenBtn.innerHTML = '🔍';
-      fullscreenBtn.title = 'View fullscreen';
-      fullscreenBtn.style.position = 'absolute';
-      fullscreenBtn.style.top = '8px';
-      fullscreenBtn.style.right = '8px';
-      fullscreenBtn.style.zIndex = '2';
-      fullscreenBtn.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
-      fullscreenBtn.style.color = '#fff';
-      fullscreenBtn.style.border = 'none';
-      fullscreenBtn.style.borderRadius = '50%';
-      fullscreenBtn.style.width = '36px';
-      fullscreenBtn.style.height = '36px';
-      fullscreenBtn.style.cursor = 'pointer';
-      
-      fullscreenBtn.addEventListener('click', () => {
-        openFullscreenView(stream, peerName, peerId);
-      });
-      
-      videoWrapper.appendChild(fullscreenBtn);
-      
-      // Add transcript overlay container inside video wrapper
-      const transcriptOverlay = document.createElement('div');
-      transcriptOverlay.className = 'transcript-overlay hidden';
-      transcriptOverlay.id = `transcript-overlay-${peerId}`;
-      videoWrapper.appendChild(transcriptOverlay);
-      
-      // Add participant info section
-      const participantInfo = document.createElement('div');
-      participantInfo.className = 'participant-info';
-      remoteContainer.appendChild(participantInfo);
-      
-      // Add participant name
-      const nameElement = document.createElement('div');
-      nameElement.className = 'participant-name';
-      nameElement.textContent = peerName;
-      participantInfo.appendChild(nameElement);
-      
-      // Add transcript container
-      const transcriptContainer = document.createElement('div');
-      transcriptContainer.className = 'transcript-container';
-      participantInfo.appendChild(transcriptContainer);
-      
-      // Add transcript title
-      const transcriptTitle = document.createElement('div');
-      transcriptTitle.className = 'transcript-title';
-      transcriptTitle.textContent = 'Transcript';
-      transcriptContainer.appendChild(transcriptTitle);
-      
-      // Add transcript content
-      const transcriptContent = document.createElement('div');
-      transcriptContent.className = 'transcript-content';
-      transcriptContainer.appendChild(transcriptContent);
-      
-      // Store the username in our map if it's not a placeholder
-      if (peerName !== `Peer ${peerId.substring(0, 6)}`) {
-        peerUsernames.set(peerId, peerName);
-        console.log(`Stored username "${peerName}" for peer ${peerId}`);
-      }
-      
-      // Add video off indicator
-      const videoOffIndicator = document.createElement('div');
-      videoOffIndicator.className = 'video-off-indicator hidden';
-      videoOffIndicator.innerHTML = '📷❌';
-      videoWrapper.appendChild(videoOffIndicator);
-      
-      // Add audio off indicator
-      const audioOffIndicator = document.createElement('div');
-      audioOffIndicator.className = 'audio-off-indicator hidden';
-      audioOffIndicator.innerHTML = '🔇';
-      videoWrapper.appendChild(audioOffIndicator);
-      
-      // Add volume control
-      const volumeControl = document.createElement('div');
-      volumeControl.className = 'volume-control';
-      
-      const volumeLabel = document.createElement('label');
-      volumeLabel.textContent = 'Volume:';
-      volumeControl.appendChild(volumeLabel);
-      
-      const volumeSlider = document.createElement('input');
-      volumeSlider.type = 'range';
-      volumeSlider.min = '0';
-      volumeSlider.max = '2';
-      volumeSlider.step = '0.1';
-      volumeSlider.value = '1';
-      volumeSlider.className = 'volume-slider';
-      volumeControl.appendChild(volumeSlider);
-      
-      // Set initial volume
-      peerVolumes.set(peerId, 1.0);
-      
-      // Add event listener for volume change
-      volumeSlider.addEventListener('input', (e) => {
-        const volume = parseFloat(e.target.value);
-        peerVolumes.set(peerId, volume);
-        
-        // Find the audio element
-        const videoElement = remoteContainer.querySelector('video');
-        if (videoElement) {
-          videoElement.volume = volume;
-        }
-      });
-      
-      remoteContainer.appendChild(volumeControl);
-      
-      // Add the container to the video grid
-      remoteVideosContainer.appendChild(remoteContainer);
-      
-      console.log(`Remote container for ${peerName} (${peerId}) added to DOM with transcript overlay`);
-    } else {
-      // Update the name if we now have a real username
-      const nameElement = remoteContainer.querySelector('.participant-name');
-      const currentName = nameElement.textContent;
-      
-      // If current name is a placeholder and we now have a real name
-      if (currentName.includes('Peer') && peerUsernames.has(peerId)) {
-        const realName = peerUsernames.get(peerId);
-        nameElement.textContent = realName;
-        console.log(`Updated name in DOM from "${currentName}" to "${realName}" for peer ${peerId}`);
-      }
-      
-      // Make sure fullscreen button exists
-      let fullscreenBtn = remoteContainer.querySelector('.fullscreen-btn');
-      if (!fullscreenBtn) {
-        const videoWrapper = remoteContainer.querySelector('.video-wrapper');
-        
-        fullscreenBtn = document.createElement('button');
-        fullscreenBtn.className = 'fullscreen-btn';
-        fullscreenBtn.innerHTML = '🔍';
-        fullscreenBtn.title = 'View fullscreen';
-        fullscreenBtn.style.position = 'absolute';
-        fullscreenBtn.style.top = '8px';
-        fullscreenBtn.style.right = '8px';
-        fullscreenBtn.style.zIndex = '2';
-        fullscreenBtn.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
-        fullscreenBtn.style.color = '#fff';
-        fullscreenBtn.style.border = 'none';
-        fullscreenBtn.style.borderRadius = '50%';
-        fullscreenBtn.style.width = '36px';
-        fullscreenBtn.style.height = '36px';
-        fullscreenBtn.style.cursor = 'pointer';
-        
-        fullscreenBtn.addEventListener('click', () => {
-          const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-          openFullscreenView(stream, peerName, peerId);
-        });
-        
-        videoWrapper.appendChild(fullscreenBtn);
-      }
-    }
-    
-    // Find the video element
-    const remoteVideo = remoteContainer.querySelector('.remote-video');
-    
-    // Set the srcObject to display the stream
-    remoteVideo.srcObject = stream;
-    
-    // Set the volume based on stored preference
-    if (peerVolumes.has(peerId)) {
-      remoteVideo.volume = peerVolumes.get(peerId);
-    }
-    
-    // Log active tracks
-    console.log(`Remote stream has ${stream.getTracks().length} tracks:`);
-    stream.getTracks().forEach(track => {
-      console.log(`- ${track.kind} track (${track.id}): enabled=${track.enabled}, readyState=${track.readyState}`);
-    });
-    
-    // Ensure the container is visible
-    remoteContainer.classList.remove('hidden');
-    
-    // Update connection count
-    updateConnectionCount();
-    
-    // Setup transcription for audio tracks
-    if (stream.getAudioTracks().length > 0) {
-      console.log(`Remote stream has audio tracks, setting up transcription for peer ${peerId}`);
-      
-      // Make sure any audio tracks are enabled
-      stream.getAudioTracks().forEach(track => {
-        track.enabled = true;
-      });
-      
-      // Schedule transcription setup with a slight delay
-      setTimeout(() => {
-        setupRemoteTranscription(stream, peerId);
-      }, 1000);
-    }
-    
-    return remoteContainer;
-  } catch (error) {
-    console.error('Error adding remote stream:', error);
+  if (!peerId) {
+    console.error('Cannot add remote stream: No peer ID provided');
+    return;
   }
+
+  console.log(`Adding remote stream for peer ${peerId}`);
+  
+  // Check if container already exists for this peer
+  let videoContainer = document.getElementById(`video-container-${peerId}`);
+  
+  if (!videoContainer) {
+    // Create new container
+    videoContainer = document.createElement('div');
+    videoContainer.id = `video-container-${peerId}`;
+    videoContainer.className = 'video-container';
+    videoContainer.setAttribute('data-peer-id', peerId);
+    
+    // Create the video element
+    const videoElement = document.createElement('video');
+    videoElement.id = `video-${peerId}`;
+    videoElement.autoplay = true;
+    videoElement.playsInline = true;
+    videoElement.className = 'remote-video';
+    
+    // Create name label
+    const nameLabel = document.createElement('div');
+    nameLabel.id = `video-label-${peerId}`;
+    nameLabel.className = 'video-label';
+    nameLabel.textContent = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+    
+    // Create audio/video status indicators
+    const statusContainer = document.createElement('div');
+    statusContainer.className = 'media-status';
+    
+    const videoStatus = document.createElement('span');
+    videoStatus.id = `video-status-${peerId}`;
+    videoStatus.className = 'video-status';
+    videoStatus.innerHTML = '<i class="fas fa-video"></i>';
+    
+    const audioStatus = document.createElement('span');
+    audioStatus.id = `audio-status-${peerId}`;
+    audioStatus.className = 'audio-status';
+    audioStatus.innerHTML = '<i class="fas fa-microphone"></i>';
+    
+    statusContainer.appendChild(videoStatus);
+    statusContainer.appendChild(audioStatus);
+    
+    // Create fullscreen button
+    const fullscreenButton = document.createElement('button');
+    fullscreenButton.className = 'fullscreen-button';
+    fullscreenButton.innerHTML = '<i class="fas fa-expand"></i>';
+    fullscreenButton.title = 'View fullscreen';
+    fullscreenButton.onclick = () => openFullscreenView(videoElement, getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`);
+    
+    // Add elements to container
+    videoContainer.appendChild(videoElement);
+    videoContainer.appendChild(nameLabel);
+    videoContainer.appendChild(statusContainer);
+    videoContainer.appendChild(fullscreenButton);
+    
+    // Add to video grid
+    const videoGrid = document.getElementById('video-grid');
+    videoGrid.appendChild(videoContainer);
+  }
+  
+  // Update the video source
+  const videoElement = document.getElementById(`video-${peerId}`);
+  if (videoElement) {
+    videoElement.srcObject = stream;
+  }
+  
+  return videoContainer;
 }
 
 // Get a username for a peer based on peerId
@@ -3368,7 +3268,7 @@ async function checkAuthState() {
     console.log('Checking authentication state...');
     
     // Get the current user
-    const result = await window.electronAPI.getUser();
+    const result = await window.electronAPI.getCurrentUser();
     console.log('Auth check result:', result);
     
     if (result && result.success && result.user) {
@@ -4486,49 +4386,44 @@ updateTranscription = function(speaker, text) {
   }
 };
 
-// Handle screen share button click
+// Screen sharing functions
 async function handleScreenShareClick() {
   try {
-    // Check if someone else is already sharing their screen
-    if (screenSharingPeers.size > 0) {
-      console.log('Someone else is already sharing their screen');
-      addSystemMessage('Someone else is already sharing their screen. Only one person can share at a time.');
+    // If already sharing, stop sharing
+    if (isScreenSharing) {
+      await stopScreenShare();
       return;
     }
-    
-    if (!isScreenSharing) {
-      console.log('Getting display media sources...');
+
+    console.log('Getting display media sources...');
     const result = await window.electronAPI.getScreenSources();
     
-      if (!result.success || !result.sources) {
-        throw new Error(result.error || 'Failed to get screen sources');
+    if (!result.success || !result.sources) {
+      throw new Error(result.error || 'Failed to get screen sources');
     }
     
-      const sources = result.sources;
+    const sources = result.sources;
     screenShareSources.innerHTML = '';
     
-      // Display sources as thumbnails in dialog
-      sources.forEach(source => {
-        const sourceDiv = document.createElement('div');
-        sourceDiv.className = 'source-option';
-        sourceDiv.innerHTML = `
-          <img src="${source.thumbnail}" alt="${source.name}">
-          <div class="source-name">${source.name}</div>
-        `;
-        
-        // Add click event to select this source
-        sourceDiv.addEventListener('click', () => {
-          startScreenShare(source.id);
+    // Display sources as thumbnails in dialog
+    sources.forEach(source => {
+      const sourceDiv = document.createElement('div');
+      sourceDiv.className = 'source-option';
+      sourceDiv.innerHTML = `
+        <img src="${source.thumbnail}" alt="${source.name}">
+        <div class="source-name">${source.name}</div>
+      `;
+      
+      // Add click event to select this source
+      sourceDiv.addEventListener('click', () => {
+        startScreenShare(source.id);
         screenShareDialog.classList.add('hidden');
       });
       
-        screenShareSources.appendChild(sourceDiv);
+      screenShareSources.appendChild(sourceDiv);
     });
     
     screenShareDialog.classList.remove('hidden');
-    } else {
-      stopScreenShare();
-    }
   } catch (error) {
     console.error('Error handling screen share:', error);
     addSystemMessage('Error starting screen share: ' + error.message);
@@ -4538,733 +4433,144 @@ async function handleScreenShareClick() {
 // Start screen sharing for the selected source
 async function startScreenShare(sourceId) {
   try {
-    console.log('Starting screen share with source:', sourceId);
+    console.log(`Starting screen share with source ID: ${sourceId}`);
     
-    // Stop any existing screen share first
-    if (isScreenSharing) {
+    // First stop any existing screen share
+    if (isScreenSharing && screenShareStream) {
+      console.log('Stopping existing screen share before starting new one');
       await stopScreenShare();
-      // Add a small delay to ensure cleanup
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Small delay to ensure cleanup is complete
+      await new Promise(resolve => setTimeout(resolve, 300));
     }
 
-    // Get screen capture stream with compatible constraints
-    let screenStream;
-    try {
-      // Try with sourceId if provided (Electron-specific)
-      if (sourceId) {
-        screenStream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId
-            }
-          }
-        });
-      } else {
-        // Fallback to standard getDisplayMedia (works in browsers)
-        screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: false
-        });
+    // Use the desktopCapturer source ID with getUserMedia
+    const screenStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: sourceId,
+          minWidth: 1280,
+          maxWidth: 1920,
+          minHeight: 720,
+          maxHeight: 1080
+        }
       }
-    } catch (err) {
-      console.error('First method failed:', err);
-      // Last resort fallback
-      screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false
-      });
+    });
+    
+    if (!screenStream) {
+      throw new Error('Failed to get screen share stream');
     }
-
-    if (!screenStream || !screenStream.getVideoTracks().length) {
-      throw new Error('No video track in screen share stream');
-    }
-
-    // Store the screen stream
+    
+    // Save the stream for later use
     screenShareStream = screenStream;
-
-    // Update UI to show screen sharing is active
-    const screenShareBtn = document.getElementById('screenShareBtn');
-    if (screenShareBtn) {
-      screenShareBtn.textContent = 'Stop Sharing';
-      screenShareBtn.classList.add('active');
-    }
-
-    // Add screen share to grid
-    addScreenShareToGrid(peerId, screenStream, 'Your Screen', false);
-
-    // Set screen sharing state
     isScreenSharing = true;
-
-    // Handle screen share stop
-    screenStream.getVideoTracks()[0].onended = async () => {
+    
+    // Update UI to show we're sharing
+    shareScreenButton.textContent = 'Stop Sharing';
+    shareScreenButton.classList.add('active');
+    
+    // Handle track ending
+    screenStream.getVideoTracks()[0].onended = () => {
       console.log('Screen share track ended');
-      await stopScreenShare();
+      stopScreenShare();
     };
-
-    // Notify peers about screen share start
-    const message = {
-      type: 'screenShareStart',
-      peerId: peerId,
-      username: username
-    };
-
-    // Send to all peers via data channels
+    
+    // Add to screen sharing peers
+    if (!screenSharingPeers) {
+      screenSharingPeers = new Set();
+    }
+    screenSharingPeers.add(ownPeerId);
+    
+    // Add to our own UI
+    addScreenShareToGrid(ownPeerId, screenStream, 'Your Screen', false);
+    
+    // Notify peers via data channel
     for (const [peerId, dataChannel] of dataChannels.entries()) {
       if (dataChannel.readyState === 'open') {
-        dataChannel.send(JSON.stringify(message));
+        dataChannel.send(JSON.stringify({
+          type: 'screen-share-started',
+          username: usernameInput.value,
+          sourceName: 'Screen'
+        }));
       }
     }
-
-    // Create and send offers to all peers
-    for (const [peerId, connection] of peerConnections.entries()) {
+    
+    // For each peer, set up and send a dedicated screen share connection
+    for (const peerId of peers) {
       try {
-        // Create a new RTCPeerConnection for screen sharing
+        // Create a new peer connection for screen sharing
+        if (!screenSharingConnections) {
+          screenSharingConnections = new Map();
+        }
+        
         const screenConnection = new RTCPeerConnection({
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' }
           ]
         });
-
-        // Store the screen connection
-        screenShareConnections.set(peerId, screenConnection);
-
-        // Add screen tracks to connection
+        
+        // Store the connection
+        screenSharingConnections.set(peerId, screenConnection);
+        
+        // Add the screen track to the connection
         screenStream.getTracks().forEach(track => {
           screenConnection.addTrack(track, screenStream);
         });
-
+        
         // Handle ICE candidates
         screenConnection.onicecandidate = (event) => {
           if (event.candidate) {
-            sendSignal(peerId, {
+            window.electronAPI.sendSignal(peerId, {
               type: 'ice-candidate',
-              candidate: event.candidate,
-              isScreenShare: true
+              isScreenShare: true,
+              candidate: {
+                candidate: event.candidate.candidate,
+                sdpMid: event.candidate.sdpMid,
+                sdpMLineIndex: event.candidate.sdpMLineIndex,
+                usernameFragment: event.candidate.usernameFragment
+              }
             });
           }
         };
-
+        
         // Create and send offer
         const offer = await screenConnection.createOffer();
         await screenConnection.setLocalDescription(offer);
-
+        
         // Wait for local description to be fully set
-        await new Promise(resolve => setTimeout(resolve, 200));
-
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
         // Send the offer
-        sendSignal(peerId, {
+        await window.electronAPI.sendSignal(peerId, {
           type: 'offer',
+          isScreenShare: true,
           sdp: {
             type: screenConnection.localDescription.type,
             sdp: screenConnection.localDescription.sdp
-          },
-          isScreenShare: true
+          }
         });
-
-        console.log('Sent screen share offer to peer:', peerId);
-      } catch (error) {
-        console.error('Error creating screen share offer for peer:', peerId, error);
-      }
-    }
-    
-    addSystemMessage('You started sharing your screen');
-  } catch (error) {
-    console.error('Error starting screen share:', error);
-    addSystemMessage('Failed to start screen sharing: ' + error.message);
-  }
-}
-
-// Stop screen sharing
-async function stopScreenShare() {
-  try {
-    if (!isScreenSharing || !screenShareStream) {
-      return;
-    }
-    
-    console.log('Stopping screen share');
-
-    // Stop all tracks in the screen share stream
-    screenShareStream.getTracks().forEach(track => {
-      track.stop();
-    });
-    
-    // Clean up screen share connections
-    for (const [peerId, connection] of screenShareConnections.entries()) {
-      try {
-        connection.onicecandidate = null;
-        connection.close();
-        screenShareConnections.delete(peerId);
-      } catch (error) {
-        console.error('Error cleaning up screen share connection:', error);
-      }
-    }
-
-    // Remove screen share from UI
-    removeScreenShareFromGrid(peerId);
-    
-    // Reset state
-    screenShareStream = null;
-    isScreenSharing = false;
-    
-    // Update UI
-    const screenShareBtn = document.getElementById('screenShareBtn');
-    if (screenShareBtn) {
-      screenShareBtn.textContent = 'Share Screen';
-      screenShareBtn.classList.remove('active');
-    }
-
-    // Notify peers about screen share stop
-    const message = {
-      type: 'screenShareStop',
-      peerId: peerId,
-      username: username
-    };
-
-    // Send to all peers via data channels
-    for (const [peerId, dataChannel] of dataChannels.entries()) {
-      if (dataChannel.readyState === 'open') {
-        dataChannel.send(JSON.stringify(message));
-      }
-    }
-
-    addSystemMessage('You stopped sharing your screen');
-  } catch (error) {
-    console.error('Error stopping screen share:', error);
-    addSystemMessage('Error stopping screen share: ' + error.message);
-  }
-}
-
-// Add screen share to the video grid
-function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare = false) {
-  console.log(`Adding screen share UI for peer ${peerId}`);
-  
-  // Remove any existing screen share from this peer first
-  removeScreenShareFromGrid(peerId);
-  
-  // Create container element with special styling
-  const screenContainer = document.createElement('div');
-  screenContainer.className = 'video-item screen-share-container';
-  screenContainer.id = `screen-share-${peerId}`;
-  screenContainer.setAttribute('data-peer-id', peerId);
-  
-  // Apply distinct styling to make screen shares stand out
-  screenContainer.style.border = isRemoteShare ? '3px solid #e91e63' : '3px solid #4caf50';
-  screenContainer.style.borderRadius = '8px';
-  screenContainer.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.3)';
-  screenContainer.style.overflow = 'hidden';
-  screenContainer.style.position = 'relative';
-  screenContainer.style.backgroundColor = '#000';
-  
-  // Make screen shares larger than regular videos
-  screenContainer.style.gridColumn = 'span 2';
-  screenContainer.style.gridRow = 'span 2';
-  
-  // Create video element for the screen share
-  const videoEl = document.createElement('video');
-  videoEl.autoplay = true;
-  videoEl.playsInline = true;
-  videoEl.muted = true; // No audio for screen shares
-  videoEl.className = 'screen-share-video';
-  videoEl.style.width = '100%';
-  videoEl.style.height = '100%';
-  videoEl.style.objectFit = 'contain'; // Don't crop the screen content
-  
-  // Set the stream
-  videoEl.srcObject = stream;
-  
-  // Save reference for recording
-  if (isRemoteShare) {
-    screenVideoElement = videoEl;
-  }
-  
-  // Add a label for whose screen this is
-  const nameLabel = document.createElement('div');
-  nameLabel.className = 'screen-share-label';
-  nameLabel.style.position = 'absolute';
-  nameLabel.style.bottom = '0';
-  nameLabel.style.left = '0';
-  nameLabel.style.right = '0';
-  nameLabel.style.padding = '8px';
-  nameLabel.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-  nameLabel.style.color = '#fff';
-  nameLabel.style.fontWeight = 'bold';
-  nameLabel.style.zIndex = '2';
-  
-  // Get username to display
-  const username = peerId === ownPeerId 
-    ? 'Your Screen' 
-    : `${peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`}'s Screen`;
-    
-  nameLabel.innerHTML = `
-    <span style="margin-right: 5px;">🖥️</span>
-    <span>${username}</span>
-  `;
-  
-  // Add fullscreen button
-  const fullscreenBtn = document.createElement('button');
-  fullscreenBtn.className = 'screen-fullscreen-btn';
-  fullscreenBtn.innerHTML = '🔍';
-  fullscreenBtn.title = 'View fullscreen';
-  fullscreenBtn.style.position = 'absolute';
-  fullscreenBtn.style.top = '8px';
-  fullscreenBtn.style.right = '8px';
-  fullscreenBtn.style.zIndex = '2';
-  fullscreenBtn.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
-  fullscreenBtn.style.color = '#fff';
-  fullscreenBtn.style.border = 'none';
-  fullscreenBtn.style.borderRadius = '50%';
-  fullscreenBtn.style.width = '36px';
-  fullscreenBtn.style.height = '36px';
-  fullscreenBtn.style.cursor = 'pointer';
-  
-  fullscreenBtn.addEventListener('click', () => {
-    openFullscreenView(stream, sourceName, peerId);
-  });
-  
-  // Add a "Screen Sharing" indicator at the top
-  const sharingIndicator = document.createElement('div');
-  sharingIndicator.className = 'screen-sharing-indicator';
-  sharingIndicator.style.position = 'absolute';
-  sharingIndicator.style.top = '0';
-  sharingIndicator.style.left = '0';
-  sharingIndicator.style.width = '100%';
-  sharingIndicator.style.padding = '4px 8px';
-  sharingIndicator.style.backgroundColor = isRemoteShare ? '#e91e63' : '#4caf50';
-  sharingIndicator.style.color = '#fff';
-  sharingIndicator.style.fontWeight = 'bold';
-  sharingIndicator.style.textAlign = 'center';
-  sharingIndicator.style.zIndex = '2';
-  sharingIndicator.textContent = 'SCREEN SHARING';
-  
-  // Add all elements to container
-  screenContainer.appendChild(videoEl);
-  screenContainer.appendChild(nameLabel);
-  screenContainer.appendChild(fullscreenBtn);
-  screenContainer.appendChild(sharingIndicator);
-  
-  // Add container to the video grid at the top for prominence
-  const remoteVideosContainer = document.getElementById('remote-videos');
-  if (remoteVideosContainer.firstChild) {
-    remoteVideosContainer.insertBefore(screenContainer, remoteVideosContainer.firstChild);
-  } else {
-    remoteVideosContainer.appendChild(screenContainer);
-  }
-  
-  console.log(`Screen share UI added for ${peerId}`);
-  
-  return screenContainer;
-}
-
-// Define renderFrame globally to avoid reference errors
-window.renderFrame = function() {
-  console.log("Default renderFrame called - this will be replaced during recording");
-  // This is a placeholder that will be replaced when recording starts
-  // But having it defined prevents reference errors
-};
-
-// Save credentials to localStorage when "Remember Me" is checked
-function saveCredentials(identifier, password) {
-  try {
-    const credentials = {
-      identifier,
-      password
-    };
-    localStorage.setItem('savedCredentials', JSON.stringify(credentials));
-    console.log('Credentials saved to localStorage');
-  } catch (error) {
-    console.error('Error saving credentials to localStorage:', error);
-  }
-}
-
-// Load credentials from localStorage
-function loadCredentials() {
-  try {
-    const savedCredentials = localStorage.getItem('savedCredentials');
-    if (savedCredentials) {
-      return JSON.parse(savedCredentials);
-    }
-    return null;
-  } catch (error) {
-    console.error('Error loading credentials from localStorage:', error);
-    return null;
-  }
-}
-
-// Clear saved credentials from localStorage
-function clearCredentials() {
-  try {
-    localStorage.removeItem('savedCredentials');
-    console.log('Credentials cleared from localStorage');
-  } catch (error) {
-    console.error('Error clearing credentials from localStorage:', error);
-  }
-}
-
-// Check authentication state
-async function checkAuthState() {
-  try {
-    const result = await window.electronAPI.getCurrentUser();
-    if (result.success && result.user) {
-      currentUser = result.user;
-      updateAuthState(result.user);
-      
-      // Hide auth screen and show main app
-      document.getElementById('auth-screen').classList.add('hidden');
-      document.getElementById('main-app').classList.remove('hidden');
-      
-      // Set username for video chat - strip domain part (.pds.hapa.ai)
-      const handle = result.user.handle;
-      const simplifiedHandle = handle.includes('.') ? handle.split('.')[0] : handle;
-      usernameInput.value = simplifiedHandle;
-      
-      // Load saved settings
-      loadSettings();
-      
-      // Enumerate devices
-      enumerateDevices();
-    } else {
-      // No valid session, check for saved credentials
-      const savedCredentials = loadCredentials();
-      if (savedCredentials) {
-        console.log('Found saved credentials, attempting auto-login...');
-        // Pre-fill the login form
-        signinIdInput.value = savedCredentials.identifier;
-        signinPasswordInput.value = savedCredentials.password;
         
-        // Attempt to sign in
-        try {
-          // Format identifier if needed (ensure it has a domain)
-          let formattedIdentifier = savedCredentials.identifier;
-          if (!formattedIdentifier.includes('@') && !formattedIdentifier.includes('.')) {
-            formattedIdentifier = `${formattedIdentifier}.pds.hapa.ai`;
-          }
-          
-          const response = await window.electronAPI.signIn(formattedIdentifier, savedCredentials.password);
-          
-          if (response.success) {
-            // Sign in successful
-            updateAuthState(response.user);
-            
-            // Hide auth screen and show main app
-            document.getElementById('auth-screen').classList.add('hidden');
-            document.getElementById('main-app').classList.remove('hidden');
-            
-            // Set username for video chat - strip domain part (.pds.hapa.ai)
-            const handle = response.user.handle;
-            const simplifiedHandle = handle.includes('.') ? handle.split('.')[0] : handle;
-            usernameInput.value = simplifiedHandle;
-            
-            // Load saved settings
-            loadSettings();
-            
-            // Enumerate devices
-            enumerateDevices();
-            
-            return; // Exit the function as we've successfully logged in
-          } else {
-            console.error('Auto-login failed:', response.error);
-            // Show auth screen (will happen below)
-          }
-        } catch (error) {
-          console.error('Error during auto-login:', error);
-          // Show auth screen (will happen below)
-        }
+        console.log(`Sent screen share offer to peer ${peerId}`);
+      } catch (error) {
+        console.error(`Error creating screen share connection for peer ${peerId}:`, error);
       }
-      
-      // Show auth screen if auto-login failed or no saved credentials
-      document.getElementById('auth-screen').classList.remove('hidden');
-      document.getElementById('main-app').classList.add('hidden');
     }
-  } catch (error) {
-    console.error('Error checking auth state:', error);
-    // On error, show auth screen
-    document.getElementById('auth-screen').classList.remove('hidden');
-    document.getElementById('main-app').classList.add('hidden');
-  }
-}
-
-// Leave the current room, closing all connections
-async function leaveRoom() {
-  try {
-    console.log('Leaving current room...');
-    
-    // Notify server that we're leaving the room FIRST
-    // This should happen before any cleanup to ensure server knows we're disconnecting
-    try {
-      console.log('Notifying server about leaving room');
-      await window.electronAPI.joinRoom(''); // Join empty room to leave current
-      // Add a small delay to ensure server processes the leave request
-      await new Promise(resolve => setTimeout(resolve, 200));
-    } catch (err) {
-      console.warn('Error notifying server about leaving room:', err);
-    }
-    
-    // Now safe to clean up all connections
-    console.log('Cleaning up all peer connections...');
-    for (const peerId of peers) {
-      cleanupPeerConnection(peerId);
-    }
-    
-    // Stop any screen sharing if active
-    if (isScreenSharing) {
-      console.log('Stopping active screen sharing');
-      stopScreenShare();
-    }
-    
-    // Clean up any dedicated screen sharing connections
-    if (screenSharingConnections) {
-      console.log('Cleaning up dedicated screen sharing connections');
-      for (const [peerId, conn] of screenSharingConnections.entries()) {
-        try {
-          conn.close();
-        } catch (e) {
-          console.error(`Error closing screen sharing connection for ${peerId}:`, e);
-        }
-      }
-      screenSharingConnections.clear();
-    }
-    
-    // Stop video recording if active
-    if (isVideoRecording) {
-      console.log('Stopping active video recording');
-      stopVideoRecording();
-    }
-    
-    // Stop local audio recording if active
-    if (isRecording) {
-      console.log('Stopping active audio recording');
-      stopMediaRecording();
-    }
-    
-    // Clear remote videos display
-    document.getElementById('remote-videos').innerHTML = '';
-    
-    // Clear messages display
-    document.getElementById('messages').innerHTML = '';
-    
-    // Clear all collections
-    peers.clear();
-    peerConnections.clear();
-    dataChannels.clear();
-    peerUsernames.clear();
-    pendingIceCandidates.clear();
-    remoteRecorders.clear();
-    if (screenSharingPeers) screenSharingPeers.clear();
-    transcripts.clear();
-    
-    // Close any open popups or modals
-    document.getElementById('transcript-popup').classList.add('hidden');
-    document.getElementById('settings-popup').classList.add('hidden');
-    document.getElementById('screen-share-dialog').classList.add('hidden');
-    document.getElementById('fullscreen-dialog').classList.add('hidden');
-    
-    // Reset room tracking
-    currentRoom = null;
-    currentRoomSpan.textContent = '';
-    
-    // Update connection count
-    updateConnectionCount();
     
     // Add system message
-    addSystemMessage('Left the room');
-    
-    console.log('Successfully left room and cleaned up resources');
-    return true;
-  } catch (error) {
-    console.error('Error leaving room:', error);
-    return false;
-  }
-}
-
-// Handle leave room button click
-async function handleLeaveRoom() {
-  try {
-    console.log('Leaving current room...');
-    
-    // Check if we're actually in a room first
-    if (!currentRoom) {
-      console.log('Not currently in a room, just showing login screen');
-      loginScreen.classList.remove('hidden');
-      chatScreen.classList.add('hidden');
-      return;
-    }
-    
-    // First, disable all buttons to prevent any actions during cleanup
-    leaveRoomButton.disabled = true;
-    toggleVideoButton.disabled = true;
-    toggleAudioButton.disabled = true;
-    
-    // Reset all event listeners trying to send signals or negotiate connections
-    for (const peerId of peers) {
-      const connection = peerConnections.get(peerId);
-      if (connection) {
-        // Remove event listeners that might trigger new signals
-        connection.onicecandidate = null;
-        connection.onnegotiationneeded = null;
-        connection.oniceconnectionstatechange = null;
-      }
-    }
-    
-    // Call the leaveRoom function (this handles all cleanup)
-    await leaveRoom();
-    
-    // Clear any potentially queued tasks trying to send signals
-    setTimeout(() => {
-      // Show the login screen
-      loginScreen.classList.remove('hidden');
-      chatScreen.classList.add('hidden');
-      
-      // Add a success message on the login screen
-      const successMessage = document.createElement('div');
-      successMessage.className = 'system-notification';
-      successMessage.innerHTML = `
-        <p>You have left the room successfully. You can join another room below.</p>
-      `;
-      
-      // Insert at top of login screen
-      loginScreen.insertBefore(successMessage, loginScreen.firstChild);
-      
-      // Remove the message after 10 seconds
-      setTimeout(() => {
-        successMessage.remove();
-      }, 10000);
-      
-      // Clear the input fields
-      messageInput.value = '';
-      
-      // Re-enable buttons when back on login screen
-      leaveRoomButton.disabled = false;
-      toggleVideoButton.disabled = false;
-      toggleAudioButton.disabled = false;
-    }, 300); // Small delay to let any pending cleanup complete
+    addSystemMessage('You started sharing your screen');
     
   } catch (error) {
-    console.error('Error leaving room:', error);
-    alert(`Error leaving room: ${error.message}`);
+    console.error('Error starting screen share:', error);
+    addSystemMessage('Error starting screen share: ' + error.message);
     
-    // Show login screen even if there was an error
-    loginScreen.classList.remove('hidden');
-    chatScreen.classList.add('hidden');
-    
-    // Re-enable buttons
-    leaveRoomButton.disabled = false;
-    toggleVideoButton.disabled = false;
-    toggleAudioButton.disabled = false;
-  }
-}
-
-// Handle track events separately to detect screen sharing
-function handleTrackEvent(event, peerId) {
-  // Extract stream and track from the event
-  const [remoteStream] = event.streams;
-  const track = event.track;
-  
-  if (!remoteStream || !track) {
-    console.warn(`No stream or track in event from peer ${peerId}`);
-    return;
-  }
-  
-  console.log(`Received ${track.kind} track from peer ${peerId}`);
-  
-  // If this is a video track, check if it's a screen share
-  if (track.kind === 'video') {
-    const settings = track.getSettings();
-    
-    // Check for screen share indicators (improve detection reliability)
-    const isScreenShare = 
-      // Check the track label
-      (track.label && track.label.toLowerCase().includes('screen')) ||
-      // Check high resolution (typical for screen shares)
-      (settings && settings.width > 1280 && settings.height > 720 && 
-       settings.frameRate && settings.frameRate < 30) || // Screen shares often have lower framerates
-      // Check for aspect ratio typical of screens (16:9, 16:10, 4:3)
-      (settings && settings.width && settings.height && 
-       (Math.abs(settings.width/settings.height - 16/9) < 0.1 || 
-        Math.abs(settings.width/settings.height - 16/10) < 0.1 || 
-        Math.abs(settings.width/settings.height - 4/3) < 0.1)) ||
-      // Check for custom mid we set during sending
-      (event.transceiver && event.transceiver.mid && 
-       event.transceiver.mid.toString().includes('screen')) ||
-      // Check stream ID
-      (remoteStream.id && remoteStream.id.toLowerCase().includes('screen'));
-    
-    if (isScreenShare) {
-      console.log(`Detected screen share track from peer ${peerId}`);
-      
-      // Create a new separate stream just for this screen share track
-      const screenStream = new MediaStream();
-      screenStream.addTrack(track);
-      
-      // Get peer's name
-      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-      
-      // Add to the set of screen sharing peers if not already initialized
-      if (!screenSharingPeers) {
-        screenSharingPeers = new Set();
-      }
-      screenSharingPeers.add(peerId);
-      
-      // Check if we already have a screen share from this peer
-      const existingScreenShare = document.getElementById(`screen-share-${peerId}`);
-      if (existingScreenShare) {
-        console.log(`Updating existing screen share for peer ${peerId}`);
-        const videoElement = existingScreenShare.querySelector('video');
-        if (videoElement) {
-          videoElement.srcObject = screenStream;
-        }
-      } else {
-        console.log(`Adding new screen share to grid for peer ${peerId}`);
-        // Add to UI as separate video element
-        addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
-        
-        // Notify user
-        addSystemMessage(`${peerName} started sharing their screen`);
-      }
-      
-      // Store this peer as the active screen sharer
-      activeScreenSharePeerId = peerId;
-      
-      // Don't return here - we also want to handle the camera video stream separately
+    // Reset state on error
+    isScreenSharing = false;
+    if (screenShareStream) {
+      screenShareStream.getTracks().forEach(track => track.stop());
+      screenShareStream = null;
     }
-  }
-  
-  // Now handle regular camera video and audio streams
-  
-  // Check if we already have a video container for this peer
-  const existingContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-  
-  if (existingContainer) {
-    // We already have a container for this peer, just update its stream
-    const videoElement = existingContainer.querySelector('video');
-    if (videoElement && videoElement.srcObject !== remoteStream) {
-      console.log(`Updating existing video element for peer ${peerId}`);
-      
-      // Check if we need to preserve existing audio tracks
-      if (videoElement.srcObject && videoElement.srcObject.getAudioTracks().length > 0 && 
-          remoteStream.getAudioTracks().length === 0) {
-        
-        // We have audio tracks in the existing stream but not in the new one
-        // This is likely a video-only update, so preserve audio
-        const audioTracks = videoElement.srcObject.getAudioTracks();
-        audioTracks.forEach(audioTrack => {
-          remoteStream.addTrack(audioTrack);
-        });
-      }
-      
-      // Update the stream
-      videoElement.srcObject = remoteStream;
-      
-      // Set up audio analyzer for this stream if it has audio tracks
-      if (remoteStream.getAudioTracks().length > 0) {
-        setupRemoteTranscription(remoteStream, peerId);
-      }
-    }
-  } else {
-    // No existing container, add a new remote stream
-    addRemoteStream(peerId, remoteStream);
   }
 }
 
@@ -5573,101 +4879,307 @@ checkAuthState();
 
 // Remove screen share from the grid
 function removeScreenShareFromGrid(peerId) {
+  const screenContainer = document.getElementById(`screen-container-${peerId}`);
+  if (screenContainer) {
+    console.log(`Removing screen share container for peer: ${peerId}`);
+    screenContainer.remove();
+    
+    // Remove peer from screen sharing set
+    if (screenSharingPeers && screenSharingPeers.has(peerId)) {
+      screenSharingPeers.delete(peerId);
+    }
+  } else {
+    console.log(`No screen share container found for peer: ${peerId}`);
+  }
+}
+
+// Stop screen sharing
+function stopScreenShare() {
+  try {
+    console.log('Stopping screen share');
+    
+    if (!isScreenSharing || !screenShareStream) {
+      console.warn('No active screen share to stop');
+      return;
+    }
+    
+    // Stop all tracks in the stream
+    screenShareStream.getTracks().forEach(track => {
+      track.stop();
+    });
+    
+    // Close all peer connections for screen sharing
+    if (screenSharingConnections) {
+      for (const [peerId, connection] of screenSharingConnections.entries()) {
+        console.log(`Closing screen sharing connection for peer ${peerId}`);
+        connection.close();
+      }
+      screenSharingConnections.clear();
+    }
+    
+    // Reset UI
+    shareScreenButton.textContent = 'Share Screen';
+    shareScreenButton.classList.remove('active');
+    
+    // Remove screen share from grid
+    removeScreenShareFromGrid(ownPeerId);
+    
+    // Remove from sharing peers set
+    if (screenSharingPeers) {
+      screenSharingPeers.delete(ownPeerId);
+    }
+    
+    // Reset activeScreenSharePeerId if it was us
+    if (activeScreenSharePeerId === ownPeerId) {
+      activeScreenSharePeerId = null;
+    }
+    
+    // Reset state variables
+    isScreenSharing = false;
+    screenShareStream = null;
+    
+    // Notify peers that we stopped sharing
+    for (const [peerId, dataChannel] of dataChannels.entries()) {
+      if (dataChannel.readyState === 'open') {
+        dataChannel.send(JSON.stringify({
+          type: 'screen-share-stopped',
+          username: usernameInput.value
+        }));
+      }
+    }
+    
+    // Add system message
+    addSystemMessage('You stopped sharing your screen');
+    
+  } catch (error) {
+    console.error('Error stopping screen share:', error);
+    addSystemMessage('Error stopping screen share: ' + error.message);
+    
+    // Ensure state is reset even on error
+    isScreenSharing = false;
+    screenShareStream = null;
+  }
+}
+
+// Add screen share to the video grid
+function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare) {
+  console.log(`Adding screen share UI for peer ${peerId}`);
+  
+  // First remove any existing screen share for this peer
+  removeScreenShareFromGrid(peerId);
+  
+  // Create container element with special styling
+  const screenContainer = document.createElement('div');
+  screenContainer.className = 'video-item screen-share-container';
+  screenContainer.id = `screen-share-${peerId}`;
+  screenContainer.setAttribute('data-peer-id', peerId);
+  
+  // Apply distinct styling to make screen shares stand out
+  screenContainer.style.border = isRemoteShare ? '3px solid #e91e63' : '3px solid #4caf50';
+  screenContainer.style.borderRadius = '8px';
+  screenContainer.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.3)';
+  screenContainer.style.overflow = 'hidden';
+  screenContainer.style.position = 'relative';
+  screenContainer.style.backgroundColor = '#000';
+  
+  // Make screen shares larger than regular videos
+  screenContainer.style.gridColumn = 'span 2';
+  screenContainer.style.gridRow = 'span 2';
+  
+  // Create video element for the screen share
+  const videoEl = document.createElement('video');
+  videoEl.autoplay = true;
+  videoEl.playsInline = true;
+  videoEl.muted = true; // No audio for screen shares
+  videoEl.className = 'screen-share-video';
+  videoEl.style.width = '100%';
+  videoEl.style.height = '100%';
+  videoEl.style.objectFit = 'contain'; // Don't crop the screen content
+  
+  // Set the stream
+  videoEl.srcObject = stream;
+  
+  // Save reference for recording
+  if (isRemoteShare) {
+    screenVideoElement = videoEl;
+  }
+  
+  // Add a label for whose screen this is
+  const nameLabel = document.createElement('div');
+  nameLabel.className = 'screen-share-label';
+  nameLabel.style.position = 'absolute';
+  nameLabel.style.bottom = '0';
+  nameLabel.style.left = '0';
+  nameLabel.style.right = '0';
+  nameLabel.style.padding = '8px';
+  nameLabel.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+  nameLabel.style.color = '#fff';
+  nameLabel.style.fontWeight = 'bold';
+  nameLabel.style.zIndex = '2';
+  
+  // Get username to display
+  const username = peerId === ownPeerId 
+    ? 'Your Screen' 
+    : `${peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`}'s Screen`;
+    
+  nameLabel.innerHTML = `
+    <span style="margin-right: 5px;">🖥️</span>
+    <span>${username}</span>
+  `;
+  
+  // Add fullscreen button
+  const fullscreenBtn = document.createElement('button');
+  fullscreenBtn.className = 'screen-fullscreen-btn';
+  fullscreenBtn.innerHTML = '🔍';
+  fullscreenBtn.title = 'View fullscreen';
+  fullscreenBtn.style.position = 'absolute';
+  fullscreenBtn.style.top = '8px';
+  fullscreenBtn.style.right = '8px';
+  fullscreenBtn.style.zIndex = '2';
+  fullscreenBtn.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+  fullscreenBtn.style.color = '#fff';
+  fullscreenBtn.style.border = 'none';
+  fullscreenBtn.style.borderRadius = '50%';
+  fullscreenBtn.style.width = '36px';
+  fullscreenBtn.style.height = '36px';
+  fullscreenBtn.style.cursor = 'pointer';
+  
+  fullscreenBtn.addEventListener('click', () => {
+    openFullscreenView(stream, username, peerId);
+  });
+  
+  // Add a "Screen Sharing" indicator at the top
+  const sharingIndicator = document.createElement('div');
+  sharingIndicator.className = 'screen-sharing-indicator';
+  sharingIndicator.style.position = 'absolute';
+  sharingIndicator.style.top = '0';
+  sharingIndicator.style.left = '0';
+  sharingIndicator.style.width = '100%';
+  sharingIndicator.style.padding = '4px 8px';
+  sharingIndicator.style.backgroundColor = isRemoteShare ? '#e91e63' : '#4caf50';
+  sharingIndicator.style.color = '#fff';
+  sharingIndicator.style.fontWeight = 'bold';
+  sharingIndicator.style.textAlign = 'center';
+  sharingIndicator.style.zIndex = '2';
+  sharingIndicator.textContent = 'SCREEN SHARING';
+  
+  // Add all elements to container
+  screenContainer.appendChild(videoEl);
+  screenContainer.appendChild(nameLabel);
+  screenContainer.appendChild(fullscreenBtn);
+  screenContainer.appendChild(sharingIndicator);
+  
+  // Add container to the video grid at the top for prominence
+  if (remoteVideosContainer.firstChild) {
+    remoteVideosContainer.insertBefore(screenContainer, remoteVideosContainer.firstChild);
+  } else {
+    remoteVideosContainer.appendChild(screenContainer);
+  }
+  
+  console.log(`Screen share UI added for ${peerId}`);
+  
+  return screenContainer;
+}
+
+// Remove screen share from the grid
+function removeScreenShareFromGrid(peerId) {
+  // Find the screen container for the specified peer
   const screenContainer = document.getElementById(`screen-share-${peerId}`);
   if (screenContainer) {
     console.log(`Removing screen share container for peer ${peerId}`);
     screenContainer.remove();
     
-    // Remove from sharing peers set
-    if (screenSharingPeers) {
+    // Also remove from screen sharing peers set
+    if (screenSharingPeers && screenSharingPeers.has(peerId)) {
       screenSharingPeers.delete(peerId);
     }
     
-    // If this was the active sharer, clear that reference
+    // Reset active screen sharer if it was this peer
     if (activeScreenSharePeerId === peerId) {
       activeScreenSharePeerId = null;
-    }
-    
-    // If the fullscreen view is open for this peer, close it
-    if (fullscreenDialog && !fullscreenDialog.classList.contains('hidden') && 
-        fullscreenDialog.getAttribute('data-peer-id') === peerId) {
-      fullscreenDialog.classList.add('hidden');
     }
   } else {
     console.log(`No screen share container found for peer ${peerId}`);
   }
+  
+  // Also close the fullscreen view if it's open for this peer
+  if (fullscreenDialog && !fullscreenDialog.classList.contains('hidden')) {
+    const fullscreenPeerId = fullscreenDialog.getAttribute('data-peer-id');
+    if (fullscreenPeerId === peerId) {
+      fullscreenDialog.classList.add('hidden');
+    }
+  }
 }
 
-// Open fullscreen view for video or screen share
-function openFullscreenView(stream, sourceName, peerId) {
-  console.log(`Opening fullscreen view for ${sourceName} (${peerId})`);
-  
-  // Make sure the dialog exists
-  if (!fullscreenDialog) {
-    console.error('Fullscreen dialog element not found');
-    return;
-  }
-  
-  // Set peer ID as data attribute
-  fullscreenDialog.setAttribute('data-peer-id', peerId);
-  
-  // Update title
-  if (fullscreenTitle) {
-    fullscreenTitle.textContent = sourceName || 'Fullscreen View';
-  }
-  
-  // Make sure the video element exists
-  if (!fullscreenVideo) {
-    console.error('Fullscreen video element not found');
-    return;
-  }
-  
-  // Set the stream
+// Open fullscreen view for screen share
+function openFullscreenView(stream, title, peerId) {
+  // Set the fullscreen video source
   fullscreenVideo.srcObject = stream;
-  fullscreenVideo.play().catch(err => {
-    console.error('Error playing fullscreen video:', err);
-  });
   
-  // Make sure closeFullscreenDialogButton is wired up
-  if (closeFullscreenDialogButton) {
-    // Remove old event listeners first
-    const newButton = closeFullscreenDialogButton.cloneNode(true);
-    closeFullscreenDialogButton.parentNode.replaceChild(newButton, closeFullscreenDialogButton);
-    closeFullscreenDialogButton = newButton;
-    
-    // Add click handler
-    closeFullscreenDialogButton.addEventListener('click', () => {
-      fullscreenDialog.classList.add('hidden');
-    });
-  }
+  // Set the title
+  fullscreenTitle.textContent = title || 'Shared Screen';
   
-  // Style the fullscreen dialog
-  fullscreenDialog.style.position = 'fixed';
-  fullscreenDialog.style.top = '0';
-  fullscreenDialog.style.left = '0';
-  fullscreenDialog.style.width = '100%';
-  fullscreenDialog.style.height = '100%';
-  fullscreenDialog.style.backgroundColor = 'rgba(0, 0, 0, 0.9)';
-  fullscreenDialog.style.zIndex = '9999';
-  fullscreenDialog.style.display = 'flex';
-  fullscreenDialog.style.flexDirection = 'column';
-  fullscreenDialog.style.justifyContent = 'center';
-  fullscreenDialog.style.alignItems = 'center';
-  
-  // Style the video element
-  fullscreenVideo.style.width = '90%';
-  fullscreenVideo.style.height = '80%';
-  fullscreenVideo.style.objectFit = 'contain';
-  fullscreenVideo.style.backgroundColor = '#000';
-  fullscreenVideo.style.borderRadius = '8px';
+  // Store the peer ID for later reference
+  fullscreenDialog.setAttribute('data-peer-id', peerId);
   
   // Show the dialog
   fullscreenDialog.classList.remove('hidden');
 }
 
-// Define renderFrame globally to avoid reference errors
-window.renderFrame = function() {
-  console.log("Default renderFrame called - this will be replaced during recording");
-  // This is a placeholder that will be replaced when recording starts
-  // But having it defined prevents reference errors
-};
+// Handle leave room button click
+async function handleLeaveRoom() {
+  console.log('Leave room button clicked');
+  
+  // Check if we're in a room first
+  if (!currentRoom) {
+    console.log('Not in a room, nothing to leave');
+    return;
+  }
+  
+  // Disable buttons during the leave process
+  if (leaveRoomButton) leaveRoomButton.disabled = true;
+  if (joinRoomButton) joinRoomButton.disabled = true;
+  
+  try {
+    // Reset event listeners for all peer connections to avoid triggering new signals while we clean up
+    for (const [peerId, connection] of peerConnections.entries()) {
+      if (connection) {
+        connection.onicecandidate = null;
+        connection.ontrack = null;
+        connection.onnegotiationneeded = null;
+        connection.oniceconnectionstatechange = null;
+        connection.onicegatheringstatechange = null;
+        connection.onsignalingstatechange = null;
+        connection.onconnectionstatechange = null;
+      }
+    }
+    
+    // Call the leaveRoom function to handle cleanup
+    await leaveRoom();
+    
+    // Update UI
+    addSystemMessage(`Left room: ${currentRoom}`);
+    currentRoom = null;
+    
+    // Re-enable buttons
+    if (leaveRoomButton) leaveRoomButton.disabled = false;
+    if (joinRoomButton) joinRoomButton.disabled = false;
+    
+    // Update UI to show we're not in a room
+    roomDisplay.textContent = 'Not in a room';
+    videoGrid.innerHTML = '';
+    chatContainer.innerHTML = '';
+    
+    // Reset connection count
+    peers.clear();
+    updateConnectionCount();
+    
+  } catch (error) {
+    console.error('Error leaving room:', error);
+    addSystemMessage(`Error leaving room: ${error.message}`);
+    
+    // Re-enable buttons even if there was an error
+    if (leaveRoomButton) leaveRoomButton.disabled = false;
+    if (joinRoomButton) joinRoomButton.disabled = false;
+  }
+}
