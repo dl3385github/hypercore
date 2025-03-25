@@ -211,7 +211,6 @@ let screenShareStream = null;
 let activeScreenSharePeerId = null; // ID of the peer currently sharing their screen
 let screenVideoElement = null;
 let screenSharingPeers = new Set(); // Set of peers currently sharing their screen
-let peerScreenShareInfo = new Map(); // Map to store screen sharing information from peers
 
 // Initialize the app
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1041,13 +1040,6 @@ function handleDataChannelMessage(peerId, message) {
     console.log(`Peer ${peerId} started screen sharing: ${message.sourceName}`);
     addSystemMessage(`${message.username} started sharing their screen: ${message.sourceName}`);
     
-    // Store screen sharing information for this peer
-    peerScreenShareInfo.set(peerId, {
-      username: message.username,
-      sourceName: message.sourceName || 'Screen',
-      timestamp: new Date().toISOString()
-    });
-    
     // Update active screen sharer
     activeScreenSharePeerId = peerId;
     
@@ -1056,17 +1048,11 @@ function handleDataChannelMessage(peerId, message) {
     console.log(`Peer ${peerId} stopped screen sharing`);
     addSystemMessage(`${message.username} stopped sharing their screen`);
     
-    // Remove screen sharing information for this peer
-    peerScreenShareInfo.delete(peerId);
-    
     // Remove the screen share from grid
     const screenContainer = document.getElementById(`screen-share-${peerId}`);
     if (screenContainer) {
       screenContainer.remove();
     }
-    
-    // Remove from the set of screen sharing peers
-    screenSharingPeers.delete(peerId);
     
     // Clear active screen sharer only if it was this peer
     if (activeScreenSharePeerId === peerId) {
@@ -4249,21 +4235,13 @@ async function handleScreenShareClick() {
     
     if (!isScreenSharing) {
       console.log('Getting display media sources...');
-      const response = await window.electronAPI.getScreenSources();
+      const result = await window.electronAPI.getScreenSources();
       
-      if (!response || !response.success) {
-        console.error('Failed to get screen sources:', response?.error || 'Unknown error');
-        addSystemMessage(`Error getting screen sources: ${response?.error || 'Unknown error'}`);
-        return;
+      if (!result.success || !result.sources) {
+        throw new Error(result.error || 'Failed to get screen sources');
       }
       
-      const sources = response.sources;
-      if (!sources || !Array.isArray(sources) || sources.length === 0) {
-        console.error('No screen sources available');
-        addSystemMessage('No screens available to share');
-        return;
-      }
-      
+      const sources = result.sources;
       screenShareSources.innerHTML = '';
       
       // Display sources as thumbnails in dialog
@@ -4299,32 +4277,24 @@ async function startScreenShare(sourceId) {
   try {
     console.log(`Starting screen share with source ID: ${sourceId}`);
     
-    // Get screen capture source ID from the main process
-    const response = await window.electronAPI.startScreenShare(sourceId);
-    
-    if (!response.success) {
-      console.error('Failed to start screen share:', response.error);
-      addSystemMessage(`Error sharing screen: ${response.error || 'Unknown error'}`);
-      return;
-    }
-    
-    // Use the correct constraints format for Electron
-    const constraints = {
+    // Use the desktopCapturer source ID with getUserMedia
+    const screenStream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
         mandatory: {
           chromeMediaSource: 'desktop',
-          chromeMediaSourceId: sourceId
+          chromeMediaSourceId: sourceId,
+          minWidth: 1280,
+          maxWidth: 1920,
+          minHeight: 720,
+          maxHeight: 1080
         }
       }
-    };
+    });
     
-    console.log('Using constraints for screen capture:', constraints);
-    
-    // Get the screen stream
-    const screenStream = await navigator.mediaDevices.getUserMedia(constraints);
-    
-    console.log('Got screen share stream:', screenStream);
+    if (!screenStream) {
+      throw new Error('Failed to get screen share stream');
+    }
     
     // Save the stream for later use
     screenShareStream = screenStream;
@@ -4334,17 +4304,17 @@ async function startScreenShare(sourceId) {
     shareScreenButton.textContent = 'Stop Sharing';
     shareScreenButton.classList.add('active');
     
-    // Get source name (simplified version)
-    const sourceName = 'Screen Share';
+    // Get source name
+    const sourceName = 'Screen';
+    
+    // Add to the set of screen sharing peers
+    screenSharingPeers.add(ownPeerId);
+    
+    // Mark as active screen sharer
+    activeScreenSharePeerId = ownPeerId;
     
     // Add the screen to our own video grid
     addScreenShareToGrid(ownPeerId, screenStream, sourceName, false);
-    
-    // Add ourselves to the list of sharing peers
-    screenSharingPeers.add(ownPeerId);
-    
-    // Set as active screen sharer
-    activeScreenSharePeerId = ownPeerId;
     
     // Add the screen track to all peer connections
     const videoTrack = screenStream.getVideoTracks()[0];
@@ -4977,40 +4947,31 @@ function handleTrackEvent(event, peerId) {
   
   console.log(`Received ${track.kind} track from peer ${peerId}`, track);
   
-  // Get peer's name
-  const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-  
   // If this is a video track, check if it's a screen share
   if (track.kind === 'video') {
     const settings = track.getSettings();
-    console.log(`Track settings for ${peerName}:`, settings);
-    
-    // Log track details to help with debugging
-    console.log(`Track details: label=${track.label}, enabled=${track.enabled}, readyState=${track.readyState}`);
     
     // Check for screen share indicators
-    const isLikelyScreenShare = 
-      // Check the track label for any screen-related words
-      (track.label && 
-        (track.label.toLowerCase().includes('screen') || 
-         track.label.toLowerCase().includes('display') || 
-         track.label.toLowerCase().includes('window') ||
-         track.label.toLowerCase().includes('tab') ||
-         track.label.toLowerCase().includes('application'))) ||
+    const isScreenShare = 
+      // Check the track label
+      (track.label && track.label.toLowerCase().includes('screen')) ||
       // Check high resolution (typical for screen shares)
-      (settings && settings.width >= 1280 && settings.height >= 720 && 
-       settings.width/settings.height > 1.7) || // Wider aspect ratio
-      // Check frame rate (usually lower for screen shares)
-      (settings && settings.frameRate && settings.frameRate <= 30) ||
-      // Check for data channel messages indicating screen share
-      (peerScreenShareInfo.has(peerId));
+      (settings && settings.width > 1280 && settings.height > 720) ||
+      // Check for custom mid we set during sending
+      (event.transceiver && event.transceiver.mid && 
+       event.transceiver.mid.toString().includes('screen')) ||
+      // Check stream ID
+      (remoteStream.id && remoteStream.id.toLowerCase().includes('screen'));
     
-    if (isLikelyScreenShare) {
-      console.log(`Detected screen share track from peer ${peerId}`, track);
+    if (isScreenShare) {
+      console.log(`Detected screen share track from peer ${peerId}`);
       
       // Create a new separate stream just for this screen share track
       const screenStream = new MediaStream();
       screenStream.addTrack(track);
+      
+      // Get peer's name
+      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
       
       // Add to the set of screen sharing peers
       screenSharingPeers.add(peerId);
@@ -5024,55 +4985,27 @@ function handleTrackEvent(event, peerId) {
       // Notify user
       addSystemMessage(`${peerName} started sharing their screen`);
       
-      // Don't add this track to the regular video display
-      return;
+      // Don't return - we need to ensure regular video also works
     }
   }
   
-  // This is a regular audio or video track - add to the remote stream display
+  // Always add the stream to the UI to show camera regardless of screen sharing
+  // This ensures camera feed is always visible even when screen sharing
   
   // Check if we already have a video container for this peer
-  let existingContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+  const existingContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
   
   if (!existingContainer) {
-    // No existing container, add a new remote stream container
+    // No existing container, add the entire stream (will handle camera and audio)
     addRemoteStream(peerId, remoteStream);
   } else {
-    // Update the existing container's stream
+    // Already have a container, might need to update the stream
     const videoElement = existingContainer.querySelector('video');
     if (videoElement) {
-      // Check if we need to replace the stream or just add a track
-      if (videoElement.srcObject && videoElement.srcObject instanceof MediaStream) {
-        // If we have an existing MediaStream, check if this track is already in it
-        const existingTrack = track.kind === 'video' 
-          ? videoElement.srcObject.getVideoTracks()[0]
-          : videoElement.srcObject.getAudioTracks()[0];
-        
-        if (existingTrack) {
-          // Replace the track if it's a different one
-          if (existingTrack.id !== track.id) {
-            console.log(`Replacing ${track.kind} track for peer ${peerId}`);
-            
-            // Remove old track
-            videoElement.srcObject.removeTrack(existingTrack);
-            
-            // Add new track
-            videoElement.srcObject.addTrack(track);
-          }
-        } else {
-          // No existing track of this kind, just add it
-          console.log(`Adding ${track.kind} track to existing stream for peer ${peerId}`);
-          videoElement.srcObject.addTrack(track);
-        }
-      } else {
-        // No existing stream, set this stream as the source
-        console.log(`Setting new stream for peer ${peerId}`);
+      // Check if we need to update the stream
+      if (videoElement.srcObject !== remoteStream) {
+        console.log(`Updating existing video element for peer ${peerId}`);
         videoElement.srcObject = remoteStream;
-      }
-      
-      // Make sure video plays if it's a video track
-      if (track.kind === 'video' && videoElement.paused) {
-        videoElement.play().catch(e => console.error('Error playing video:', e));
       }
     }
   }

@@ -233,6 +233,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('get-screen-sources');
   },
   
+  // Start screen sharing
   startScreenShare: (sourceId) => {
     logEvent('startScreenShare', `Starting screen share with source ID: ${sourceId}`);
     return ipcRenderer.invoke('start-screen-share', sourceId);

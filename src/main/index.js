@@ -742,23 +742,23 @@ function setupIpcHandlers() {
       };
     }
   });
-
-  // Handle start screen share request
+  
+  // Handle screen share start request
   ipcMain.handle('start-screen-share', async (event, sourceId) => {
     try {
       console.log(`Starting screen share with source ID: ${sourceId}`);
       
-      // We'll need to pass this back to the renderer to handle with getUserMedia
-      // since we can't create MediaStreams directly in the main process
-      return {
-        success: true,
-        sourceId: sourceId
+      // In Electron, screen capture is handled in the renderer directly using 
+      // getUserMedia with the chromeMediaSourceId, so we just return success
+      // to acknowledge the request
+      return { 
+        success: true
       };
     } catch (error) {
       console.error('Error starting screen share:', error);
-      return {
-        success: false,
-        error: error.message || 'Failed to start screen share'
+      return { 
+        success: false, 
+        error: error.message || 'Failed to start screen share' 
       };
     }
   });
