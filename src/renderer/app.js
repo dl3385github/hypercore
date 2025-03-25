@@ -1393,7 +1393,25 @@ async function handleSignalReceived(peerId, from, signal) {
 // Handle screen sharing specific signals
 async function handleScreenShareSignal(peerId, from, signal) {
   try {
-    console.log(`Processing screen share signal from ${peerId}, type: ${signal.type}`, signal);
+    console.log(`Processing screen share signal from ${peerId}, type: ${signal.type}`);
+    
+    // If this is an offer and we already have a connection with this peer,
+    // we should close the existing connection and create a new one to avoid SDP conflicts
+    if (signal.type === 'offer' && screenSharingConnections && screenSharingConnections.has(peerId)) {
+      console.log(`Closing existing screen share connection for ${peerId} to avoid SDP conflicts`);
+      const oldConnection = screenSharingConnections.get(peerId);
+      
+      // Clean up old event listeners
+      oldConnection.onicecandidate = null;
+      oldConnection.ontrack = null;
+      oldConnection.oniceconnectionstatechange = null;
+      
+      // Close the connection
+      oldConnection.close();
+      
+      // Remove from our map
+      screenSharingConnections.delete(peerId);
+    }
     
     // Create or get the screen sharing connection for this peer
     let screenConnection;
@@ -1402,7 +1420,8 @@ async function handleScreenShareSignal(peerId, from, signal) {
       screenSharingConnections = new Map();
     }
     
-    if (!screenSharingConnections.has(peerId)) {
+    // Always create a new connection for an offer, or get existing for other message types
+    if (signal.type === 'offer' || !screenSharingConnections.has(peerId)) {
       console.log(`Creating new screen share connection for ${peerId}`);
       
       // Create a dedicated connection for screen share
@@ -1489,7 +1508,7 @@ async function handleScreenShareSignal(peerId, from, signal) {
       
       // Make sure we have a valid SDP object
       if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
-        console.error(`Invalid SDP in screen share offer:`, signal.sdp);
+        console.error(`Invalid SDP in screen share offer`);
         return;
       }
       
@@ -1508,7 +1527,8 @@ async function handleScreenShareSignal(peerId, from, signal) {
         await screenConnection.setLocalDescription(answer);
         
         // Wait for the local description to be fully set
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // This delay is important to ensure that the local description is complete
+        await new Promise(resolve => setTimeout(resolve, 200));
         
         // Send answer with screen share flag
         const answerSignal = {
@@ -1520,7 +1540,7 @@ async function handleScreenShareSignal(peerId, from, signal) {
           }
         };
         
-        console.log(`Sending screen share answer to ${peerId}`, answerSignal);
+        console.log(`Sending screen share answer to ${peerId}`);
         await window.electronAPI.sendSignal(peerId, answerSignal);
       } catch (error) {
         console.error(`Error processing screen share offer from ${peerId}:`, error);
@@ -1535,7 +1555,7 @@ async function handleScreenShareSignal(peerId, from, signal) {
       
       // Make sure we have a valid SDP object
       if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
-        console.error(`Invalid SDP in screen share answer:`, signal.sdp);
+        console.error(`Invalid SDP in screen share answer`);
         return;
       }
       
@@ -4587,7 +4607,7 @@ async function startScreenShare(sourceId) {
         // Set up event handlers for this connection
         screenConnection.onicecandidate = (event) => {
           if (event.candidate) {
-            console.log(`Generated ICE candidate for screen share to ${peerId}`, event.candidate);
+            console.log(`Generated ICE candidate for screen share to ${peerId}`);
             
             // Ensure the candidate has the required fields
             if (!event.candidate.candidate) {
@@ -4639,7 +4659,8 @@ async function startScreenShare(sourceId) {
           }
         };
         
-        console.log(`Sending screen share offer to ${peerId}`, signal);
+        console.log(`Sending screen share offer to ${peerId}`);
+        // Don't log the full signal object
         await window.electronAPI.sendSignal(peerId, signal);
         
         // Also notify via data channel that we're sharing screen
@@ -5367,7 +5388,7 @@ function handleTrackEvent(event, peerId) {
     return;
   }
   
-  console.log(`Received ${track.kind} track from peer ${peerId}`, track);
+  console.log(`Received ${track.kind} track from peer ${peerId}`);
   
   // If this is a video track, check if it's a screen share
   if (track.kind === 'video') {
@@ -5392,7 +5413,7 @@ function handleTrackEvent(event, peerId) {
       (remoteStream.id && remoteStream.id.toLowerCase().includes('screen'));
     
     if (isScreenShare) {
-      console.log(`Detected screen share track from peer ${peerId} with settings:`, settings);
+      console.log(`Detected screen share track from peer ${peerId}`);
       
       // Create a new separate stream just for this screen share track
       const screenStream = new MediaStream();
@@ -5427,31 +5448,44 @@ function handleTrackEvent(event, peerId) {
       // Store this peer as the active screen sharer
       activeScreenSharePeerId = peerId;
       
-      console.log(`Screen share correctly set up for peer ${peerId}`);
-      
-      // Don't return here - continue processing the camera video track separately
+      // Don't return here - we also want to handle the camera video stream separately
     }
   }
   
-  // Handle regular camera video and audio regardless of screen sharing
-  // This ensures camera feed is always visible even when screen sharing
+  // Now handle regular camera video and audio streams
   
-  // Get existing container for this peer
+  // Check if we already have a video container for this peer
   const existingContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
   
-  if (!existingContainer) {
-    // No existing container, add the remote stream for camera/audio
-    addRemoteStream(peerId, remoteStream);
-  } else {
-    // Already have a container, update the stream for camera/audio
+  if (existingContainer) {
+    // We already have a container for this peer, just update its stream
     const videoElement = existingContainer.querySelector('video');
-    if (videoElement) {
-      // Update the stream if different
-      if (videoElement.srcObject !== remoteStream) {
-        console.log(`Updating existing video element for peer ${peerId}`);
-        videoElement.srcObject = remoteStream;
+    if (videoElement && videoElement.srcObject !== remoteStream) {
+      console.log(`Updating existing video element for peer ${peerId}`);
+      
+      // Check if we need to preserve existing audio tracks
+      if (videoElement.srcObject && videoElement.srcObject.getAudioTracks().length > 0 && 
+          remoteStream.getAudioTracks().length === 0) {
+        
+        // We have audio tracks in the existing stream but not in the new one
+        // This is likely a video-only update, so preserve audio
+        const audioTracks = videoElement.srcObject.getAudioTracks();
+        audioTracks.forEach(audioTrack => {
+          remoteStream.addTrack(audioTrack);
+        });
+      }
+      
+      // Update the stream
+      videoElement.srcObject = remoteStream;
+      
+      // Set up audio analyzer for this stream if it has audio tracks
+      if (remoteStream.getAudioTracks().length > 0) {
+        setupRemoteTranscription(remoteStream, peerId);
       }
     }
+  } else {
+    // No existing container, add a new remote stream
+    addRemoteStream(peerId, remoteStream);
   }
 }
 
