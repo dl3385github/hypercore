@@ -211,7 +211,6 @@ let screenShareStream = null;
 let activeScreenSharePeerId = null; // ID of the peer currently sharing their screen
 let screenVideoElement = null;
 let screenSharingPeers = new Set(); // Set of peers currently sharing their screen
-let screenTrackSenders = new Map(); // Store screen track senders
 
 // Initialize the app
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1011,55 +1010,54 @@ function sendMediaStateViaDataChannel(dataChannel) {
 
 // Handle messages received via data channel
 function handleDataChannelMessage(peerId, message) {
-  try {
-    // Parse message if it's in string format
-    if (typeof message === 'string') {
-      message = JSON.parse(message);
+  console.log(`Received data channel message from ${peerId}:`, message);
+  
+  if (message.type === 'media-state') {
+    // Update remote media state UI
+    updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
+  } else if (message.type === 'transcript') {
+    // Handle transcript message from peer
+    // Get the speaker from the message or use the peer's username
+    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
+    
+    // Make sure we store this username for the peer if we don't have it already
+    if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
+      peerUsernames.set(peerId, speaker);
     }
     
-    // Handle different message types
-    switch (message.type) {
-      case 'chat-message':
-        addMessageToUI(message);
-        break;
-        
-      case 'media-state':
-        updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
-        break;
-        
-      case 'screen-share-started':
-        // Add this peer to the set of screen sharing peers
-        screenSharingPeers.add(peerId);
-        
-        // Add a system message
-        const startUsername = message.username || peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-        addSystemMessage(`${startUsername} started sharing their screen`);
-        break;
-        
-      case 'screen-share-stopped':
-        // Remove this peer from the set of screen sharing peers
-        screenSharingPeers.delete(peerId);
-        
-        // If this was the active screen sharer, remove it
-        if (activeScreenSharePeerId === peerId) {
-          removeScreenShareFromGrid();
-        }
-        
-        // Add a system message
-        const stopUsername = message.username || peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-        addSystemMessage(`${stopUsername} stopped sharing their screen`);
-        break;
-        
-      case 'transcript':
-        // Handle transcript update
-        updateTranscription(message.username, message.text);
-        break;
-        
-      default:
-        console.log(`Received unknown message type: ${message.type}`);
+    // Skip empty or very short transcriptions
+    if (!message.text || message.text.trim().length < 3) {
+      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
+      return;
     }
-  } catch (error) {
-    console.error('Error handling data channel message:', error);
+    
+    // Update UI with the transcript
+    updateTranscription(speaker, message.text);
+    
+    // No need to add to transcript map again since updateTranscription already does this
+  } else if (message.type === 'screen-share-started') {
+    console.log(`Peer ${peerId} started screen sharing: ${message.sourceName}`);
+    addSystemMessage(`${message.username} started sharing their screen: ${message.sourceName}`);
+    
+    // Update active screen sharer
+    activeScreenSharePeerId = peerId;
+    
+    // No longer stopping our own share - we support multiple simultaneous shares
+  } else if (message.type === 'screen-share-stopped') {
+    console.log(`Peer ${peerId} stopped screen sharing`);
+    addSystemMessage(`${message.username} stopped sharing their screen`);
+    
+    // Remove the screen share from grid
+    const screenContainer = document.getElementById(`screen-share-${peerId}`);
+    if (screenContainer) {
+      screenContainer.remove();
+    }
+    
+    // Clear active screen sharer only if it was this peer
+    if (activeScreenSharePeerId === peerId) {
+      activeScreenSharePeerId = null;
+    }
   }
 }
 
@@ -4306,43 +4304,49 @@ async function startScreenShare(sourceId) {
     shareScreenButton.textContent = 'Stop Sharing';
     shareScreenButton.classList.add('active');
     
-    // Create an entirely new stream for the screen share that's completely independent
-    // from any camera video stream
-    const screenTrack = screenStream.getVideoTracks()[0];
-    
-    // Create a new dedicated stream for screen sharing
-    const dedicatedScreenStream = new MediaStream();
-    dedicatedScreenStream.addTrack(screenTrack);
-    
     // Add to the set of screen sharing peers
     screenSharingPeers.add(ownPeerId);
     
-    // Add to the video grid as a completely separate video element
-    addScreenShareToGrid(ownPeerId, dedicatedScreenStream, 'Screen Share', false);
+    // Mark as active screen sharer
+    activeScreenSharePeerId = ownPeerId;
     
-    // Add the screen track to all peer connections
+    // Add the screen to our own video grid as a separate "Screen Share" element
+    // Use fixed name "Screen Share" for consistency
+    addScreenShareToGrid(ownPeerId, screenStream, 'Screen Share', false);
+    
+    // Get the video track from the screen stream
+    const screenVideoTrack = screenStream.getVideoTracks()[0];
+    
+    // Set a custom label to identify it as a screen share track
+    if (screenVideoTrack) {
+      // We can't modify the track's label directly, but we can identify it in other ways
+      console.log(`Adding screen share video track with ID: ${screenVideoTrack.id}`);
+    }
+    
+    // Add the screen track to all peer connections with a special transceiver
     for (const [peerId, connection] of peerConnections.entries()) {
       try {
         console.log(`Adding screen share track to peer ${peerId}`);
         
-        // Always add as a separate track to a separate stream
-        const newScreenStream = new MediaStream();
-        newScreenStream.addTrack(screenTrack);
+        // Use addTransceiver instead of addTrack for more control
+        const transceiver = connection.addTransceiver(screenVideoTrack, {
+          direction: 'sendonly',
+          streams: [screenStream]
+        });
         
-        // Create a separate sender for the screen share track
-        // This is crucial - by creating a new stream each time, we ensure it's handled separately
-        const sender = connection.addTrack(screenTrack, newScreenStream);
+        // Try to set a custom mid prefix to identify this as a screen share
+        // This might not always work as expected, but it's a helpful hint
+        if (transceiver && transceiver.mid) {
+          console.log(`Screen share transceiver mid: ${transceiver.mid}`);
+        }
         
-        // Store the sender to be able to remove it later
-        screenTrackSenders.set(peerId, sender);
-        
-        // Send a message about the screen share
+        // Send a message about the screen share via data channel
         const dataChannel = dataChannels.get(peerId);
         if (dataChannel && dataChannel.readyState === 'open') {
           const message = JSON.stringify({
             type: 'screen-share-started',
             username: usernameInput.value,
-            isScreenShare: true // Explicitly mark as screen share
+            sourceName: 'Screen Share' // Use fixed name
           });
           dataChannel.send(message);
         }
@@ -4353,12 +4357,6 @@ async function startScreenShare(sourceId) {
     
     // Add system message
     addSystemMessage('You started sharing your screen');
-    
-    // Add a handler for screen share ending
-    screenTrack.addEventListener('ended', () => {
-      console.log('Screen share track ended');
-      stopScreenShare();
-    });
     
   } catch (error) {
     console.error('Error starting screen share:', error);
@@ -4376,13 +4374,13 @@ function stopScreenShare() {
       return;
     }
     
-    // Stop all tracks in the stream
+    // Stop all tracks in the screen share stream
     screenShareStream.getTracks().forEach(track => {
       track.stop();
     });
     
     // Remove the screen share from our video grid
-    removeScreenShareFromGrid();
+    removeScreenShareFromGrid(ownPeerId);
     
     // Update UI
     shareScreenButton.textContent = 'Share Screen';
@@ -4392,32 +4390,24 @@ function stopScreenShare() {
     isScreenSharing = false;
     screenShareStream = null;
     
-    // Remove screen share tracks from peer connections
-    for (const [peerId, connection] of peerConnections.entries()) {
-      try {
-        // Remove the sender if we have it stored
-        const sender = screenTrackSenders.get(peerId);
-        if (sender) {
-          connection.removeTrack(sender);
-          screenTrackSenders.delete(peerId);
-        }
-        
-        // Notify peer that we stopped sharing
-        const dataChannel = dataChannels.get(peerId);
-        if (dataChannel && dataChannel.readyState === 'open') {
-          const message = JSON.stringify({
-            type: 'screen-share-stopped',
-            username: usernameInput.value
-          });
-          dataChannel.send(message);
-        }
-      } catch (error) {
-        console.error(`Error removing screen track from peer ${peerId}:`, error);
+    // Notify peers that we stopped sharing
+    for (const [peerId, dataChannel] of dataChannels.entries()) {
+      if (dataChannel && dataChannel.readyState === 'open') {
+        const message = JSON.stringify({
+          type: 'screen-share-stopped',
+          username: usernameInput.value
+        });
+        dataChannel.send(message);
       }
     }
     
     // Remove from the set of sharing peers
     screenSharingPeers.delete(ownPeerId);
+    
+    // Remove active screen sharer if it was us
+    if (activeScreenSharePeerId === ownPeerId) {
+      activeScreenSharePeerId = null;
+    }
     
     // Add system message
     addSystemMessage('You stopped sharing your screen');
@@ -4428,109 +4418,19 @@ function stopScreenShare() {
   }
 }
 
-// Add screen share to the video grid
-function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare = false) {
-  // First, remove any existing screen share
-  removeScreenShareFromGrid();
-  
-  // Create screen share container
-  const screenContainer = document.createElement('div');
-  screenContainer.className = 'video-item screen-share-container';
-  screenContainer.id = `screen-share-container`;
-  
-  // Add special styling for better visibility
-  screenContainer.style.border = '3px solid #4caf50';
-  screenContainer.style.borderRadius = '8px';
-  screenContainer.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
-  screenContainer.style.overflow = 'hidden';
-  
-  // Create video element
-  const screenVideo = document.createElement('video');
-  screenVideo.className = 'screen-share-video';
-  screenVideo.id = 'screen-share-video';
-  screenVideo.autoplay = true;
-  screenVideo.playsInline = true;
-  screenVideo.srcObject = stream;
-  
-  // Also store a reference to the most recent screen video (for recording purposes)
-  screenVideoElement = screenVideo;
-  
-  // Create info overlay
-  const infoOverlay = document.createElement('div');
-  infoOverlay.className = 'screen-share-info';
-  infoOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-  infoOverlay.style.color = 'white';
-  infoOverlay.style.padding = '8px';
-  infoOverlay.style.position = 'absolute';
-  infoOverlay.style.bottom = '0';
-  infoOverlay.style.left = '0';
-  infoOverlay.style.right = '0';
-  infoOverlay.style.zIndex = '2';
-  
-  // Display fixed "Screen Share" text regardless of who's sharing
-  infoOverlay.innerHTML = `
-    <span class="screen-share-icon">🖥️</span>
-    <span>Screen Share</span>
-  `;
-  
-  // Create fullscreen button
-  const fullscreenButton = document.createElement('button');
-  fullscreenButton.className = 'fullscreen-btn';
-  fullscreenButton.innerHTML = '🔍';
-  fullscreenButton.title = 'View in full screen';
-  fullscreenButton.style.position = 'absolute';
-  fullscreenButton.style.top = '8px';
-  fullscreenButton.style.right = '8px';
-  fullscreenButton.style.zIndex = '3';
-  fullscreenButton.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
-  fullscreenButton.style.color = 'white';
-  fullscreenButton.style.border = 'none';
-  fullscreenButton.style.borderRadius = '50%';
-  fullscreenButton.style.width = '36px';
-  fullscreenButton.style.height = '36px';
-  fullscreenButton.style.cursor = 'pointer';
-  fullscreenButton.addEventListener('click', () => {
-    openFullscreenView(stream, "Screen Share", peerId);
-  });
-  
-  // Add elements to container
-  screenContainer.appendChild(screenVideo);
-  screenContainer.appendChild(infoOverlay);
-  screenContainer.appendChild(fullscreenButton);
-  
-  // Add to video grid - insert at beginning for prominence
-  const remoteVideosContainer = document.getElementById('remote-videos');
-  if (remoteVideosContainer.firstChild) {
-    remoteVideosContainer.insertBefore(screenContainer, remoteVideosContainer.firstChild);
-  } else {
-    remoteVideosContainer.appendChild(screenContainer);
-  }
-  
-  // Store the active screen sharer ID
-  activeScreenSharePeerId = peerId;
-  
-  return screenContainer;
-}
-
 // Remove screen share from the grid
-function removeScreenShareFromGrid() {
-  try {
-    // Remove any existing screen share container
-    const screenShareContainer = document.getElementById('screen-share-container');
-    if (screenShareContainer) {
-      // Remove it from the DOM
-      screenShareContainer.remove();
-      console.log('Removed screen share from video grid');
-    }
-    
-    // Clear reference to the screen video element
-    screenVideoElement = null;
-    
-    // Clear active screen sharer ID
-    activeScreenSharePeerId = null;
-  } catch (error) {
-    console.error('Error removing screen share:', error);
+function removeScreenShareFromGrid(peerId) {
+  // Find and remove the screen container for the specified peer
+  const screenContainer = document.getElementById(`screen-share-${peerId}`);
+  if (screenContainer) {
+    console.log(`Removing screen share container for peer ${peerId}`);
+    screenContainer.remove();
+  } else {
+    console.warn(`No screen share container found for peer ${peerId}`);
   }
+  
+  // Also close the fullscreen view if it's open
+  fullscreenDialog.classList.add('hidden');
 }
 
 // Open fullscreen view of shared screen
@@ -4548,11 +4448,8 @@ function openFullscreenView(stream, sourceName, peerId) {
 // Update handleDataChannelMessage to handle screen sharing control messages
 const originalHandleDataChannelMessage = handleDataChannelMessage;
 handleDataChannelMessage = function(peerId, message) {
-  // Call original function first
-  originalHandleDataChannelMessage(peerId, message);
-  
-  // Handle screen sharing messages
   try {
+    // Handle JSON messages (for control messages like screen sharing)
     const data = JSON.parse(message);
     
     if (data.type === 'screen-share-started') {
@@ -4565,19 +4462,17 @@ handleDataChannelMessage = function(peerId, message) {
       }
       screenSharingPeers.add(peerId);
       
-      // Also track as the active screen share peer for certain features
-      // but this doesn't replace their video
+      // Also track as the active screen share peer for recording and other features
       activeScreenSharePeerId = peerId;
+      
+      // The actual video will be added when we receive the track
       
     } else if (data.type === 'screen-share-stopped') {
       console.log(`Peer ${peerId} stopped screen sharing`);
       addSystemMessage(`${data.username} stopped sharing their screen`);
       
-      // Remove the screen share from grid
-      const screenContainer = document.getElementById(`screen-share-${peerId}`);
-      if (screenContainer) {
-        screenContainer.remove();
-      }
+      // Remove the screen share from grid based on the peer ID
+      removeScreenShareFromGrid(peerId);
       
       // Remove this peer from the set of screen sharing peers
       if (screenSharingPeers) {
@@ -4588,10 +4483,16 @@ handleDataChannelMessage = function(peerId, message) {
       if (activeScreenSharePeerId === peerId) {
         activeScreenSharePeerId = null;
       }
+      
+      return; // We've handled this message
     }
+    
+    // For other JSON messages, pass to the original handler
+    originalHandleDataChannelMessage(peerId, message);
+    
   } catch (error) {
-    // Not a JSON message or other error, ignore
-    // This is expected for regular chat messages
+    // Not a JSON message or other error, use the original handler
+    originalHandleDataChannelMessage(peerId, message);
   }
 };
 
@@ -4624,7 +4525,7 @@ window.onTrack = function(event, peerId) {
     if (isVideoTrack && isScreenShare) {
       console.log(`Detected screen share track from peer ${peerId}:`, settings);
       
-      // Create a separate dedicated stream just for this screen track
+      // Create a separate dedicated stream just for this screen share track
       const screenOnlyStream = new MediaStream();
       screenOnlyStream.addTrack(track);
       
@@ -4980,12 +4881,11 @@ function handleTrackEvent(event, peerId) {
     return;
   }
   
-  console.log(`Received ${track.kind} track from peer ${peerId} with label: ${track.label}`);
+  console.log(`Received ${track.kind} track from peer ${peerId}`, track);
   
   // If this is a video track, check if it's a screen share
   if (track.kind === 'video') {
     const settings = track.getSettings();
-    console.log(`Track settings for peer ${peerId}:`, settings);
     
     // Check for screen share indicators
     const isScreenShare = 
@@ -5000,45 +4900,46 @@ function handleTrackEvent(event, peerId) {
       (remoteStream.id && remoteStream.id.toLowerCase().includes('screen'));
     
     if (isScreenShare) {
-      console.log(`Detected screen share track from peer ${peerId} - creating separate video element`);
+      console.log(`Detected screen share track from peer ${peerId}`);
       
-      // Create a completely independent stream just for screen sharing
+      // Create a new separate stream just for this screen share track
       const screenStream = new MediaStream();
       screenStream.addTrack(track);
       
       // Get peer's name
       const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-      console.log(`Adding screen share from ${peerName} to video grid`);
       
       // Add to the set of screen sharing peers
       screenSharingPeers.add(peerId);
       
-      // Add as a completely separate video in the UI
+      // Mark this peer as the active screen sharer
+      activeScreenSharePeerId = peerId;
+      
+      // Add to UI as separate video element with a fixed name "Screen Share"
       addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
       
       // Notify user
       addSystemMessage(`${peerName} started sharing their screen`);
       
-      // Return early - DO NOT add the screen share track to the regular video element
-      return;
+      // IMPORTANT: Remove this track from the remote stream to prevent it from
+      // replacing the camera video. We'll handle it separately as a screen share.
+      return; // Skip adding this track to the standard video display
     }
   }
   
-  // This code will only execute for non-screen share tracks
-  // Handle audio tracks or regular video tracks
-  console.log(`Adding regular ${track.kind} track to peer ${peerId}'s video element`);
+  // For non-screen share tracks (audio or regular video), add them to the UI normally
   
   // Check if we already have a video container for this peer
   const existingContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
   
   if (!existingContainer) {
-    // No existing container, add the entire stream (will handle camera and audio)
+    // No existing container, add a new one for this peer's camera/audio
     addRemoteStream(peerId, remoteStream);
   } else {
-    // Already have a container, might need to update the stream
+    // Already have a container, check if we need to update it
     const videoElement = existingContainer.querySelector('video');
     if (videoElement) {
-      // Update stream only if needed
+      // If the video element exists but has a different stream, update it
       if (videoElement.srcObject !== remoteStream) {
         console.log(`Updating existing video element for peer ${peerId}`);
         videoElement.srcObject = remoteStream;
@@ -5224,7 +5125,7 @@ function renderFrame() {
       const testLine = line + (line ? ' ' : '') + word;
       const testWidth = ctx.measureText(testLine).width;
       
-      if (testWidth > maxWidth && line !== '') {
+      if (testWidth > maxWidth && line) {
         // Draw the current line
         ctx.fillText(line, textX, lineY);
         // Start a new line
@@ -5308,4 +5209,89 @@ function renderFrame() {
   // Store canvas data for recording
   videoCanvas._lastFrameTime = Date.now();
   return videoCanvas;
+}
+
+// Add screen share to the video grid
+function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare = false) {
+  // Create screen share container
+  const screenContainer = document.createElement('div');
+  screenContainer.className = 'video-item screen-share-container';
+  screenContainer.id = `screen-share-${peerId}`;
+  
+  // Add special styling for better visibility
+  screenContainer.style.border = '3px solid #4caf50';
+  screenContainer.style.borderRadius = '8px';
+  screenContainer.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
+  screenContainer.style.overflow = 'hidden';
+  
+  // If this is a remote share, add additional visual distinction
+  if (isRemoteShare) {
+    screenContainer.style.borderColor = '#e91e63'; // Pink border for remote shares
+  }
+  
+  // Create video element - create a new one each time, don't reuse
+  const screenVideo = document.createElement('video');
+  screenVideo.className = 'screen-share-video';
+  screenVideo.autoplay = true;
+  screenVideo.playsInline = true;
+  screenVideo.srcObject = stream;
+  
+  // Also store a reference to the most recent screen video (for recording purposes)
+  screenVideoElement = screenVideo;
+  
+  // Create info overlay
+  const infoOverlay = document.createElement('div');
+  infoOverlay.className = 'screen-share-info';
+  infoOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+  infoOverlay.style.color = 'white';
+  infoOverlay.style.padding = '8px';
+  infoOverlay.style.position = 'absolute';
+  infoOverlay.style.bottom = '0';
+  infoOverlay.style.left = '0';
+  infoOverlay.style.right = '0';
+  infoOverlay.style.zIndex = '2';
+  
+  // Get the peer's username for display
+  const peerUsername = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+  infoOverlay.innerHTML = `
+    <span class="screen-share-icon">🖥️</span>
+    <span>${peerId === ownPeerId ? 'Your Screen' : `${peerUsername}'s Screen`}: ${sourceName}</span>
+  `;
+  
+  // Create fullscreen button
+  const fullscreenButton = document.createElement('button');
+  fullscreenButton.className = 'fullscreen-btn';
+  fullscreenButton.innerHTML = '🔍';
+  fullscreenButton.title = 'View in full screen';
+  fullscreenButton.style.position = 'absolute';
+  fullscreenButton.style.top = '8px';
+  fullscreenButton.style.right = '8px';
+  fullscreenButton.style.zIndex = '3';
+  fullscreenButton.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+  fullscreenButton.style.color = 'white';
+  fullscreenButton.style.border = 'none';
+  fullscreenButton.style.borderRadius = '50%';
+  fullscreenButton.style.width = '36px';
+  fullscreenButton.style.height = '36px';
+  fullscreenButton.style.cursor = 'pointer';
+  fullscreenButton.addEventListener('click', () => {
+    openFullscreenView(stream, sourceName, peerId);
+  });
+  
+  // Add elements to container
+  screenContainer.appendChild(screenVideo);
+  screenContainer.appendChild(infoOverlay);
+  screenContainer.appendChild(fullscreenButton);
+  
+  // Add to video grid - insert at beginning for prominence
+  const remoteVideosContainer = document.getElementById('remote-videos');
+  if (remoteVideosContainer.firstChild) {
+    remoteVideosContainer.insertBefore(screenContainer, remoteVideosContainer.firstChild);
+  } else {
+    remoteVideosContainer.appendChild(screenContainer);
+  }
+  
+  console.log(`Added screen share for ${peerId === ownPeerId ? 'local user' : peerUsername} to the video grid`);
+  
+  return screenContainer;
 }
