@@ -32,6 +32,7 @@ const microphoneSelect = document.getElementById('microphone-select');
 const speakerSelect = document.getElementById('speaker-select');
 const webcamSelect = document.getElementById('webcam-select');
 const refreshDevicesBtn = document.getElementById('refresh-devices-btn');
+const leaveRoomButton = document.getElementById('leave-room-btn');
 
 // DOM Elements - Auth
 const authScreen = document.getElementById('auth-screen');
@@ -963,17 +964,9 @@ async function createPeerConnection(peerId) {
     // Handle incoming stream
     peerConnection.ontrack = (event) => {
       console.log(`Received track from ${peerId}:`, event.track.kind);
-      const [remoteStream] = event.streams;
       
-      if (!remoteStream) {
-        console.warn(`No stream in track event from ${peerId}`);
-        return;
-      }
-      
-      console.log(`Received remote stream from ${peerId}`);
-      
-      // Add the remote stream to the UI
-      addRemoteStream(peerId, remoteStream);
+      // Call our track handler with the peer ID
+      handleTrackEvent(event, peerId);
     };
     
     return peerConnection;
@@ -3709,7 +3702,9 @@ function startVideoRecording() {
           ctx.fillStyle = '#ffffff';
           ctx.font = '16px Arial';
           
-          const maxWidth = chatAreaWidth - 40;
+          const usernameWidth = ctx.measureText(`${msg.username}:`).width + 40; // Add extra spacing
+          const maxWidth = chatAreaWidth - 40 - usernameWidth;
+          const textX = chatAreaX + 20 + usernameWidth;
           const words = msg.text.split(' ');
           let line = '';
           let lineY = y + 20;
@@ -3719,7 +3714,7 @@ function startVideoRecording() {
             const metrics = ctx.measureText(testLine);
             
             if (metrics.width > maxWidth && line !== '') {
-              ctx.fillText(line, chatAreaX + 120, lineY);
+              ctx.fillText(line, textX, lineY);
               line = word;
               lineY += 20;
             } else {
@@ -3727,7 +3722,7 @@ function startVideoRecording() {
             }
           });
           
-          ctx.fillText(line, chatAreaX + 120, lineY);
+          ctx.fillText(line, textX, lineY);
         });
       } else {
         ctx.fillStyle = '#999999';
@@ -3770,7 +3765,9 @@ function startVideoRecording() {
           ctx.fillStyle = '#ffffff';
           ctx.font = '16px Arial';
           
-          const maxWidth = chatAreaWidth - 40;
+          const usernameWidth = ctx.measureText(`${transcript.username}:`).width + 20; // Add space after username
+          const maxWidth = chatAreaWidth - 40 - usernameWidth;
+          const textX = chatAreaX + 20 + usernameWidth;
           const words = transcript.text.split(' ');
           let line = '';
           let lineY = y + 20;
@@ -3780,7 +3777,7 @@ function startVideoRecording() {
             const metrics = ctx.measureText(testLine);
             
             if (metrics.width > maxWidth && line !== '') {
-              ctx.fillText(line, chatAreaX + 110, lineY);
+              ctx.fillText(line, textX, lineY);
               line = word;
               lineY += 20;
             } else {
@@ -3788,7 +3785,7 @@ function startVideoRecording() {
             }
           });
           
-          ctx.fillText(line, chatAreaX + 110, lineY);
+          ctx.fillText(line, textX, lineY);
         });
       } else {
         ctx.fillStyle = '#999999';
@@ -4027,50 +4024,83 @@ updateTranscription = function(speaker, text) {
 // Handle screen share button click
 async function handleScreenShareClick() {
   try {
-    // If already sharing, stop sharing
+    // If already screen sharing, stop it
     if (isScreenSharing) {
-      stopScreenSharing();
+      return stopScreenSharing();
+    }
+    
+    console.log('Requesting screen share sources');
+    
+    // Clear previous sources list
+    screenShareSources.innerHTML = '';
+    
+    // Get available screen sources from main process
+    const sources = await window.electronAPI.getScreenSources();
+    
+    if (!sources || sources.length === 0) {
+      console.error('No screen sources found');
+      addSystemMessage('No screen sources available for sharing');
       return;
     }
     
-    // No longer checking if someone else is already sharing - we allow multiple shares
+    console.log(`Found ${sources.length} screen sources`);
     
-    // Get screen sources from main process
-    const result = await window.electronAPI.getScreenSources();
+    // Add note about camera state
+    const noteElement = document.createElement('div');
+    noteElement.className = 'screen-share-note';
+    noteElement.textContent = isVideoEnabled 
+      ? 'Your camera will remain active while screen sharing' 
+      : 'You can share your screen even with camera turned off';
+    noteElement.style.padding = '10px';
+    noteElement.style.marginBottom = '10px';
+    noteElement.style.backgroundColor = 'rgba(33, 150, 243, 0.1)';
+    noteElement.style.borderLeft = '3px solid #2196f3';
+    noteElement.style.borderRadius = '4px';
+    screenShareSources.appendChild(noteElement);
     
-    if (!result.success || !result.sources || result.sources.length === 0) {
-      throw new Error(result.error || 'No screen sources available');
-    }
-    
-    // Clear previous sources
-    screenShareSources.innerHTML = '';
-    
-    // Add sources to the dialog
-    result.sources.forEach(source => {
-      const sourceItem = document.createElement('div');
-      sourceItem.className = 'screen-source-item';
-      sourceItem.innerHTML = `
-        <img src="${source.thumbnail}" alt="${source.name}" class="source-thumbnail">
-        <div class="source-name">${source.name}</div>
-      `;
+    // Create and add source elements to the dialog
+    sources.forEach(source => {
+      // Create source element
+      const sourceElement = document.createElement('div');
+      sourceElement.className = 'screen-share-source';
+      sourceElement.dataset.id = source.id;
       
-      // Click handler for selection
-      sourceItem.addEventListener('click', () => {
-        // Hide the selection dialog
+      // Create thumbnail if available
+      if (source.thumbnail) {
+        const img = document.createElement('img');
+        img.src = source.thumbnail;
+        img.className = 'source-thumbnail';
+        sourceElement.appendChild(img);
+      } else {
+        // Use an icon if no thumbnail
+        const placeholder = document.createElement('div');
+        placeholder.className = 'source-thumbnail-placeholder';
+        placeholder.textContent = source.name.includes('Screen') ? '🖥️' : 'W';
+        sourceElement.appendChild(placeholder);
+      }
+      
+      // Add source name
+      const nameElement = document.createElement('div');
+      nameElement.className = 'source-name';
+      nameElement.textContent = source.name;
+      sourceElement.appendChild(nameElement);
+      
+      // Add click handler to select this source
+      sourceElement.addEventListener('click', () => {
+        console.log(`Selected screen share source: ${source.name} (${source.id})`);
         screenShareDialog.classList.add('hidden');
-        
-        // Start screen sharing for this source
         startScreenSharing(source.id, source.name);
       });
       
-      screenShareSources.appendChild(sourceItem);
+      // Add to dialog
+      screenShareSources.appendChild(sourceElement);
     });
     
-    // Show the selection dialog
+    // Show the dialog
     screenShareDialog.classList.remove('hidden');
   } catch (error) {
-    console.error('Error preparing screen share:', error);
-    addSystemMessage(`Error preparing screen share: ${error.message}`);
+    console.error('Error handling screen share button click:', error);
+    addSystemMessage(`Error setting up screen share: ${error.message}`);
   }
 }
 
@@ -4137,6 +4167,13 @@ async function startScreenSharing(sourceId, sourceName) {
         
         // Add as a completely separate track with a dedicated transceiver
         const transceiver = connection.addTransceiver(screenTrack, transceiverInit);
+        
+        // Set custom mid to help identify this as a screen share when receiving
+        try {
+          transceiver.mid = 'screen-share-' + Date.now();
+        } catch (midError) {
+          console.warn('Could not set custom mid for screen share transceiver:', midError);
+        }
         
         // Store the transceiver reference for later cleanup
         if (!connection._screenTransceivers) {
@@ -4257,11 +4294,22 @@ function stopScreenSharing() {
 }
 
 // Add screen share to the video grid
-function addScreenShareToGrid(peerId, stream, sourceName) {
+function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare = false) {
   // Create screen share container
   const screenContainer = document.createElement('div');
   screenContainer.className = 'video-item screen-share-container';
   screenContainer.id = `screen-share-${peerId}`;
+  
+  // Add special styling for better visibility
+  screenContainer.style.border = '3px solid #4caf50';
+  screenContainer.style.borderRadius = '8px';
+  screenContainer.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
+  screenContainer.style.overflow = 'hidden';
+  
+  // If this is a remote share, add additional visual distinction
+  if (isRemoteShare) {
+    screenContainer.style.borderColor = '#e91e63'; // Pink border for remote shares
+  }
   
   // Create video element - create a new one each time, don't reuse
   const screenVideo = document.createElement('video');
@@ -4276,6 +4324,14 @@ function addScreenShareToGrid(peerId, stream, sourceName) {
   // Create info overlay
   const infoOverlay = document.createElement('div');
   infoOverlay.className = 'screen-share-info';
+  infoOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+  infoOverlay.style.color = 'white';
+  infoOverlay.style.padding = '8px';
+  infoOverlay.style.position = 'absolute';
+  infoOverlay.style.bottom = '0';
+  infoOverlay.style.left = '0';
+  infoOverlay.style.right = '0';
+  infoOverlay.style.zIndex = '2';
   
   // Get the peer's username for display
   const peerUsername = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
@@ -4289,6 +4345,17 @@ function addScreenShareToGrid(peerId, stream, sourceName) {
   fullscreenButton.className = 'fullscreen-btn';
   fullscreenButton.innerHTML = '🔍';
   fullscreenButton.title = 'View in full screen';
+  fullscreenButton.style.position = 'absolute';
+  fullscreenButton.style.top = '8px';
+  fullscreenButton.style.right = '8px';
+  fullscreenButton.style.zIndex = '3';
+  fullscreenButton.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+  fullscreenButton.style.color = 'white';
+  fullscreenButton.style.border = 'none';
+  fullscreenButton.style.borderRadius = '50%';
+  fullscreenButton.style.width = '36px';
+  fullscreenButton.style.height = '36px';
+  fullscreenButton.style.cursor = 'pointer';
   fullscreenButton.addEventListener('click', () => {
     openFullscreenView(stream, sourceName, peerId);
   });
@@ -4305,6 +4372,8 @@ function addScreenShareToGrid(peerId, stream, sourceName) {
   } else {
     remoteVideosContainer.appendChild(screenContainer);
   }
+  
+  console.log(`Added screen share for ${peerId === ownPeerId ? 'local user' : peerUsername} to the video grid`);
   
   return screenContainer;
 }
@@ -4741,4 +4810,65 @@ async function handleLeaveRoom() {
     console.error('Error handling leave room:', error);
     alert('An error occurred while leaving the room. Please try again.');
   }
+}
+
+// Handle track events separately to detect screen sharing
+function handleTrackEvent(event, peerId) {
+  const [remoteStream] = event.streams;
+  
+  if (!remoteStream) {
+    console.warn(`No stream in track event from ${peerId}`);
+    return;
+  }
+  
+  console.log(`Received remote stream from ${peerId} with ${remoteStream.getTracks().length} tracks`);
+  
+  // Check if this is a screen sharing track
+  const videoTracks = remoteStream.getVideoTracks();
+  
+  // Look for typical indicators of screen sharing
+  if (videoTracks.length > 0) {
+    const track = videoTracks[0];
+    const settings = track.getSettings();
+    
+    // Screen share tracks typically have different properties
+    const isScreenShare = (
+      // Screen shares have high resolution
+      (settings && settings.width > 1000 && settings.height > 700) ||
+      // Or contain "screen" in track label
+      track.label.toLowerCase().includes('screen') ||
+      // Or in stream ID
+      remoteStream.id.toLowerCase().includes('screen') ||
+      // Or in transceiver mid (set by our code)
+      (event.transceiver && event.transceiver.mid && event.transceiver.mid.includes('screen'))
+    );
+    
+    if (isScreenShare) {
+      console.log(`Detected screen share track from peer ${peerId}:`, settings);
+      
+      // Create a dedicated stream for the screen share
+      const screenStream = new MediaStream();
+      screenStream.addTrack(track);
+      
+      // Get the peer's username
+      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+      
+      // Add to UI as a separate screen share
+      addScreenShareToGrid(peerId, screenStream, 'Shared Screen', true);
+      
+      // Track that this peer is sharing their screen
+      if (!screenSharingPeers) {
+        screenSharingPeers = new Set();
+      }
+      screenSharingPeers.add(peerId);
+      
+      // Notify all users about this screen share
+      addSystemMessage(`${peerName} is sharing their screen`);
+      
+      return; // Don't process this track as a normal video
+    }
+  }
+  
+  // If not a screen share, process as normal video
+  addRemoteStream(peerId, remoteStream);
 }
