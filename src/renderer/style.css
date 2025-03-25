@@ -367,34 +367,25 @@ body {
 }
 
 .action-btn {
-  padding: 8px 16px;
-  background-color: #4a90e2;
+  background-color: #4caf50;
   color: white;
   border: none;
   border-radius: 4px;
-  cursor: pointer;
+  padding: 5px 12px;
   font-size: 14px;
-  transition: background-color 0.2s;
+  cursor: pointer;
+  transition: background-color 0.3s;
 }
 
 .action-btn:hover {
-  background-color: #357abf;
+  background-color: #3c5ba4;
 }
 
-.primary-btn {
-  background-color: #2ecc71;
-  font-weight: bold;
-}
-
-.primary-btn:hover {
-  background-color: #27ae60;
-}
-
-.danger-btn {
+.action-btn.danger-btn {
   background-color: #e74c3c;
 }
 
-.danger-btn:hover {
+.action-btn.danger-btn:hover {
   background-color: #c0392b;
 }
 
@@ -933,8 +924,7 @@ body {
 }
 
 .setting-status.success {
-  color: #2ecc71;
-  font-weight: bold;
+  color: var(--success-color);
 }
 
 .setting-status.error {
