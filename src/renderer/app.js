@@ -599,115 +599,144 @@ function generateDefaultRoomId() {
 
 // Join the chat with a username and room
 async function joinChat() {
-  const username = usernameInput.value.trim();
-  const roomId = roomInput.value.trim() || generateDefaultRoomId();
-  
-  if (!username) {
-    alert('Please enter a username');
-    return;
-  }
-  
   try {
-    // Try to get user media (camera and microphone)
+    // Get room ID - either generate a random one or use the input value
+    const roomId = roomInput.value.trim() || generateDefaultRoomId();
+    roomInput.value = roomId;
+    
+    // Clean up any existing connections or screen sharing before joining
+    if (currentRoom) {
+      console.log('Leaving current room before joining new one');
+      await leaveRoom();
+    }
+    
+    // Also ensure any screen sharing is stopped when joining a new room
+    if (isScreenSharing) {
+      console.log('Stopping active screen sharing before joining new room');
+      await stopScreenShare();
+    }
+    
+    // Clear any remaining UI elements from previous sessions
+    if (screenSharingConnections) {
+      screenSharingConnections.clear();
+    }
+    
+    if (screenSharingPeers) {
+      screenSharingPeers.clear();
+    }
+    
+    const username = usernameInput.value.trim();
+    
+    if (!username) {
+      alert('Please enter a username');
+      return;
+    }
+    
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        },
-        audio: true
-      });
-      
-      // If we got here, both video and audio are available
-      isVideoEnabled = true;
-      isAudioEnabled = true;
-      
-    } catch (mediaError) {
-      // Try fallback options if full access wasn't granted
-      console.warn('Could not access both camera and microphone, trying fallback options', mediaError);
-      
+      // Try to get user media (camera and microphone)
       try {
-        // Try just audio
         localStream = await navigator.mediaDevices.getUserMedia({
-          video: false,
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          },
           audio: true
         });
-        isVideoEnabled = false;
+        
+        // If we got here, both video and audio are available
+        isVideoEnabled = true;
         isAudioEnabled = true;
-        addSystemMessage('Camera access not available. Audio only mode enabled.');
-      } catch (audioError) {
-        // No media devices available
-        console.warn('Could not access any media devices', audioError);
-        localStream = null;
-        isVideoEnabled = false;
-        isAudioEnabled = false;
-        addSystemMessage('⚠️ No camera or microphone access. Voice and video unavailable.');
-      }
-    }
-    
-    // If we have a stream, set it up for the local video display
-    if (localStream) {
-      // Setup local video display
-      localVideo.srcObject = localStream;
-      
-      // Check what tracks we got
-      const hasMicrophone = localStream.getAudioTracks().length > 0;
-      const hasCamera = localStream.getVideoTracks().length > 0;
-      
-      // Store the IDs of the devices we're actually using
-      if (hasMicrophone) {
-        const audioTrack = localStream.getAudioTracks()[0];
-        if (audioTrack.getSettings && audioTrack.getSettings().deviceId) {
-          selectedMicrophoneId = audioTrack.getSettings().deviceId;
-          console.log(`Using microphone: ${selectedMicrophoneId}`);
+        
+      } catch (mediaError) {
+        // Try fallback options if full access wasn't granted
+        console.warn('Could not access both camera and microphone, trying fallback options', mediaError);
+        
+        try {
+          // Try just audio
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: false,
+            audio: true
+          });
+          isVideoEnabled = false;
+          isAudioEnabled = true;
+          addSystemMessage('Camera access not available. Audio only mode enabled.');
+        } catch (audioError) {
+          // No media devices available
+          console.warn('Could not access any media devices', audioError);
+          localStream = null;
+          isVideoEnabled = false;
+          isAudioEnabled = false;
+          addSystemMessage('⚠️ No camera or microphone access. Voice and video unavailable.');
         }
       }
       
-      if (hasCamera) {
-        const videoTrack = localStream.getVideoTracks()[0];
-        if (videoTrack.getSettings && videoTrack.getSettings().deviceId) {
-          selectedWebcamId = videoTrack.getSettings().deviceId;
-          console.log(`Using camera: ${selectedWebcamId}`);
+      // If we have a stream, set it up for the local video display
+      if (localStream) {
+        // Setup local video display
+        localVideo.srcObject = localStream;
+        
+        // Check what tracks we got
+        const hasMicrophone = localStream.getAudioTracks().length > 0;
+        const hasCamera = localStream.getVideoTracks().length > 0;
+        
+        // Store the IDs of the devices we're actually using
+        if (hasMicrophone) {
+          const audioTrack = localStream.getAudioTracks()[0];
+          if (audioTrack.getSettings && audioTrack.getSettings().deviceId) {
+            selectedMicrophoneId = audioTrack.getSettings().deviceId;
+            console.log(`Using microphone: ${selectedMicrophoneId}`);
+          }
+        }
+        
+        if (hasCamera) {
+          const videoTrack = localStream.getVideoTracks()[0];
+          if (videoTrack.getSettings && videoTrack.getSettings().deviceId) {
+            selectedWebcamId = videoTrack.getSettings().deviceId;
+            console.log(`Using camera: ${selectedWebcamId}`);
+          }
+        }
+        
+        // If we have audio, setup the audio recording for transcription
+        if (hasMicrophone) {
+          setupMediaRecording();
         }
       }
-      
-      // If we have audio, setup the audio recording for transcription
-      if (hasMicrophone) {
-        setupMediaRecording();
-      }
-    }
 
-    // Set app username
-    await window.electronAPI.setUsername(username);
-    
-    // Join the specified room or use the default
-    const joinRoomResult = await window.electronAPI.joinRoom(roomId);
-    
-    if (!joinRoomResult.success) {
-      throw new Error(joinRoomResult.error || 'Failed to join room');
+      // Set app username
+      await window.electronAPI.setUsername(username);
+      
+      // Join the specified room or use the default
+      const joinRoomResult = await window.electronAPI.joinRoom(roomId);
+      
+      if (!joinRoomResult.success) {
+        throw new Error(joinRoomResult.error || 'Failed to join room');
+      }
+      
+      // Get and display our own peer ID
+      ownPeerId = await window.electronAPI.getOwnId(); // Store in our variable
+      console.log(`Our peer ID: ${ownPeerId}`);
+      
+      // Track the room we're in
+      currentRoomSpan.textContent = roomId;
+      currentRoom = roomId;
+      
+      // Switch to chat screen
+      loginScreen.classList.add('hidden');
+      chatScreen.classList.remove('hidden');
+      
+      // Add welcome message
+      addSystemMessage(`Welcome ${username}! You've joined room: ${roomId}`);
+      
+      // Focus on message input
+      messageInput.focus();
+      
+      // Don't show transcript popup by default
+      // transcriptPopup.classList.remove('hidden');
+    } catch (error) {
+      alert(`Error joining chat: ${error.message || 'Unknown error'}`);
     }
-    
-    // Get and display our own peer ID
-    ownPeerId = await window.electronAPI.getOwnId(); // Store in our variable
-    console.log(`Our peer ID: ${ownPeerId}`);
-    
-    // Track the room we're in
-    currentRoomSpan.textContent = roomId;
-    currentRoom = roomId;
-    
-    // Switch to chat screen
-    loginScreen.classList.add('hidden');
-    chatScreen.classList.remove('hidden');
-    
-    // Add welcome message
-    addSystemMessage(`Welcome ${username}! You've joined room: ${roomId}`);
-    
-    // Focus on message input
-    messageInput.focus();
-    
-    // Don't show transcript popup by default
-    // transcriptPopup.classList.remove('hidden');
   } catch (error) {
+    console.error('Error joining chat:', error);
     alert(`Error joining chat: ${error.message || 'Unknown error'}`);
   }
 }
@@ -1395,21 +1424,28 @@ async function handleScreenShareSignal(peerId, from, signal) {
   try {
     console.log(`Processing screen share signal from ${peerId}, type: ${signal.type}`);
     
-    // Always create a new connection for offers to avoid SDP order issues
+    // Always create a new connection for screen sharing offers to avoid SDP conflicts
     if (signal.type === 'offer') {
-      // Close any existing connection for this peer
+      // Close and remove any existing connection for this peer to avoid conflicts
       if (screenSharingConnections && screenSharingConnections.has(peerId)) {
-        console.log(`Closing existing screen connection for ${peerId} to avoid conflicts`);
-        const oldConn = screenSharingConnections.get(peerId);
-        oldConn.onicecandidate = null;
-        oldConn.ontrack = null;
-        oldConn.oniceconnectionstatechange = null;
-        oldConn.close();
+        console.log(`Closing existing screen share connection for ${peerId} to create a fresh one`);
+        const oldConnection = screenSharingConnections.get(peerId);
+        oldConnection.onicecandidate = null;
+        oldConnection.ontrack = null;
+        oldConnection.oniceconnectionstatechange = null;
+        oldConnection.close();
         screenSharingConnections.delete(peerId);
+        
+        // Also remove any existing UI element for this screen share
+        removeScreenShareFromGrid(peerId);
       }
       
-      // Create a new dedicated connection
-      console.log(`Creating new screen share connection for ${peerId}`);
+      // Initialize the screen sharing connections map if needed
+      if (!screenSharingConnections) {
+        screenSharingConnections = new Map();
+      }
+      
+      // Create a new dedicated connection for this screen share
       const screenConnection = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -1418,50 +1454,14 @@ async function handleScreenShareSignal(peerId, from, signal) {
         iceCandidatePoolSize: 10
       });
       
-      // Initialize connection map if needed
-      if (!screenSharingConnections) {
-        screenSharingConnections = new Map();
-      }
-      
-      // Store the connection
+      // Store connection for future reference
       screenSharingConnections.set(peerId, screenConnection);
       
-      // Set up track handler
-      screenConnection.ontrack = (event) => {
-        console.log(`Received screen share track from ${peerId}`);
-        
-        // Create a new MediaStream with the received tracks
-        const screenStream = new MediaStream();
-        event.streams[0].getTracks().forEach(track => {
-          screenStream.addTrack(track);
-        });
-        
-        // Mark this peer as screen sharing
-        if (!screenSharingPeers) {
-          screenSharingPeers = new Set();
-        }
-        screenSharingPeers.add(peerId);
-        
-        // Get the peer's username
-        const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-        
-        // First remove any existing screen share from this peer
-        removeScreenShareFromGrid(peerId);
-        
-        // Add to UI
-        console.log(`Adding screen share for ${peerName} to the grid`);
-        addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
-        
-        // Add system message
-        addSystemMessage(`${peerName} is sharing their screen`);
-        
-        // Store as active screen sharer for recordings
-        activeScreenSharePeerId = peerId;
-      };
-      
-      // Handle ICE candidates
+      // Handle ICE candidates for this screen share connection
       screenConnection.onicecandidate = (event) => {
         if (event.candidate) {
+          console.log(`Generated ICE candidate for screen share`);
+          
           const iceSignal = {
             type: 'ice-candidate',
             isScreenShare: true,
@@ -1474,58 +1474,99 @@ async function handleScreenShareSignal(peerId, from, signal) {
           };
           
           window.electronAPI.sendSignal(peerId, iceSignal).catch(err => {
-            console.error(`Error sending screen share ICE candidate to ${peerId}:`, err);
+            console.error(`Error sending screen share ICE candidate:`, err);
           });
+        }
+      };
+      
+      // Handle incoming tracks (the screen share video)
+      screenConnection.ontrack = (event) => {
+        console.log(`Received screen share track from ${peerId}`);
+        
+        if (event.streams && event.streams[0]) {
+          const screenStream = event.streams[0];
+          
+          // Add to the set of screen sharing peers
+          if (!screenSharingPeers) {
+            screenSharingPeers = new Set();
+          }
+          screenSharingPeers.add(peerId);
+          
+          // Get peer's name for display
+          const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+          
+          // Check if UI already exists and update it
+          const existingScreenShare = document.getElementById(`screen-share-${peerId}`);
+          if (existingScreenShare) {
+            console.log(`Updating existing screen share UI for ${peerName}`);
+            const videoElement = existingScreenShare.querySelector('video');
+            if (videoElement) {
+              videoElement.srcObject = screenStream;
+            }
+          } else {
+            // Create new UI for the screen share
+            console.log(`Creating new UI for screen share from ${peerName}`);
+            addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
+            addSystemMessage(`${peerName} is sharing their screen`);
+          }
         }
       };
       
       // Handle connection state changes
       screenConnection.oniceconnectionstatechange = () => {
-        const state = screenConnection.iceConnectionState;
-        console.log(`Screen share ICE connection state for ${peerId}: ${state}`);
+        console.log(`Screen share connection state: ${screenConnection.iceConnectionState}`);
         
-        if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-          console.log(`Screen share connection to ${peerId} ${state}`);
+        // Clean up UI if connection fails or closes
+        if (screenConnection.iceConnectionState === 'failed' || 
+            screenConnection.iceConnectionState === 'closed' ||
+            screenConnection.iceConnectionState === 'disconnected') {
+          console.log(`Screen share connection ${screenConnection.iceConnectionState}, removing from UI`);
           removeScreenShareFromGrid(peerId);
+          
+          // If no longer connected, clean up the connection
+          if (screenSharingConnections && screenSharingConnections.has(peerId)) {
+            screenSharingConnections.delete(peerId);
+          }
+          
+          // Remove from active screen sharers
+          if (screenSharingPeers && screenSharingPeers.has(peerId)) {
+            screenSharingPeers.delete(peerId);
+          }
         }
       };
       
-      // Process the offer
-      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
-        console.error(`Invalid SDP in screen share offer`);
-        return;
-      }
-      
+      // Process the incoming offer
       try {
-        // Create and set the remote description
+        // Validate SDP format
+        if (!signal.sdp || typeof signal.sdp !== 'object' || !signal.sdp.type || !signal.sdp.sdp) {
+          throw new Error('Invalid SDP format in screen share offer');
+        }
+        
+        // Create a proper RTCSessionDescription
         const rtcSessionDescription = new RTCSessionDescription({
           type: signal.sdp.type,
           sdp: signal.sdp.sdp
         });
         
-        console.log(`Setting remote description for screen share from ${peerId}`);
+        // Set the remote description (the offer)
+        console.log('Setting remote description for screen share');
         await screenConnection.setRemoteDescription(rtcSessionDescription);
         
         // Create an answer
-        console.log(`Creating screen share answer for ${peerId}`);
+        console.log('Creating answer for screen share');
         const answer = await screenConnection.createAnswer();
+        
+        // Set our local description (the answer)
         await screenConnection.setLocalDescription(answer);
         
-        // Wait for ICE gathering to complete for a better answer
-        if (screenConnection.iceGatheringState !== 'complete') {
-          await new Promise(resolve => {
-            const checkState = () => {
-              if (screenConnection.iceGatheringState === 'complete') {
-                resolve();
-              } else {
-                setTimeout(checkState, 100);
-              }
-            };
-            setTimeout(checkState, 100);
-          });
+        // Ensure local description is fully set
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (!screenConnection.localDescription) {
+          throw new Error('Local description not set after timeout');
         }
         
-        // Send the answer
+        // Send the answer back
         const answerSignal = {
           type: 'answer',
           isScreenShare: true,
@@ -1535,51 +1576,31 @@ async function handleScreenShareSignal(peerId, from, signal) {
           }
         };
         
-        console.log(`Sending screen share answer to ${peerId}`);
+        console.log('Sending screen share answer');
         await window.electronAPI.sendSignal(peerId, answerSignal);
+        
       } catch (error) {
-        console.error(`Error processing screen share offer from ${peerId}:`, error);
+        console.error(`Error processing screen share offer:`, error);
+        // Clean up on error
         if (screenSharingConnections.has(peerId)) {
           screenSharingConnections.delete(peerId);
         }
       }
     } 
-    // Handle other signal types
-    else {
-      // Get the existing connection
+    // Handle ICE candidates for screen sharing
+    else if (signal.type === 'ice-candidate' && signal.isScreenShare) {
+      console.log(`Processing screen share ICE candidate from ${peerId}`);
+      
+      // Get the correct connection
       if (!screenSharingConnections || !screenSharingConnections.has(peerId)) {
-        console.warn(`Received ${signal.type} for ${peerId} but no screen connection exists`);
+        console.warn(`No screen sharing connection found for ${peerId}`);
         return;
       }
       
       const screenConnection = screenSharingConnections.get(peerId);
       
-      if (signal.type === 'answer') {
-        // Process the answer
-        if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
-          console.error(`Invalid SDP in screen share answer`);
-          return;
-        }
-        
-        try {
-          const rtcSessionDescription = new RTCSessionDescription({
-            type: signal.sdp.type,
-            sdp: signal.sdp.sdp
-          });
-          
-          await screenConnection.setRemoteDescription(rtcSessionDescription);
-          console.log(`Set remote description for screen share answer from ${peerId}`);
-        } catch (error) {
-          console.error(`Error processing screen share answer from ${peerId}:`, error);
-        }
-      } 
-      else if (signal.type === 'ice-candidate') {
-        // Process ICE candidate
-        if (!signal.candidate) {
-          console.warn(`Received empty ICE candidate for screen share`);
-          return;
-        }
-        
+      // Add the ICE candidate
+      if (signal.candidate) {
         try {
           const iceCandidate = new RTCIceCandidate({
             candidate: signal.candidate.candidate,
@@ -1589,14 +1610,43 @@ async function handleScreenShareSignal(peerId, from, signal) {
           });
           
           await screenConnection.addIceCandidate(iceCandidate);
-          console.log(`Added ICE candidate for screen share from ${peerId}`);
+          console.log(`Added ICE candidate for screen share`);
         } catch (error) {
-          console.error(`Error adding screen share ICE candidate from ${peerId}:`, error);
+          console.error(`Error adding screen share ICE candidate:`, error);
         }
       }
     }
+    // Handle answers for screen sharing
+    else if (signal.type === 'answer' && signal.isScreenShare) {
+      console.log(`Processing screen share answer from ${peerId}`);
+      
+      // Get the correct connection
+      if (!screenSharingConnections || !screenSharingConnections.has(peerId)) {
+        console.warn(`No screen sharing connection found for ${peerId}`);
+        return;
+      }
+      
+      const screenConnection = screenSharingConnections.get(peerId);
+      
+      // Process the answer
+      if (signal.sdp && signal.sdp.type && signal.sdp.sdp) {
+        try {
+          const rtcSessionDescription = new RTCSessionDescription({
+            type: signal.sdp.type,
+            sdp: signal.sdp.sdp
+          });
+          
+          await screenConnection.setRemoteDescription(rtcSessionDescription);
+          console.log(`Set remote description for screen share answer`);
+        } catch (error) {
+          console.error(`Error processing screen share answer:`, error);
+        }
+      } else {
+        console.error(`Invalid SDP in screen share answer`);
+      }
+    }
   } catch (error) {
-    console.error(`Error handling screen share signal from ${peerId}:`, error);
+    console.error(`Unhandled error in screen share signal processing:`, error);
   }
 }
 
@@ -4544,31 +4594,51 @@ async function startScreenShare(sourceId) {
   try {
     console.log(`Starting screen share with source ID: ${sourceId}`);
     
-    // If already sharing, stop first
+    // Stop any existing screen share first
     if (isScreenSharing) {
-      stopScreenShare();
+      await stopScreenShare();
+      // Small delay to ensure cleanup is complete
+      await new Promise(resolve => setTimeout(resolve, 300));
     }
     
-    // Use the modern getDisplayMedia API with the desktopCapturer source ID
-    const screenStream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: sourceId,
-          minWidth: 1280,
-          maxWidth: 1920,
-          minHeight: 720,
-          maxHeight: 1080
+    // Use the modern getDisplayMedia API when available, or fall back to desktopCapturer for Electron
+    let screenStream;
+    try {
+      // For Electron specific implementation
+      screenStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            minWidth: 1280,
+            maxWidth: 1920,
+            minHeight: 720,
+            maxHeight: 1080
+          }
         }
+      });
+    } catch (err) {
+      console.error('Error capturing screen with Electron method:', err);
+      // Try standard approach as fallback
+      try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 }
+          }
+        });
+      } catch (fallbackErr) {
+        throw new Error(`Screen capture failed: ${fallbackErr.message}`);
       }
-    });
+    }
     
     if (!screenStream) {
       throw new Error('Failed to get screen share stream');
     }
     
-    // Save the stream for later use
+    // Save the stream for later reference
     screenShareStream = screenStream;
     isScreenSharing = true;
     
@@ -4588,31 +4658,30 @@ async function startScreenShare(sourceId) {
     // Add the screen to our own video grid
     addScreenShareToGrid(ownPeerId, screenStream, 'Screen Share', false);
     
-    // Add event listener to stop sharing when the track ends (e.g., user clicks "Stop sharing" in Chrome)
+    // Listen for the end of the screen share (user stops sharing)
     const videoTrack = screenStream.getVideoTracks()[0];
     if (videoTrack) {
-      videoTrack.addEventListener('ended', () => {
+      videoTrack.onended = () => {
         console.log('Screen sharing video track ended');
         stopScreenShare();
-      });
+      };
     }
     
-    // For each connected peer, create a dedicated RTCPeerConnection for screen sharing
+    // For each connected peer, create a dedicated screen sharing connection
+    console.log(`Setting up screen sharing for ${peers.size} connected peers`);
+    
     for (const peerId of peers) {
       try {
-        console.log(`Setting up screen share for peer ${peerId}`);
-        
-        // Make sure we don't have an existing screen connection
+        // Clean up any existing screen sharing connection
         if (screenSharingConnections && screenSharingConnections.has(peerId)) {
           const oldConn = screenSharingConnections.get(peerId);
           oldConn.onicecandidate = null;
           oldConn.ontrack = null;
-          oldConn.oniceconnectionstatechange = null;
           oldConn.close();
           screenSharingConnections.delete(peerId);
         }
         
-        // Create a completely separate peer connection just for screen sharing
+        // Create a dedicated RTCPeerConnection for screen sharing
         const screenConnection = new RTCPeerConnection({
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -4621,23 +4690,28 @@ async function startScreenShare(sourceId) {
           iceCandidatePoolSize: 10
         });
         
-        // Initialize connections map if needed
+        // Initialize connection map if needed
         if (!screenSharingConnections) {
           screenSharingConnections = new Map();
         }
         
-        // Store the new connection
+        // Save the connection
         screenSharingConnections.set(peerId, screenConnection);
         
         // Add the video track to the connection
-        screenStream.getTracks().forEach(track => {
-          screenConnection.addTrack(track, screenStream);
-        });
+        if (videoTrack) {
+          console.log(`Adding screen share track to connection for ${peerId}`);
+          screenConnection.addTrack(videoTrack, screenStream);
+        } else {
+          throw new Error('No video track available in screen share stream');
+        }
         
         // Handle ICE candidates
         screenConnection.onicecandidate = (event) => {
           if (event.candidate) {
-            const signal = {
+            console.log(`Generated ICE candidate for screen share to ${peerId}`);
+            
+            const iceSignal = {
               type: 'ice-candidate',
               isScreenShare: true,
               candidate: {
@@ -4648,48 +4722,36 @@ async function startScreenShare(sourceId) {
               }
             };
             
-            window.electronAPI.sendSignal(peerId, signal).catch(err => {
-              console.error(`Error sending screen share ICE candidate to ${peerId}:`, err);
+            window.electronAPI.sendSignal(peerId, iceSignal).catch(err => {
+              console.error(`Error sending screen share ICE candidate:`, err);
             });
           }
         };
         
-        // Handle connection state changes
+        // Monitor connection state
         screenConnection.oniceconnectionstatechange = () => {
-          console.log(`Screen share ICE connection state for ${peerId}: ${screenConnection.iceConnectionState}`);
+          console.log(`Screen share connection state for ${peerId}: ${screenConnection.iceConnectionState}`);
           
-          if (screenConnection.iceConnectionState === 'disconnected' || 
-              screenConnection.iceConnectionState === 'failed' || 
-              screenConnection.iceConnectionState === 'closed') {
-            console.log(`Screen share connection to ${peerId} ${screenConnection.iceConnectionState}`);
+          if (screenConnection.iceConnectionState === 'failed' || 
+              screenConnection.iceConnectionState === 'closed' ||
+              screenConnection.iceConnectionState === 'disconnected') {
+            console.log(`Screen share connection to ${peerId} failed or closed`);
           }
         };
         
-        // Create an offer
+        // Create and send the offer
+        console.log(`Creating screen share offer for ${peerId}`);
         const offer = await screenConnection.createOffer();
-        
-        // Modify the SDP to mark it as screen share
-        // This can help with detection on the receiving end
-        let sdp = offer.sdp;
-        
-        // Set the local description with our modified offer
         await screenConnection.setLocalDescription(offer);
         
-        // Wait for the ICE gathering to complete
-        if (screenConnection.iceGatheringState !== 'complete') {
-          await new Promise(resolve => {
-            const checkState = () => {
-              if (screenConnection.iceGatheringState === 'complete') {
-                resolve();
-              } else {
-                setTimeout(checkState, 100);
-              }
-            };
-            setTimeout(checkState, 100);
-          });
+        // Wait for the local description to be set
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (!screenConnection.localDescription) {
+          throw new Error('Failed to set local description for screen share');
         }
         
-        // Send the offer to the peer
+        // Send the offer with a screen share flag
         const signal = {
           type: 'offer',
           isScreenShare: true,
@@ -4702,7 +4764,7 @@ async function startScreenShare(sourceId) {
         console.log(`Sending screen share offer to ${peerId}`);
         await window.electronAPI.sendSignal(peerId, signal);
         
-        // Also notify via data channel that we're sharing screen
+        // Also notify via data channel (as a backup mechanism)
         const dataChannel = dataChannels.get(peerId);
         if (dataChannel && dataChannel.readyState === 'open') {
           const message = JSON.stringify({
@@ -4713,7 +4775,7 @@ async function startScreenShare(sourceId) {
           dataChannel.send(message);
         }
       } catch (error) {
-        console.error(`Error setting up screen share connection for peer ${peerId}:`, error);
+        console.error(`Error setting up screen share for peer ${peerId}:`, error);
       }
     }
     
@@ -4741,58 +4803,41 @@ function stopScreenShare() {
       track.stop();
     });
     
-    // Clear the stream
-    screenShareStream = null;
-    isScreenSharing = false;
+    // Close all screen sharing peer connections
+    if (screenSharingConnections) {
+      for (const [peerId, connection] of screenSharingConnections.entries()) {
+        console.log(`Closing screen share connection to peer ${peerId}`);
+        connection.close();
+      }
+      screenSharingConnections.clear();
+    }
+    
+    // Remove the screen share from our video grid
+    removeScreenShareFromGrid(ownPeerId);
     
     // Update UI
     shareScreenButton.textContent = 'Share Screen';
     shareScreenButton.classList.remove('active');
     
-    // Notify all peers that we stopped sharing
-    for (const peerId of peers) {
-      try {
-        // Send message via data channel
-        const dataChannel = dataChannels.get(peerId);
-        if (dataChannel && dataChannel.readyState === 'open') {
-          console.log(`Notifying peer ${peerId} that screen sharing stopped`);
-          const message = JSON.stringify({
-            type: 'screen-share-stopped',
-            username: usernameInput.value
-          });
-          dataChannel.send(message);
-        }
-        
-        // Close dedicated screen sharing connection if it exists
-        if (screenSharingConnections && screenSharingConnections.has(peerId)) {
-          const connection = screenSharingConnections.get(peerId);
-          // Remove all event listeners
-          connection.onicecandidate = null;
-          connection.oniceconnectionstatechange = null;
-          connection.ontrack = null;
-          // Close the connection
-          connection.close();
-          screenSharingConnections.delete(peerId);
-        }
-      } catch (error) {
-        console.error(`Error notifying peer ${peerId} about screen share stop:`, error);
+    // Mark as not sharing
+    isScreenSharing = false;
+    screenShareStream = null;
+    
+    // Notify peers that we stopped sharing
+    for (const [peerId, dataChannel] of dataChannels.entries()) {
+      if (dataChannel.readyState === 'open') {
+        const message = JSON.stringify({
+          type: 'screen-share-stopped',
+          username: usernameInput.value
+        });
+        dataChannel.send(message);
       }
     }
     
-    // Clear the connections map
-    if (screenSharingConnections) {
-      screenSharingConnections.clear();
-    }
+    // Remove from the set of sharing peers
+    screenSharingPeers.delete(ownPeerId);
     
-    // Remove our screen share from the grid
-    removeScreenShareFromGrid(ownPeerId);
-    
-    // Remove from the set of screen sharing peers
-    if (screenSharingPeers) {
-      screenSharingPeers.delete(ownPeerId);
-    }
-    
-    // Clear active screen sharer if it was us
+    // Remove active screen sharer if it was us
     if (activeScreenSharePeerId === ownPeerId) {
       activeScreenSharePeerId = null;
     }
@@ -4808,11 +4853,6 @@ function stopScreenShare() {
 
 // Add screen share to the video grid
 function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare = false) {
-  console.log(`Creating screen share container for peer ${peerId}`);
-  
-  // First, remove any existing screen share from this peer to avoid duplicates
-  removeScreenShareFromGrid(peerId);
-  
   // Create screen share container
   const screenContainer = document.createElement('div');
   screenContainer.className = 'video-item screen-share-container';
@@ -4823,11 +4863,6 @@ function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare = false)
   screenContainer.style.borderRadius = '8px';
   screenContainer.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
   screenContainer.style.overflow = 'hidden';
-  screenContainer.style.position = 'relative';
-  
-  // Make screen shares larger than regular videos
-  screenContainer.style.gridColumn = 'span 2';
-  screenContainer.style.gridRow = 'span 2';
   
   // If this is a remote share, add additional visual distinction
   if (isRemoteShare) {
@@ -4840,10 +4875,6 @@ function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare = false)
   screenVideo.autoplay = true;
   screenVideo.playsInline = true;
   screenVideo.srcObject = stream;
-  screenVideo.style.width = '100%';
-  screenVideo.style.height = '100%';
-  screenVideo.style.objectFit = 'contain';
-  screenVideo.style.backgroundColor = '#000';
   
   // Also store a reference to the most recent screen video (for recording purposes)
   screenVideoElement = screenVideo;
