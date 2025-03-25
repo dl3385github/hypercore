@@ -366,7 +366,7 @@ function setupIpcHandlers() {
       
       // Close previous connections if any
       if (activeSwarm) {
-        leaveCurrentRoom();
+        leaveRoom();
       }
       
       // Join the new room

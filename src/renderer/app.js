@@ -4619,40 +4619,60 @@ handleDataChannelMessage = function(peerId, message) {
 // Update the addTrack handler to detect incoming screen share tracks
 const originalOnTrack = window.onTrack;
 window.onTrack = function(event, peerId) {
-  // Check if this is a screen sharing track - do this first before passing to original handler
-  if (event.streams && event.streams[0]) {
+  console.log(`onTrack event for peer ${peerId}:`, event);
+  
+  // We need to handle each track individually to separate screen shares from camera video
+  if (event.track && event.streams && event.streams.length > 0) {
+    const track = event.track;
     const stream = event.streams[0];
     
-    // Look for video tracks with specific settings that indicate screen sharing
-    const videoTracks = stream.getVideoTracks();
-    for (const track of videoTracks) {
-      const settings = track.getSettings();
+    // Check if this is a likely screen sharing track
+    const settings = track.getSettings();
+    const isVideoTrack = track.kind === 'video';
+    
+    // Screen share tracks typically have different properties
+    const isScreenShare = isVideoTrack && (
+      // Screen shares have high resolution
+      (settings && settings.width > 1000 && settings.height > 700) ||
+      // Or contain "screen" in track label
+      track.label && track.label.toLowerCase().includes('screen') ||
+      // Or in stream ID
+      stream.id && stream.id.toLowerCase().includes('screen') ||
+      // Or in transceiver mid (set by our code)
+      (event.transceiver && event.transceiver.mid && event.transceiver.mid.includes('screen'))
+    );
+    
+    if (isVideoTrack && isScreenShare) {
+      console.log(`Detected screen share track from peer ${peerId}:`, settings);
       
-      // Screen share tracks typically have different aspect ratios and higher resolutions
-      if (settings && 
-          ((settings.width > 1000 && settings.height > 700) || 
-           track.label.includes('screen') || 
-           stream.id.includes('screen'))) {
-        
-        console.log(`Detected likely screen share track from peer ${peerId}:`, settings);
-        
-        // Add to UI as a screen share - completely separate from the person's video
-        addScreenShareToGrid(peerId, stream, 'Shared Screen');
-        
-        // DO NOT set this as the main activeScreenSharePeerId as that's used for other purposes
-        // Instead, just track that this peer is sharing their screen
-        if (!screenSharingPeers) {
-          screenSharingPeers = new Set();
-        }
-        screenSharingPeers.add(peerId);
-        
-        // Don't let the original handler process this as a regular video
-        return;
+      // Create a separate dedicated stream just for this screen track
+      const screenOnlyStream = new MediaStream();
+      screenOnlyStream.addTrack(track);
+      
+      // Get the peer's username
+      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+      
+      // Add to UI as a separate screen share
+      addScreenShareToGrid(peerId, screenOnlyStream, 'Shared Screen', true);
+      
+      // Add to the set of screen sharing peers
+      if (!screenSharingPeers) {
+        screenSharingPeers = new Set();
       }
+      screenSharingPeers.add(peerId);
+      
+      // Also set as active screen share for recording
+      activeScreenSharePeerId = peerId;
+      
+      // Notify all users about this screen share
+      addSystemMessage(`${peerName} is sharing their screen`);
+      
+      // We still want to process the original stream with any other tracks
+      // so do NOT return early
     }
   }
   
-  // If not a screen share, pass to the original handler for normal processing
+  // Always process the original stream as normal (for camera/audio)
   if (originalOnTrack) {
     originalOnTrack(event, peerId);
   }
@@ -4987,52 +5007,59 @@ function handleTrackEvent(event, peerId) {
   
   console.log(`Received remote stream from ${peerId} with ${remoteStream.getTracks().length} tracks`);
   
-  // Check if this is a screen sharing track
-  const videoTracks = remoteStream.getVideoTracks();
+  // Process each track individually
+  const tracks = remoteStream.getTracks();
+  let hasProcessedScreenShare = false;
   
-  // Look for typical indicators of screen sharing
-  if (videoTracks.length > 0) {
-    const track = videoTracks[0];
-    const settings = track.getSettings();
-    
-    // Screen share tracks typically have different properties
-    const isScreenShare = (
-      // Screen shares have high resolution
-      (settings && settings.width > 1000 && settings.height > 700) ||
-      // Or contain "screen" in track label
-      track.label.toLowerCase().includes('screen') ||
-      // Or in stream ID
-      remoteStream.id.toLowerCase().includes('screen') ||
-      // Or in transceiver mid (set by our code)
-      (event.transceiver && event.transceiver.mid && event.transceiver.mid.includes('screen'))
-    );
-    
-    if (isScreenShare) {
-      console.log(`Detected screen share track from peer ${peerId}:`, settings);
+  for (const track of tracks) {
+    // Check if this is a screen sharing track (only for video tracks)
+    if (track.kind === 'video') {
+      const settings = track.getSettings();
       
-      // Create a dedicated stream for the screen share
-      const screenStream = new MediaStream();
-      screenStream.addTrack(track);
+      // Screen share tracks typically have different properties
+      const isScreenShare = (
+        // Screen shares have high resolution
+        (settings && settings.width > 1000 && settings.height > 700) ||
+        // Or contain "screen" in track label
+        track.label.toLowerCase().includes('screen') ||
+        // Or in stream ID
+        remoteStream.id.toLowerCase().includes('screen') ||
+        // Or in transceiver mid (set by our code)
+        (event.transceiver && event.transceiver.mid && event.transceiver.mid.includes('screen'))
+      );
       
-      // Get the peer's username
-      const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-      
-      // Add to UI as a separate screen share
-      addScreenShareToGrid(peerId, screenStream, 'Shared Screen', true);
-      
-      // Track that this peer is sharing their screen
-      if (!screenSharingPeers) {
-        screenSharingPeers = new Set();
+      if (isScreenShare) {
+        console.log(`Detected screen share track from peer ${peerId}:`, settings);
+        
+        // Create a dedicated stream for the screen share
+        const screenStream = new MediaStream();
+        screenStream.addTrack(track);
+        
+        // Get the peer's username
+        const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+        
+        // Add to UI as a separate screen share
+        addScreenShareToGrid(peerId, screenStream, 'Shared Screen', true);
+        
+        // Track that this peer is sharing their screen
+        if (!screenSharingPeers) {
+          screenSharingPeers = new Set();
+        }
+        screenSharingPeers.add(peerId);
+        
+        // Notify all users about this screen share
+        addSystemMessage(`${peerName} is sharing their screen`);
+        
+        // Mark that we've processed a screen share
+        hasProcessedScreenShare = true;
+        
+        // Continue to process remaining tracks - don't return early
+        continue;
       }
-      screenSharingPeers.add(peerId);
-      
-      // Notify all users about this screen share
-      addSystemMessage(`${peerName} is sharing their screen`);
-      
-      return; // Don't process this track as a normal video
     }
   }
   
-  // If not a screen share, process as normal video
+  // Always add the full stream for camera/audio regardless of whether we found a screen share
+  // This ensures the camera video is always shown alongside any screen shares
   addRemoteStream(peerId, remoteStream);
 }
