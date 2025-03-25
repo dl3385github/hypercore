@@ -1,0 +1,732 @@
+      activeScreenSharePeerId = peerId;
+      
+      // Notify all users about this screen share
+      addSystemMessage(`${peerName} is sharing their screen`);
+      
+      // We still want to process the original stream with any other tracks
+      // so do NOT return early
+    }
+  }
+  
+  // Always process the original stream as normal (for camera/audio)
+  if (originalOnTrack) {
+    originalOnTrack(event, peerId);
+  }
+};
+
+// Add screen sharing to renderFrame in video recording
+// Use safer access to prevent reference errors
+if (typeof window.renderFrame === 'function') {
+  const originalRenderFrame = window.renderFrame;
+  window.renderFrame = function() {
+    // If not recording, exit early
+    if (!isVideoRecording) return;
+    
+    // Call the original render function
+    originalRenderFrame();
+    
+    try {
+      // Add screen share to the recording if it exists
+      if (activeScreenSharePeerId && screenVideoElement && screenVideoElement.srcObject) {
+        // Get the canvas that was created during recording
+        const canvases = document.querySelectorAll('canvas');
+        const canvas = canvases.length > 0 ? canvases[0] : null;
+        
+        if (!canvas) return;
+        
+        const ctx = canvas.getContext('2d');
+        
+        // Calculate video area dimensions 
+        const videoAreaWidth = Math.floor(canvas.width * 0.7);
+        
+        // Draw screen share in a larger view at the bottom
+        if (screenVideoElement.videoWidth > 0) {
+          // Calculate position and size to fit in the available space
+          const availableWidth = Math.floor(videoAreaWidth * 0.9);
+          const availableHeight = Math.floor(canvas.height * 0.4);
+          
+          // Calculate dimensions that preserve aspect ratio
+          const aspectRatio = screenVideoElement.videoWidth / screenVideoElement.videoHeight;
+          let width = availableWidth;
+          let height = width / aspectRatio;
+          
+          // If height exceeds available height, adjust width accordingly
+          if (height > availableHeight) {
+            height = availableHeight;
+            width = height * aspectRatio;
+          }
+          
+          // Center in available space at the bottom
+          const x = Math.floor(videoAreaWidth * 0.05) + Math.floor((availableWidth - width) / 2);
+          const y = canvas.height - height - 20;
+          
+          // Draw screen share
+          ctx.drawImage(screenVideoElement, x, y, width, height);
+          
+          // Add border
+          ctx.strokeStyle = '#4caf50';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x, y, width, height);
+          
+          // Add label
+          const username = activeScreenSharePeerId === ownPeerId 
+            ? 'Your Screen' 
+            : `${peerUsernames.get(activeScreenSharePeerId) || 'Peer'}'s Screen`;
+          
+          // Add background for better visibility
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.font = 'bold 16px Arial'; 
+          const textWidth = ctx.measureText(username).width + 20;
+          ctx.fillRect(x, y - 30, textWidth, 30);
+          
+          // Add text
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(username, x + 10, y - 10);
+        }
+      }
+    } catch (error) {
+      console.error('Error adding screen share to recording:', error);
+    }
+  };
+} else {
+  console.warn('renderFrame not available, screen sharing will not appear in recordings');
+}
+
+// Define renderFrame globally to avoid reference errors
+window.renderFrame = function() {
+  console.log("Default renderFrame called - this will be replaced during recording");
+  // This is a placeholder that will be replaced when recording starts
+  // But having it defined prevents reference errors
+};
+
+// Save credentials to localStorage when "Remember Me" is checked
+function saveCredentials(identifier, password) {
+  try {
+    const credentials = {
+      identifier,
+      password
+    };
+    localStorage.setItem('savedCredentials', JSON.stringify(credentials));
+    console.log('Credentials saved to localStorage');
+  } catch (error) {
+    console.error('Error saving credentials to localStorage:', error);
+  }
+}
+
+// Load credentials from localStorage
+function loadCredentials() {
+  try {
+    const savedCredentials = localStorage.getItem('savedCredentials');
+    if (savedCredentials) {
+      return JSON.parse(savedCredentials);
+    }
+    return null;
+  } catch (error) {
+    console.error('Error loading credentials from localStorage:', error);
+    return null;
+  }
+}
+
+// Clear saved credentials from localStorage
+function clearCredentials() {
+  try {
+    localStorage.removeItem('savedCredentials');
+    console.log('Credentials cleared from localStorage');
+  } catch (error) {
+    console.error('Error clearing credentials from localStorage:', error);
+  }
+}
+
+// Check authentication state
+async function checkAuthState() {
+  try {
+    const result = await window.electronAPI.getCurrentUser();
+    if (result.success && result.user) {
+      currentUser = result.user;
+      updateAuthState(result.user);
+      
+      // Hide auth screen and show main app
+      document.getElementById('auth-screen').classList.add('hidden');
+      document.getElementById('main-app').classList.remove('hidden');
+      
+      // Set username for video chat - strip domain part (.pds.hapa.ai)
+      const handle = result.user.handle;
+      const simplifiedHandle = handle.includes('.') ? handle.split('.')[0] : handle;
+      usernameInput.value = simplifiedHandle;
+      
+      // Load saved settings
+      loadSettings();
+      
+      // Enumerate devices
+      enumerateDevices();
+    } else {
+      // No valid session, check for saved credentials
+      const savedCredentials = loadCredentials();
+      if (savedCredentials) {
+        console.log('Found saved credentials, attempting auto-login...');
+        // Pre-fill the login form
+        signinIdInput.value = savedCredentials.identifier;
+        signinPasswordInput.value = savedCredentials.password;
+        
+        // Attempt to sign in
+        try {
+          // Format identifier if needed (ensure it has a domain)
+          let formattedIdentifier = savedCredentials.identifier;
+          if (!formattedIdentifier.includes('@') && !formattedIdentifier.includes('.')) {
+            formattedIdentifier = `${formattedIdentifier}.pds.hapa.ai`;
+          }
+          
+          const response = await window.electronAPI.signIn(formattedIdentifier, savedCredentials.password);
+          
+          if (response.success) {
+            // Sign in successful
+            updateAuthState(response.user);
+            
+            // Hide auth screen and show main app
+            document.getElementById('auth-screen').classList.add('hidden');
+            document.getElementById('main-app').classList.remove('hidden');
+            
+            // Set username for video chat - strip domain part (.pds.hapa.ai)
+            const handle = response.user.handle;
+            const simplifiedHandle = handle.includes('.') ? handle.split('.')[0] : handle;
+            usernameInput.value = simplifiedHandle;
+            
+            // Load saved settings
+            loadSettings();
+            
+            // Enumerate devices
+            enumerateDevices();
+            
+            return; // Exit the function as we've successfully logged in
+          } else {
+            console.error('Auto-login failed:', response.error);
+            // Show auth screen (will happen below)
+          }
+        } catch (error) {
+          console.error('Error during auto-login:', error);
+          // Show auth screen (will happen below)
+        }
+      }
+      
+      // Show auth screen if auto-login failed or no saved credentials
+      document.getElementById('auth-screen').classList.remove('hidden');
+      document.getElementById('main-app').classList.add('hidden');
+    }
+  } catch (error) {
+    console.error('Error checking auth state:', error);
+    // On error, show auth screen
+    document.getElementById('auth-screen').classList.remove('hidden');
+    document.getElementById('main-app').classList.add('hidden');
+  }
+}
+
+// Leave the current room, closing all connections
+async function leaveRoom() {
+  try {
+    console.log('Leaving current room...');
+    
+    // Clean up all peer connections
+    for (const peerId of peers) {
+      cleanupPeerConnection(peerId);
+    }
+    
+    // Stop any screen sharing if active
+    if (isScreenSharing) {
+      stopScreenSharing();
+    }
+    
+    // Stop video recording if active
+    if (isVideoRecording) {
+      stopVideoRecording();
+    }
+    
+    // Stop local audio recording if active
+    if (isRecording) {
+      stopMediaRecording();
+    }
+    
+    // Clear remote videos display
+    document.getElementById('remote-videos').innerHTML = '';
+    
+    // Clear messages display
+    document.getElementById('messages').innerHTML = '';
+    
+    // Clear all collections
+    peers.clear();
+    peerConnections.clear();
+    dataChannels.clear();
+    peerUsernames.clear();
+    pendingIceCandidates.clear();
+    remoteRecorders.clear();
+    screenSharingPeers.clear();
+    transcripts.clear();
+    
+    // Close any open popups or modals
+    document.getElementById('transcript-popup').classList.add('hidden');
+    document.getElementById('settings-popup').classList.add('hidden');
+    document.getElementById('screen-share-dialog').classList.add('hidden');
+    document.getElementById('fullscreen-dialog').classList.add('hidden');
+    
+    // Reset room tracking
+    currentRoom = null;
+    currentRoomSpan.textContent = '';
+    
+    // Update connection count
+    updateConnectionCount();
+    
+    // Add system message
+    addSystemMessage('Left the room');
+    
+    // Notify server that we're leaving the room
+    try {
+      await window.electronAPI.joinRoom(''); // Join empty room to leave current
+    } catch (err) {
+      console.warn('Error notifying server about leaving room:', err);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error leaving room:', error);
+    return false;
+  }
+}
+
+// Handle leave room button click
+async function handleLeaveRoom() {
+  try {
+    console.log('Leaving current room...');
+    
+    // Call the leaveRoom function (this handles all cleanup)
+    leaveRoom();
+    
+    // Show the login screen
+    loginScreen.classList.remove('hidden');
+    chatScreen.classList.add('hidden');
+    
+    // Add a success message on the login screen
+    const successMessage = document.createElement('div');
+    successMessage.className = 'system-notification';
+    successMessage.innerHTML = `
+      <p>You have left the room successfully. You can join another room below.</p>
+    `;
+    
+    // Insert at top of login screen
+    loginScreen.insertBefore(successMessage, loginScreen.firstChild);
+    
+    // Remove the message after 10 seconds
+    setTimeout(() => {
+      successMessage.remove();
+    }, 10000);
+    
+    // Clear the input fields
+    messageInput.value = '';
+  } catch (error) {
+    console.error('Error leaving room:', error);
+    alert(`Error leaving room: ${error.message}`);
+  }
+}
+
+// Handle track events separately to detect screen sharing
+function handleTrackEvent(event, peerId) {
+  // Extract stream and track from the event
+  const [remoteStream] = event.streams;
+  const track = event.track;
+  
+  if (!remoteStream || !track) {
+    console.warn(`No stream or track in event from peer ${peerId}`);
+    return;
+  }
+  
+  console.log(`Received ${track.kind} track from peer ${peerId}:`, track.label);
+  
+  // If this is a video track, check if it's a screen share
+  if (track.kind === 'video') {
+    const settings = track.getSettings();
+    
+    // Log track settings to help with debugging
+    console.log(`Track settings for ${peerId}:`, settings);
+    
+    // Check for screen share indicators - improved detection logic
+    const isScreenShare = 
+      // Check the track label (most reliable)
+      (track.label && track.label.toLowerCase().includes('screen')) ||
+      // Check stream ID
+      (remoteStream.id && remoteStream.id.toLowerCase().includes('screen')) ||
+      // Check custom mid we set during sending
+      (event.transceiver && event.transceiver.mid && 
+       event.transceiver.mid.toString().includes('screen')) ||
+      // Check high resolution (typical for screen shares)
+      (settings && settings.width > 1280 && settings.height > 720 && 
+       // Also check for extreme aspect ratios that indicate screen sharing
+       (settings.width / settings.height > 1.7 || settings.height / settings.width > 1.7));
+    
+    if (isScreenShare) {
+      console.log(`Detected screen share track from peer ${peerId} (from regular connection)`);
+      
+      // Check if we already have a screen share connection for this peer
+      const hasScreenShareConnection = 
+        screenSharingConnections && 
+        screenSharingConnections.has(peerId) && 
+        screenSharingConnections.get(peerId).connectionState === 'connected';
+      
+      // Only create UI elements if we don't have a dedicated screen share connection
+      // This avoids duplicate displays
+      if (!hasScreenShareConnection) {
+        console.log(`No dedicated screen connection for ${peerId}, creating screen share UI`);
+        
+        // Create a new separate stream just for this screen share track
+        const screenStream = new MediaStream();
+        screenStream.addTrack(track);
+        
+        // Get peer's name
+        const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+        
+        // Add to the set of screen sharing peers
+        if (!screenSharingPeers) {
+          screenSharingPeers = new Set();
+        }
+        screenSharingPeers.add(peerId);
+        
+        // Mark this peer as the active screen sharer if none exists
+        if (!activeScreenSharePeerId) {
+          activeScreenSharePeerId = peerId;
+        }
+        
+        // Remove any existing screen shares from this peer to avoid duplicates
+        removeScreenShareFromGrid(peerId);
+        
+        // Add to UI as separate video element
+        addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
+        
+        // Notify user
+        addSystemMessage(`${peerName} is sharing their screen`);
+      } else {
+        console.log(`Already have dedicated screen connection for ${peerId}, skipping UI creation from regular track`);
+      }
+    }
+  }
+  
+  // Always add the stream to the UI to show camera regardless of screen sharing
+  // This ensures camera feed is always visible even when screen sharing
+  
+  // Check if we already have a video container for this peer
+  const existingContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+  
+  if (!existingContainer) {
+    // No existing container, add the entire stream (will handle camera and audio)
+    addRemoteStream(peerId, remoteStream);
+  } else {
+    // Already have a container, might need to update the stream
+    const videoElement = existingContainer.querySelector('video');
+    if (videoElement) {
+      // Check if we need to update the stream
+      if (videoElement.srcObject !== remoteStream) {
+        console.log(`Updating existing video element for peer ${peerId}`);
+        videoElement.srcObject = remoteStream;
+      }
+    }
+  }
+}
+
+// Function to render a frame of the video recording
+function renderFrame() {
+  // If not recording, exit early
+  if (!isVideoRecording) return;
+  
+  const videoCanvas = document.createElement('canvas');
+  videoCanvas.width = 1280;
+  videoCanvas.height = 720;
+  const ctx = videoCanvas.getContext('2d');
+  
+  // Fill background
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(0, 0, videoCanvas.width, videoCanvas.height);
+  
+  // Calculate sizes for grid layout
+  // Main video area takes 70% of width, chat takes 30%
+  const videoAreaWidth = Math.floor(videoCanvas.width * 0.7);
+  const chatAreaX = videoAreaWidth;
+  const chatAreaWidth = videoCanvas.width - videoAreaWidth;
+  
+  // Draw separation line
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(videoAreaWidth, 0);
+  ctx.lineTo(videoAreaWidth, videoCanvas.height);
+  ctx.stroke();
+  
+  // Draw timestamp
+  const timestamp = new Date().toLocaleTimeString();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '16px Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText(timestamp, 10, 30);
+  
+  // Draw room ID
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '16px Arial';
+  ctx.textAlign = 'right';
+  ctx.fillText(`Room: ${currentRoomSpan.textContent}`, videoAreaWidth - 10, 30);
+  
+  // Draw local video
+  if (localVideo.srcObject && localVideo.srcObject.getVideoTracks().length > 0 && localVideo.videoWidth > 0) {
+    ctx.save();
+    
+    // Position in bottom right of video area
+    const aspectRatio = localVideo.videoWidth / localVideo.videoHeight;
+    const width = Math.min(320, videoAreaWidth * 0.3);
+    const height = width / aspectRatio;
+    const x = videoAreaWidth - width - 20;
+    const y = videoCanvas.height - height - 20;
+    
+    // Draw a border
+    ctx.strokeStyle = '#3f51b5';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, width, height);
+    
+    // Draw the video
+    ctx.drawImage(localVideo, x, y, width, height);
+    
+    // Add username overlay
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(x, y + height - 30, width, 30);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText('You', x + 10, y + height - 10);
+    
+    ctx.restore();
+  }
+  
+  // Draw remote videos in a grid
+  const remoteVideos = document.querySelectorAll('#remote-videos video:not([id^="screen-"]):not(.fullscreen-video)');
+  if (remoteVideos.length > 0) {
+    ctx.save();
+    
+    // Calculate grid dimensions
+    const maxPerRow = Math.min(remoteVideos.length, 2);
+    const rows = Math.ceil(remoteVideos.length / maxPerRow);
+    const vidWidth = Math.floor((videoAreaWidth - 40) / maxPerRow);
+    const vidHeight = Math.floor((videoCanvas.height - 60) / rows);
+    
+    remoteVideos.forEach((video, index) => {
+      if (video.srcObject && video.srcObject.getVideoTracks().length > 0 && video.videoWidth > 0) {
+        const row = Math.floor(index / maxPerRow);
+        const col = index % maxPerRow;
+        
+        const x = 20 + col * vidWidth;
+        const y = 60 + row * vidHeight;
+        
+        // Get peer username from container
+        const container = video.closest('.remote-video-container');
+        let username = 'Peer';
+        if (container && container.dataset.peerUsername) {
+          username = container.dataset.peerUsername;
+        }
+        
+        // Draw border
+        ctx.strokeStyle = '#4caf50';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, vidWidth - 10, vidHeight - 10);
+        
+        // Draw video
+        ctx.drawImage(video, x, y, vidWidth - 10, vidHeight - 10);
+        
+        // Add username overlay
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(x, y + vidHeight - 40, vidWidth - 10, 30);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '14px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(username, x + 10, y + vidHeight - 20);
+      }
+    });
+    
+    ctx.restore();
+  }
+  
+  // Draw chat messages
+  ctx.save();
+  
+  // Chat area header
+  ctx.fillStyle = '#333333';
+  ctx.fillRect(chatAreaX, 0, chatAreaWidth, 40);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 18px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('Chat', chatAreaX + chatAreaWidth / 2, 25);
+  
+  // Draw chat messages
+  const messageY = 60;
+  const messageHeight = 20;
+  const maxMessages = Math.floor((videoCanvas.height - messageY) / messageHeight);
+  
+  let displayMessages = [];
+  
+  // If recording in progress, use the recorded messages
+  if (recordedChatMessages.length > 0) {
+    displayMessages = [...recordedChatMessages];
+  }
+  
+  // Only show the last 'maxMessages' messages
+  if (displayMessages.length > maxMessages) {
+    displayMessages = displayMessages.slice(displayMessages.length - maxMessages);
+  }
+  
+  displayMessages.forEach((msg, index) => {
+    const y = messageY + index * messageHeight;
+    
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'left';
+    
+    // Calculate width of username for proper spacing
+    ctx.font = 'bold 14px Arial';
+    const usernameWidth = ctx.measureText(msg.username + ':').width + 10; // Add some spacing
+
+    // Draw username in bold
+    ctx.fillStyle = msg.isSystem ? '#ffeb3b' : '#4fc3f7';
+    ctx.fillText(msg.username + ':', chatAreaX + 10, y);
+    
+    // Draw message content after username with proper spacing
+    ctx.font = '14px Arial';
+    ctx.fillStyle = '#ffffff';
+    
+    // Calculate max width for the text (with some margin)
+    const maxWidth = chatAreaWidth - 20 - usernameWidth;
+    const textX = chatAreaX + 10 + usernameWidth;
+    
+    // Simple word wrap for message content
+    const words = msg.content.split(' ');
+    let line = '';
+    let lineY = y;
+    
+    words.forEach(word => {
+      const testLine = line + (line ? ' ' : '') + word;
+      const testWidth = ctx.measureText(testLine).width;
+      
+      if (testWidth > maxWidth && line !== '') {
+        // Draw the current line
+        ctx.fillText(line, textX, lineY);
+        // Start a new line
+        line = word;
+        lineY += messageHeight;
+      } else {
+        line = testLine;
+      }
+    });
+    
+    // Draw the last line
+    if (line) {
+      ctx.fillText(line, textX, lineY);
+    }
+  });
+  
+  // Draw transcripts if they are recorded and not empty
+  if (recordedTranscripts.length > 0) {
+    // Draw transcripts header
+    const transcriptHeaderY = Math.min(videoCanvas.height - 120, messageY + displayMessages.length * messageHeight + 40);
+    ctx.fillStyle = '#333333';
+    ctx.fillRect(chatAreaX, transcriptHeaderY, chatAreaWidth, 30);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Transcripts', chatAreaX + chatAreaWidth / 2, transcriptHeaderY + 20);
+    
+    // Draw transcript content
+    let transcriptY = transcriptHeaderY + 40;
+    
+    // Only show a few recent transcripts to not overcrowd
+    const maxTranscripts = 3;
+    const recentTranscripts = recordedTranscripts.slice(-maxTranscripts);
+    
+    recentTranscripts.forEach(transcript => {
+      // Calculate username width for proper spacing
+      ctx.font = 'bold 14px Arial';
+      const usernameWidth = ctx.measureText(transcript.username + ':').width + 10;
+      
+      // Draw username
+      ctx.fillStyle = '#26a69a';
+      ctx.textAlign = 'left';
+      ctx.fillText(transcript.username + ':', chatAreaX + 10, transcriptY);
+      
+      // Draw transcript content
+      ctx.font = '14px Arial';
+      ctx.fillStyle = '#ffffff';
+      
+      // Draw transcript with simple word wrap
+      const maxWidth = chatAreaWidth - 20 - usernameWidth;
+      const textX = chatAreaX + 10 + usernameWidth;
+      
+      // Simple word wrap
+      const words = transcript.content.split(' ');
+      let line = '';
+      let lineY = transcriptY;
+      
+      words.forEach(word => {
+        const testLine = line + (line ? ' ' : '') + word;
+        const testWidth = ctx.measureText(testLine).width;
+        
+        if (testWidth > maxWidth && line) {
+          ctx.fillText(line, textX, lineY);
+          line = word;
+          lineY += 20;
+        } else {
+          line = testLine;
+        }
+      });
+      
+      if (line) {
+        ctx.fillText(line, textX, lineY);
+      }
+      
+      transcriptY = lineY + 30;
+    });
+  }
+  
+  ctx.restore();
+  
+  // Store canvas data for recording
+  videoCanvas._lastFrameTime = Date.now();
+  return videoCanvas;
+}
+
+// Add API key settings
+saveApiKeyBtn.addEventListener('click', saveOpenAIApiKey);
+
+// Add Save All Settings button event listener
+const saveAllSettingsBtn = document.getElementById('save-all-settings-btn');
+if (saveAllSettingsBtn) {
+  saveAllSettingsBtn.addEventListener('click', () => {
+    // Save audio threshold
+    updateAudioThreshold(appSettings.audioThreshold);
+    
+    // Save transcription threshold
+    updateTranscriptionThreshold(appSettings.transcriptionThreshold);
+    
+    // Save transcription model
+    if (transcriptionModelSelect) {
+      updateTranscriptionModel(appSettings.transcriptionModel);
+    }
+    
+    // Save API key
+    saveOpenAIApiKey();
+    
+    // Save all settings to localStorage
+    saveSettings();
+    
+    // Show success message
+    const statusMessage = document.createElement('span');
+    statusMessage.classList.add('setting-status', 'success');
+    statusMessage.textContent = 'All settings saved!';
+    saveAllSettingsBtn.parentNode.appendChild(statusMessage);
+    
+    // Remove message after 3 seconds
+    setTimeout(() => {
+      statusMessage.remove();
+    }, 3000);
+  });
+}
+
+// Initialize the app after authentication
+checkAuthState();
