@@ -2401,17 +2401,42 @@ function updateTranscription(speaker, text) {
   // Find the appropriate container for this speaker
   const isSelf = speaker === currentUsername;
   let transcriptContainer = null;
-  let overlayElement = null;
   
   if (isSelf) {
-    // Use the local transcript container for current user
+    // Use the local transcript container
     transcriptContainer = document.querySelector('#local-transcript .transcript-content');
-    overlayElement = document.getElementById('local-overlay-transcript');
+    
+    // Also update the overlay if available
+    const localOverlay = document.getElementById('local-overlay-transcript');
+    if (localOverlay) {
+      // Make overlay more noticeable by adding the text
+      localOverlay.textContent = text;
+      localOverlay.classList.remove('hidden');
+      
+      // Make sure it's actually visible in UI
+      localOverlay.style.display = 'block';
+      
+      // Make sure it has some basic styling if not already in CSS
+      localOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+      localOverlay.style.color = 'white';
+      localOverlay.style.padding = '8px';
+      localOverlay.style.borderRadius = '4px';
+      localOverlay.style.maxWidth = '90%';
+      localOverlay.style.margin = '0 auto';
+      
+      // Hide after a few seconds
+      setTimeout(() => {
+        localOverlay.classList.add('hidden');
+        localOverlay.style.display = 'none';
+      }, 5000);
+    } else {
+      console.warn('Local overlay element not found!');
+    }
   } else {
-    // Find the remote peer's container by username
+    // Find the remote peer's transcript container
     let foundPeerId = null;
-    for (const [peerId, username] of peerUsernames.entries()) {
-      if (username === speaker || username.includes(speaker)) {
+    for (const [peerId, peerUsername] of peerUsernames.entries()) {
+      if (peerUsername === speaker) {
         foundPeerId = peerId;
         break;
       }
@@ -2419,12 +2444,38 @@ function updateTranscription(speaker, text) {
     
     if (foundPeerId) {
       console.log(`Found peer ID ${foundPeerId} for speaker ${speaker}`);
-      const peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${foundPeerId}"]`);
-      
-      if (peerContainer) {
+      const peerElement = document.querySelector(`.remote-video-container[data-peer-id="${foundPeerId}"]`);
+      if (peerElement) {
         console.log(`Found container element for peer ${foundPeerId}`);
-        transcriptContainer = peerContainer.querySelector('.transcript-content');
-        overlayElement = document.getElementById(`transcript-overlay-${foundPeerId}`);
+        transcriptContainer = peerElement.querySelector('.transcript-content');
+        
+        // Also update the overlay if available
+        const overlay = document.getElementById(`transcript-overlay-${foundPeerId}`);
+        if (overlay) {
+          console.log(`Found overlay for peer ${foundPeerId}, updating it`);
+          // Make overlay more noticeable
+          overlay.textContent = text;
+          overlay.classList.remove('hidden');
+          
+          // Make sure it's actually visible in UI
+          overlay.style.display = 'block';
+          
+          // Make sure it has some basic styling if not already in CSS
+          overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+          overlay.style.color = 'white';
+          overlay.style.padding = '8px';
+          overlay.style.borderRadius = '4px';
+          overlay.style.maxWidth = '90%';
+          overlay.style.margin = '0 auto';
+          
+          // Hide after a few seconds
+          setTimeout(() => {
+            overlay.classList.add('hidden');
+            overlay.style.display = 'none';
+          }, 5000);
+        } else {
+          console.warn(`Could not find overlay element for peer ${foundPeerId}`);
+        }
       } else {
         console.warn(`Could not find container element for peer ${foundPeerId}`);
       }
@@ -2437,61 +2488,35 @@ function updateTranscription(speaker, text) {
   if (transcriptContainer) {
     console.log(`Updating transcript container for ${speaker}`);
     
-    // Clear existing content and show only the latest transcript
+    // CHANGE: Instead of appending, replace the content with just the latest entry
+    // Clear all existing entries
     transcriptContainer.innerHTML = '';
     
-    // Create a new entry
+    // Create a new entry for the latest transcript only
     const entry = document.createElement('div');
     entry.className = 'transcript-entry';
     entry.textContent = text;
     
-    // Add some basic styling
+    // Style the entry to make it more visible
     entry.style.padding = '4px 8px';
-    entry.style.margin = '4px 0';
-    entry.style.backgroundColor = isSelf ? '#e3f2fd' : '#f5f5f5';
+    entry.style.marginBottom = '4px';
+    entry.style.backgroundColor = '#f0f0f0';
     entry.style.borderRadius = '4px';
-    entry.style.border = `1px solid ${isSelf ? '#bbdefb' : '#e0e0e0'}`;
     
-    // Add to container
+    // Add just this single entry
     transcriptContainer.appendChild(entry);
+    
+    console.log(`Updated transcript container for ${speaker} with latest: "${text}"`);
   } else {
-    console.warn(`No transcript container found for ${speaker}`);
+    console.warn(`Could not find transcript container for ${speaker}`);
   }
   
-  // Update the overlay if found
-  if (overlayElement) {
-    console.log(`Updating overlay for ${speaker}`);
-    
-    // Make overlay visible
-    overlayElement.textContent = text;
-    overlayElement.classList.remove('hidden');
-    overlayElement.style.display = 'block';
-    
-    // Basic styling
-    overlayElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-    overlayElement.style.color = 'white';
-    overlayElement.style.padding = '8px';
-    overlayElement.style.borderRadius = '4px';
-    overlayElement.style.maxWidth = '90%';
-    overlayElement.style.margin = '0 auto';
-    
-    // Hide after a few seconds
-    setTimeout(() => {
-      overlayElement.classList.add('hidden');
-      overlayElement.style.display = 'none';
-    }, 5000);
-  }
+  // Add to transcript popup
+  addTranscriptToPopup(speaker, text, timestamp);
   
-  // Update the transcript popup if it's open
-  refreshTranscriptPopup();
-  
-  // If we're recording, also add to recorded transcripts
-  if (isVideoRecording) {
-    recordedTranscripts.push({
-      username: speaker,
-      text: text,
-      timestamp: timestamp
-    });
+  // Ensure the transcript popup is scrolled to the bottom if visible
+  if (!transcriptPopup.classList.contains('hidden')) {
+    transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
   }
 }
 
@@ -3519,251 +3544,175 @@ function startVideoRecording() {
       const chatAreaX = videoAreaWidth;
       const chatAreaWidth = canvas.width - videoAreaWidth;
       
-      // Calculate video grid layout parameters
-      const allPeers = new Set([...peers]);
-      allPeers.add(ownPeerId); // Add local user to the peer list
-      
-      const totalParticipants = allPeers.size;
-      const maxPerRow = totalParticipants <= 2 ? 1 : (totalParticipants <= 4 ? 2 : 3);
-      const rows = Math.ceil(totalParticipants / maxPerRow);
-      const videoWidth = Math.floor(videoAreaWidth / maxPerRow);
-      const videoHeight = Math.floor(canvas.height / rows);
-      
-      // Draw all participants, even those with video off
-      let index = 0;
-      
-      // First draw local user
-      const localRow = Math.floor(index / maxPerRow);
-      const localCol = index % maxPerRow;
-      const localX = localCol * videoWidth;
-      const localY = localRow * videoHeight;
-        
-      // Draw local video if available
+      // Draw local video - position at the top left of the video area
       if (localVideo.srcObject && localVideo.videoWidth > 0) {
-        // Calculate aspect ratio for proper scaling
+        // Calculate aspect ratio preserving dimensions
         const aspectRatio = localVideo.videoWidth / localVideo.videoHeight;
-        let width = videoWidth - 20; // 10px padding on each side
+        const maxWidth = Math.floor(videoAreaWidth * 0.45);
+        const maxHeight = Math.floor(canvas.height * 0.3);
+        
+        // Calculate dimensions that preserve aspect ratio
+        let width = maxWidth;
         let height = width / aspectRatio;
         
-        // If height is too tall, scale based on height
-        if (height > videoHeight - 50) { // 50px for name, transcript, etc.
-          height = videoHeight - 50;
+        // If height exceeds max height, adjust width accordingly
+        if (height > maxHeight) {
+          height = maxHeight;
           width = height * aspectRatio;
         }
         
         // Center in allocated space
-        const x = localX + Math.floor((videoWidth - width) / 2);
-        const y = localY + 10;
+        const x = 10 + Math.floor((maxWidth - width) / 2);
+        const y = 10 + Math.floor((maxHeight - height) / 2);
         
-        // Draw the video
-        ctx.drawImage(localVideo, x, y, width, height);
-      } else {
-        // Draw a placeholder for no video
-        const width = videoWidth - 20;
-        const height = videoHeight - 50;
-        const x = localX + 10;
-        const y = localY + 10;
+        const localVideoRect = { 
+          x: x, 
+          y: y, 
+          width: width, 
+          height: height 
+        };
         
-        // Draw placeholder background
-        ctx.fillStyle = '#2d2d2d';
-        ctx.fillRect(x, y, width, height);
+        ctx.drawImage(
+          localVideo, 
+          localVideoRect.x, 
+          localVideoRect.y, 
+          localVideoRect.width, 
+          localVideoRect.height
+        );
         
-        // Draw camera off icon
-        ctx.fillStyle = '#999999';
-        ctx.font = 'normal 32px Arial';
-        ctx.fillText('📷❌', x + width/2 - 20, y + height/2);
-      }
-      
-      // Draw name bar for local user
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(
-        localX + 10, 
-        localY + videoHeight - 40,
-        videoWidth - 20,
-        30
-      );
-      
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 16px Arial';
-      ctx.fillText(
-        currentUser ? currentUser.handle : 'You', 
-        localX + 20, 
-        localY + videoHeight - 20
-      );
-      
-      // Get the most recent transcript for local user
-      const localUsername = currentUser ? currentUser.handle : 'You';
-      const localRecentTranscript = getRecentTranscript(localUsername);
-      if (localRecentTranscript) {
-        // Draw local transcript below name
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        // Add border
+        ctx.strokeStyle = '#2196f3';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(
+          localVideoRect.x, 
+          localVideoRect.y, 
+          localVideoRect.width, 
+          localVideoRect.height
+        );
+        
+        // Add username with better visibility
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
         ctx.fillRect(
-          localX + 10, 
-          localY + videoHeight - 70,
-          videoWidth - 20,
+          localVideoRect.x, 
+          localVideoRect.y + localVideoRect.height - 30,
+          localVideoRect.width,
           30
         );
         
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'normal 14px Arial';
-        
-        // Truncate text if too long
-        let transcriptText = localRecentTranscript;
-        if (transcriptText.length > 50) {
-          transcriptText = transcriptText.substring(0, 47) + '...';
-        }
-        
+        ctx.font = 'bold 18px Arial';
         ctx.fillText(
-          transcriptText,
-          localX + 20, 
-          localY + videoHeight - 50
+          currentUser ? currentUser.handle : 'You', 
+          localVideoRect.x + 10, 
+          localVideoRect.y + localVideoRect.height - 10
         );
       }
       
-      index++;
+      // Draw screen share if active - place it prominently
+      if (activeScreenSharePeerId && screenVideoElement && screenVideoElement.srcObject && screenVideoElement.videoWidth > 0) {
+        // Calculate a good size for the screen share - make it larger and prominent
+        const sharedScreenMaxWidth = Math.floor(videoAreaWidth * 0.9);
+        const sharedScreenMaxHeight = Math.floor(canvas.height * 0.4);
+        
+        // Calculate dimensions preserving aspect ratio
+        const aspectRatio = screenVideoElement.videoWidth / screenVideoElement.videoHeight;
+        let width = sharedScreenMaxWidth;
+        let height = width / aspectRatio;
+        
+        // If height is too large, adjust
+        if (height > sharedScreenMaxHeight) {
+          height = sharedScreenMaxHeight;
+          width = height * aspectRatio;
+        }
+        
+        // Position at the bottom of the video area
+        const x = Math.floor((videoAreaWidth - width) / 2);
+        const y = canvas.height - height - 20;
+        
+        // Draw the screen
+        ctx.drawImage(screenVideoElement, x, y, width, height);
+        
+        // Add border
+        ctx.strokeStyle = '#4caf50';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, width, height);
+        
+        // Add label
+        const username = activeScreenSharePeerId === ownPeerId 
+          ? 'Your Screen' 
+          : `${peerUsernames.get(activeScreenSharePeerId) || 'Peer'}'s Screen`;
+        
+        // Add background for better visibility
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.font = 'bold 18px Arial';
+        const textWidth = ctx.measureText(username).width + 20;
+        ctx.fillRect(x, y - 30, textWidth, 30);
+        
+        // Add text
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(username, x + 10, y - 10);
+      }
       
-      // Draw remote participants
-      for (const peerId of peers) {
-        const row = Math.floor(index / maxPerRow);
-        const col = index % maxPerRow;
-        const x = col * videoWidth;
-        const y = row * videoHeight;
-        
-        const peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
-        const peerVideo = peerContainer ? peerContainer.querySelector('video') : null;
-        const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
-        
-        // Draw remote video if available and has video content
-        if (peerVideo && peerVideo.srcObject && peerVideo.videoWidth > 0) {
-          // Calculate aspect ratio for proper scaling
-          const aspectRatio = peerVideo.videoWidth / peerVideo.videoHeight;
-          let width = videoWidth - 20;
+      // Draw remote videos in a grid layout
+      const remoteVideos = document.querySelectorAll('.remote-video');
+      const maxRemotesPerRow = 2;
+      const maxRemoteWidth = Math.floor(videoAreaWidth * 0.45);
+      const maxRemoteHeight = Math.floor(canvas.height * 0.3);
+      
+      remoteVideos.forEach((video, index) => {
+        if (video.srcObject && video.videoWidth > 0) {
+          const row = Math.floor(index / maxRemotesPerRow);
+          const col = index % maxRemotesPerRow;
+          
+          // Alternate positioning for even distribution
+          let baseX = (col * maxRemoteWidth) + ((col + 1) * 10);
+          if (col === 1) baseX = videoAreaWidth - maxRemoteWidth - 10;
+          
+          const baseY = (row * maxRemoteHeight) + ((row + 1) * 10) + (row > 0 ? 10 : 0);
+          
+          // Calculate aspect ratio preserving dimensions
+          const aspectRatio = video.videoWidth / video.videoHeight;
+          
+          // Calculate dimensions that preserve aspect ratio
+          let width = maxRemoteWidth;
           let height = width / aspectRatio;
           
-          // If height is too tall, scale based on height
-          if (height > videoHeight - 50) {
-            height = videoHeight - 50;
+          // If height exceeds max height, adjust width accordingly
+          if (height > maxRemoteHeight) {
+            height = maxRemoteHeight;
             width = height * aspectRatio;
           }
           
           // Center in allocated space
-          const drawX = x + Math.floor((videoWidth - width) / 2);
-          const drawY = y + 10;
+          const x = baseX + Math.floor((maxRemoteWidth - width) / 2);
+          const y = baseY + Math.floor((maxRemoteHeight - height) / 2);
           
-          // Draw the video
-          ctx.drawImage(peerVideo, drawX, drawY, width, height);
-        } else {
-          // Draw a placeholder for no video
-          const width = videoWidth - 20;
-          const height = videoHeight - 50;
-          const drawX = x + 10;
-          const drawY = y + 10;
+          ctx.drawImage(video, x, y, width, height);
           
-          // Draw placeholder background
-          ctx.fillStyle = '#2d2d2d';
-          ctx.fillRect(drawX, drawY, width, height);
+          // Add border
+          ctx.strokeStyle = '#9e9e9e';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x, y, width, height);
           
-          // Draw camera off icon
-          ctx.fillStyle = '#999999';
-          ctx.font = 'normal 32px Arial';
-          ctx.fillText('📷❌', drawX + width/2 - 20, drawY + height/2);
-        }
-        
-        // Draw name bar for remote user
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(
-          x + 10, 
-          y + videoHeight - 40,
-          videoWidth - 20,
-          30
-        );
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 16px Arial';
-        ctx.fillText(
-          peerName, 
-          x + 20, 
-          y + videoHeight - 20
-        );
-        
-        // Get the most recent transcript for this peer
-        const peerRecentTranscript = getRecentTranscript(peerName);
-        if (peerRecentTranscript) {
-          // Draw peer transcript below name
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-          ctx.fillRect(
-            x + 10, 
-            y + videoHeight - 70,
-            videoWidth - 20,
-            30
-          );
-          
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'normal 14px Arial';
-          
-          // Truncate text if too long
-          let transcriptText = peerRecentTranscript;
-          if (transcriptText.length > 50) {
-            transcriptText = transcriptText.substring(0, 47) + '...';
+          // Add username with better visibility
+          const container = video.closest('.remote-video-container');
+          if (container) {
+            const name = container.querySelector('.participant-name')?.textContent || 'Peer';
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(
+              x,
+              y + height - 30,
+              width,
+              30
+            );
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 18px Arial';
+            ctx.fillText(name, x + 10, y + height - 10);
           }
-          
-          ctx.fillText(
-            transcriptText,
-            x + 20, 
-            y + videoHeight - 50
-          );
         }
-        
-        index++;
-      }
-      
-      // Draw screen share if active - place it as an additional cell in grid
-      if (activeScreenSharePeerId && screenVideoElement && screenVideoElement.srcObject && screenVideoElement.videoWidth > 0) {
-        const row = Math.floor(index / maxPerRow);
-        const col = index % maxPerRow;
-        const x = col * videoWidth;
-        const y = row * videoHeight;
-        
-        // Calculate aspect ratio for proper scaling
-        const aspectRatio = screenVideoElement.videoWidth / screenVideoElement.videoHeight;
-        let width = videoWidth - 20;
-        let height = width / aspectRatio;
-        
-        // If height is too tall, scale based on height
-        if (height > videoHeight - 50) {
-          height = videoHeight - 50;
-          width = height * aspectRatio;
-        }
-        
-        // Center in allocated space
-        const drawX = x + Math.floor((videoWidth - width) / 2);
-        const drawY = y + 10;
-        
-        // Draw the screen share
-        ctx.drawImage(screenVideoElement, drawX, drawY, width, height);
-        
-        // Draw label
-        const sharerName = activeScreenSharePeerId === ownPeerId 
-          ? (currentUser ? currentUser.handle : 'Your') 
-          : `${peerUsernames.get(activeScreenSharePeerId) || 'Peer'}'s`;
-        
-        // Draw name bar for screen share
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(
-          x + 10, 
-          y + videoHeight - 40,
-          videoWidth - 20,
-          30
-        );
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 16px Arial';
-        ctx.fillText(
-          `${sharerName} Screen`, 
-          x + 20, 
-          y + videoHeight - 20
-        );
-      }
+      });
       
       // Draw chat & transcript area with background
       ctx.fillStyle = 'rgba(30, 30, 30, 0.8)';
@@ -4343,33 +4292,17 @@ function stopScreenSharing() {
 
 // Add screen share to the video grid
 function addScreenShareToGrid(peerId, stream, sourceName) {
-  // Create a unique ID for this screen share container
-  const screenShareId = `screen-share-${peerId}`;
-  
-  // Check if there's already a container for this screen share
-  let existingScreenContainer = document.getElementById(screenShareId);
-  if (existingScreenContainer) {
-    // If there's already a screen share for this peer, just update the stream
-    const videoElement = existingScreenContainer.querySelector('video');
-    if (videoElement) {
-      videoElement.srcObject = stream;
-      return existingScreenContainer;
-    }
-    // If no video element found but container exists, remove it to create a new one
-    existingScreenContainer.remove();
-  }
-  
   // Create screen share container
   const screenContainer = document.createElement('div');
   screenContainer.className = 'video-item screen-share-container';
-  screenContainer.id = screenShareId;
+  screenContainer.id = `screen-share-${peerId}`;
   
   // Create video element
-  const videoElement = document.createElement('video');
-  videoElement.className = 'screen-share-video';
-  videoElement.autoplay = true;
-  videoElement.playsInline = true;
-  videoElement.srcObject = stream;
+  screenVideoElement = document.createElement('video');
+  screenVideoElement.className = 'screen-share-video';
+  screenVideoElement.autoplay = true;
+  screenVideoElement.playsInline = true;
+  screenVideoElement.srcObject = stream;
   
   // Create info overlay
   const infoOverlay = document.createElement('div');
@@ -4389,14 +4322,9 @@ function addScreenShareToGrid(peerId, stream, sourceName) {
   });
   
   // Add elements to container
-  screenContainer.appendChild(videoElement);
+  screenContainer.appendChild(screenVideoElement);
   screenContainer.appendChild(infoOverlay);
   screenContainer.appendChild(fullscreenButton);
-  
-  // Store reference to this screen video element
-  if (peerId === ownPeerId) {
-    screenVideoElement = videoElement;
-  }
   
   // Add to video grid - insert at beginning for prominence
   const remoteVideosContainer = document.getElementById('remote-videos');
@@ -4405,8 +4333,6 @@ function addScreenShareToGrid(peerId, stream, sourceName) {
   } else {
     remoteVideosContainer.appendChild(screenContainer);
   }
-  
-  return screenContainer;
 }
 
 // Remove screen share from the grid
@@ -4475,6 +4401,11 @@ handleDataChannelMessage = function(peerId, message) {
 // Update the addTrack handler to detect incoming screen share tracks
 const originalOnTrack = window.onTrack;
 window.onTrack = function(event, peerId) {
+  // Also call the original handler
+  if (originalOnTrack) {
+    originalOnTrack(event, peerId);
+  }
+  
   // Check if this is a screen sharing track
   if (event.streams && event.streams[0]) {
     const stream = event.streams[0];
@@ -4492,19 +4423,19 @@ window.onTrack = function(event, peerId) {
         
         console.log(`Detected likely screen share track from peer ${peerId}:`, settings);
         
-        // Add to UI as a separate element - give it a generic name since we don't know the source
+        // Set as active screen sharer
+        activeScreenSharePeerId = peerId;
+        
+        // Add to UI - give it a generic name since we don't know the source
         addScreenShareToGrid(peerId, stream, 'Shared Screen');
         
-        // Note that we found a screen share but continue processing
-        // so original handler can also handle any camera video tracks
-        // Do NOT return here - we need to call the original handler for camera video
+        // Note: No longer stopping our own share when another user shares
+        // We now support multiple simultaneous screen shares
+        // Only stop sharing if explicitly requested
+        
+        break;
       }
     }
-  }
-  
-  // Also call the original handler to handle camera video
-  if (originalOnTrack) {
-    originalOnTrack(event, peerId);
   }
 };
 
@@ -4743,33 +4674,4 @@ async function leaveRoom() {
     console.error('Error leaving room:', error);
     return false;
   }
-}
-
-// Helper function to get most recent transcript for a user
-function getRecentTranscript(username) {
-  // First try exact match
-  if (transcripts.has(username)) {
-    const userTranscripts = transcripts.get(username);
-    if (userTranscripts && userTranscripts.length > 0) {
-      return userTranscripts[userTranscripts.length - 1].text;
-    }
-  }
-  
-  // If no exact match, try partial match
-  for (const [speaker, entries] of transcripts.entries()) {
-    if ((speaker.includes(username) || username.includes(speaker)) && entries.length > 0) {
-      return entries[entries.length - 1].text;
-    }
-  }
-  
-  // Look in recorded transcripts as a fallback
-  const recordedForUser = recordedTranscripts.filter(t => 
-    t.username === username || t.username.includes(username) || username.includes(t.username)
-  );
-  
-  if (recordedForUser.length > 0) {
-    return recordedForUser[recordedForUser.length - 1].text;
-  }
-  
-  return null;
 }
