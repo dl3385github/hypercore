@@ -1012,52 +1012,99 @@ function sendMediaStateViaDataChannel(dataChannel) {
 function handleDataChannelMessage(peerId, message) {
   console.log(`Received data channel message from ${peerId}:`, message);
   
-  if (message.type === 'media-state') {
-    // Update remote media state UI
-    updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
-  } else if (message.type === 'transcript') {
-    // Handle transcript message from peer
-    // Get the speaker from the message or use the peer's username
-    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
-    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
-    
-    // Make sure we store this username for the peer if we don't have it already
-    if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
-      peerUsernames.set(peerId, speaker);
+  try {
+    if (message.type === 'media-state') {
+      // Update remote media state UI
+      updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
+    } else if (message.type === 'transcript') {
+      // Handle transcript message from peer
+      // Get the speaker from the message or use the peer's username
+      const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+      console.log(`Received transcript message from ${speaker}: "${message.text}"`);
+      
+      // Make sure we store this username for the peer if we don't have it already
+      if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
+        peerUsernames.set(peerId, speaker);
+      }
+      
+      // Skip empty or very short transcriptions
+      if (!message.text || message.text.trim().length < 3) {
+        console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
+        return;
+      }
+      
+      // Update UI with the transcript
+      updateTranscription(speaker, message.text);
+      
+      // No need to add to transcript map again since updateTranscription already does this
+    } else if (message.type === 'screen-share-started') {
+      console.log(`Peer ${peerId} started screen sharing: ${message.sourceName}`);
+      
+      // Check if someone else is already sharing their screen (including ourselves)
+      if (screenSharingPeers.size > 0 && !screenSharingPeers.has(peerId)) {
+        console.log(`Ignoring screen share start from ${peerId} because someone else is already sharing`);
+        
+        // Inform the peer that they should stop sharing
+        if (dataChannels.has(peerId)) {
+          try {
+            dataChannels.get(peerId).send(JSON.stringify({
+              type: 'screen-share-conflict',
+              message: 'Someone else is already sharing their screen'
+            }));
+          } catch (e) {
+            console.error('Error sending conflict message:', e);
+          }
+        }
+        return;
+      }
+      
+      // Clear any existing screen shares
+      for (const sharingPeerId of screenSharingPeers) {
+        if (sharingPeerId !== peerId) {
+          // Remove the screen share from grid
+          const screenContainer = document.getElementById(`screen-share-${sharingPeerId}`);
+          if (screenContainer) {
+            screenContainer.remove();
+          }
+        }
+      }
+      
+      // Reset screen sharing peers set to contain only this peer
+      screenSharingPeers.clear();
+      screenSharingPeers.add(peerId);
+      
+      // Show notification
+      addSystemMessage(`${message.username} started sharing their screen: ${message.sourceName}`);
+      
+      // Update active screen sharer
+      activeScreenSharePeerId = peerId;
+      
+    } else if (message.type === 'screen-share-stopped') {
+      console.log(`Peer ${peerId} stopped screen sharing`);
+      addSystemMessage(`${message.username} stopped sharing their screen`);
+      
+      // Remove the screen share from grid
+      removeScreenShareFromGrid(peerId);
+      
+      // Remove from the set of screen sharing peers
+      screenSharingPeers.delete(peerId);
+      
+      // Clear active screen sharer only if it was this peer
+      if (activeScreenSharePeerId === peerId) {
+        activeScreenSharePeerId = null;
+      }
+    } else if (message.type === 'screen-share-conflict') {
+      // If we receive a conflict message, stop our screen sharing
+      if (isScreenSharing) {
+        console.log('Received screen sharing conflict, stopping our screen share');
+        addSystemMessage('Someone else is already sharing their screen. Your screen share has been stopped.');
+        stopScreenSharing();
+      }
     }
-    
-    // Skip empty or very short transcriptions
-    if (!message.text || message.text.trim().length < 3) {
-      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
-      return;
-    }
-    
-    // Update UI with the transcript
-    updateTranscription(speaker, message.text);
-    
-    // No need to add to transcript map again since updateTranscription already does this
-  } else if (message.type === 'screen-share-started') {
-    console.log(`Peer ${peerId} started screen sharing: ${message.sourceName}`);
-    addSystemMessage(`${message.username} started sharing their screen: ${message.sourceName}`);
-    
-    // Update active screen sharer
-    activeScreenSharePeerId = peerId;
-    
-    // No longer stopping our own share - we support multiple simultaneous shares
-  } else if (message.type === 'screen-share-stopped') {
-    console.log(`Peer ${peerId} stopped screen sharing`);
-    addSystemMessage(`${message.username} stopped sharing their screen`);
-    
-    // Remove the screen share from grid
-    const screenContainer = document.getElementById(`screen-share-${peerId}`);
-    if (screenContainer) {
-      screenContainer.remove();
-    }
-    
-    // Clear active screen sharer only if it was this peer
-    if (activeScreenSharePeerId === peerId) {
-      activeScreenSharePeerId = null;
-    }
+  } catch (error) {
+    // Not a JSON message or other error, ignore
+    // This is expected for regular chat messages
+    console.error('Error processing data channel message:', error);
   }
 }
 
@@ -1128,6 +1175,25 @@ function cleanupPeerConnection(peerId) {
     remoteRecorders.delete(peerId);
   }
   
+  // Clean up screen sharing resources
+  if (screenSharingPeers.has(peerId)) {
+    console.log(`Cleaning up screen share for disconnected peer ${peerId}`);
+    
+    // Remove screen share from UI
+    removeScreenShareFromGrid(peerId);
+    
+    // Remove from tracking sets
+    screenSharingPeers.delete(peerId);
+    
+    // Clear active screen sharer if it was this peer
+    if (activeScreenSharePeerId === peerId) {
+      activeScreenSharePeerId = null;
+      
+      // Notify others that the screen share has ended
+      addSystemMessage(`Screen sharing stopped (${getPeerUsername(peerId) || 'peer'} disconnected)`);
+    }
+  }
+  
   // Clean up connection
   const connection = peerConnections.get(peerId);
   if (connection) {
@@ -1156,10 +1222,6 @@ function cleanupPeerConnection(peerId) {
   if (remoteContainer) {
     remoteContainer.remove();
   }
-  
-  // Add system message
-  const peerUsername = getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}...`;
-  addSystemMessage(`${peerUsername} disconnected`);
 }
 
 // Create an offer to initiate WebRTC connection
@@ -3111,8 +3173,13 @@ async function checkAuthState() {
       document.getElementById('auth-screen').classList.add('hidden');
       document.getElementById('main-app').classList.remove('hidden');
       
-      // Set username for video chat
-      usernameInput.value = result.user.handle;
+      // Set username for video chat - strip domain part (.pds.hapa.ai)
+      const handle = result.user.handle;
+      if (handle) {
+        const username = handle.split('.')[0]; // Get only the first part before any dot
+        usernameInput.value = username;
+        console.log(`Set username to ${username} (from handle ${handle})`);
+      }
       
       // Load saved settings
       loadSettings();
@@ -3120,7 +3187,58 @@ async function checkAuthState() {
       // Enumerate devices
       enumerateDevices();
     } else {
-      // No valid session, show auth screen
+      // No valid session, check for saved credentials
+      const savedCredentials = loadCredentials();
+      if (savedCredentials) {
+        console.log('Found saved credentials, attempting auto-login...');
+        // Pre-fill the login form
+        signinIdInput.value = savedCredentials.identifier;
+        signinPasswordInput.value = savedCredentials.password;
+        
+        // Attempt to sign in
+        try {
+          // Format identifier if needed (ensure it has a domain)
+          let formattedIdentifier = savedCredentials.identifier;
+          if (!formattedIdentifier.includes('@') && !formattedIdentifier.includes('.')) {
+            formattedIdentifier = `${formattedIdentifier}.pds.hapa.ai`;
+          }
+          
+          const response = await window.electronAPI.signIn(formattedIdentifier, savedCredentials.password);
+          
+          if (response.success) {
+            // Sign in successful
+            updateAuthState(response.user);
+            
+            // Hide auth screen and show main app
+            document.getElementById('auth-screen').classList.add('hidden');
+            document.getElementById('main-app').classList.remove('hidden');
+            
+            // Set username for video chat - strip domain part (.pds.hapa.ai)
+            const handle = response.user.handle;
+            if (handle) {
+              const username = handle.split('.')[0]; // Get only the first part before any dot
+              usernameInput.value = username;
+              console.log(`Set username to ${username} (from handle ${handle})`);
+            }
+            
+            // Load saved settings
+            loadSettings();
+            
+            // Enumerate devices
+            enumerateDevices();
+            
+            return; // Exit the function as we've successfully logged in
+          } else {
+            console.error('Auto-login failed:', response.error);
+            // Show auth screen (will happen below)
+          }
+        } catch (error) {
+          console.error('Error during auto-login:', error);
+          // Show auth screen (will happen below)
+        }
+      }
+      
+      // Show auth screen if auto-login failed or no saved credentials
       document.getElementById('auth-screen').classList.remove('hidden');
       document.getElementById('main-app').classList.add('hidden');
     }
@@ -3176,6 +3294,13 @@ function updateAuthState(user) {
       
       const videoCallPage = document.getElementById('video-call-page');
       if (videoCallPage) videoCallPage.classList.add('active');
+    }
+    
+    // Set username for video chat if not already set - strip domain part (.pds.hapa.ai)
+    if (!usernameInput.value && user.handle) {
+      const username = user.handle.split('.')[0]; // Get only the first part before any dot
+      usernameInput.value = username;
+      console.log(`Set username to ${username} (from handle ${user.handle})`);
     }
   } else {
     // User is signed out, show auth screen
@@ -4190,6 +4315,14 @@ async function handleScreenShareClick() {
       return stopScreenSharing();
     }
     
+    // Check if anyone else is sharing their screen
+    if (screenSharingPeers.size > 0 && !screenSharingPeers.has(ownPeerId)) {
+      const sharingPeer = Array.from(screenSharingPeers)[0];
+      const peerName = peerUsernames.get(sharingPeer) || `Peer ${sharingPeer.substring(0, 6)}`;
+      addSystemMessage(`Cannot share screen: ${peerName} is already sharing their screen`);
+      return;
+    }
+    
     console.log('Requesting screen share sources');
     
     // Clear previous sources list
@@ -4268,10 +4401,40 @@ async function handleScreenShareClick() {
   }
 }
 
+// Helper function to check if anyone is already screen sharing
+function checkScreenSharingState() {
+  // Check if any peers are sharing
+  if (screenSharingPeers.size > 0) {
+    // Someone is already sharing - get the first peer
+    const sharingPeerId = Array.from(screenSharingPeers)[0];
+    const isLocalSharing = sharingPeerId === ownPeerId;
+    
+    // Get username of sharer
+    const sharerName = isLocalSharing ? 
+      'You' : 
+      (peerUsernames.get(sharingPeerId) || `Peer ${sharingPeerId.substring(0, 6)}`);
+    
+    console.log(`Screen is currently being shared by: ${sharerName}`);
+    return {
+      isSharing: true,
+      isLocalSharing: isLocalSharing,
+      sharingPeerId: sharingPeerId,
+      sharerName: sharerName
+    };
+  }
+  
+  return { isSharing: false };
+}
+
 // Start screen sharing for the selected source
 async function startScreenSharing(sourceId, sourceName) {
   try {
-    // No longer checking if anyone else is already sharing - we allow multiple shares
+    // Check if someone else is already sharing
+    const sharingState = checkScreenSharingState();
+    if (sharingState.isSharing && !sharingState.isLocalSharing) {
+      addSystemMessage(`Cannot share screen: ${sharingState.sharerName} is already sharing their screen`);
+      return;
+    }
     
     console.log(`Starting screen sharing for source: ${sourceName} (${sourceId})`);
     
@@ -4295,7 +4458,19 @@ async function startScreenSharing(sourceId, sourceName) {
     isScreenSharing = true;
     activeScreenSharePeerId = ownPeerId;
     
-    // Add to the set of screen sharing peers
+    // Clear any existing screen shares from other peers
+    for (const sharingPeerId of screenSharingPeers) {
+      if (sharingPeerId !== ownPeerId) {
+        // Remove the screen share from grid
+        const screenContainer = document.getElementById(`screen-share-${sharingPeerId}`);
+        if (screenContainer) {
+          screenContainer.remove();
+        }
+      }
+    }
+    
+    // Reset screen sharing peers set to contain only this peer
+    screenSharingPeers.clear();
     screenSharingPeers.add(ownPeerId);
     
     // Update UI
@@ -4439,7 +4614,7 @@ function stopScreenSharing() {
     addSystemMessage('Screen sharing stopped');
     
     // Remove screen share from the grid
-    removeScreenShareFromGrid();
+    removeScreenShareFromGrid(ownPeerId);
     
     // Notify peers that screen sharing has stopped
     sendControlMessage({
@@ -4543,15 +4718,21 @@ function addScreenShareToGrid(peerId, stream, sourceName, isRemoteShare = false)
 }
 
 // Remove screen share from the grid
-function removeScreenShareFromGrid() {
-  // Find the screen container for the local user
-  const screenContainer = document.getElementById(`screen-share-${ownPeerId}`);
+function removeScreenShareFromGrid(peerId = ownPeerId) {
+  // Find the screen container for the specified peer
+  const screenContainer = document.getElementById(`screen-share-${peerId}`);
   if (screenContainer) {
     screenContainer.remove();
+    console.log(`Removed screen share container for peer ${peerId}`);
+  } else {
+    console.log(`No screen share container found for peer ${peerId}`);
   }
   
-  // Also close the fullscreen view if it's open
-  fullscreenDialog.classList.add('hidden');
+  // Also close the fullscreen view if it's open and belongs to this peer
+  const fullscreenTitle = document.getElementById('fullscreen-title');
+  if (fullscreenTitle && fullscreenTitle.textContent.includes(peerId)) {
+    fullscreenDialog.classList.add('hidden');
+  }
 }
 
 // Open fullscreen view of shared screen
@@ -4595,15 +4776,10 @@ handleDataChannelMessage = function(peerId, message) {
       addSystemMessage(`${data.username} stopped sharing their screen`);
       
       // Remove the screen share from grid
-      const screenContainer = document.getElementById(`screen-share-${peerId}`);
-      if (screenContainer) {
-        screenContainer.remove();
-      }
+      removeScreenShareFromGrid(peerId);
       
-      // Remove this peer from the set of screen sharing peers
-      if (screenSharingPeers) {
-        screenSharingPeers.delete(peerId);
-      }
+      // Remove from the set of screen sharing peers
+      screenSharingPeers.delete(peerId);
       
       // Clear active screen sharer only if it was this peer
       if (activeScreenSharePeerId === peerId) {
@@ -4645,6 +4821,26 @@ window.onTrack = function(event, peerId) {
     if (isVideoTrack && isScreenShare) {
       console.log(`Detected screen share track from peer ${peerId}:`, settings);
       
+      // Check if someone else is already sharing their screen
+      if (screenSharingPeers.size > 0 && !screenSharingPeers.has(peerId)) {
+        console.log(`Ignoring screen share from ${peerId} because someone else is already sharing`);
+        return; // Skip processing this track
+      }
+      
+      // Remove any existing screen shares from other peers
+      if (screenSharingPeers.size > 0) {
+        for (const sharingPeerId of screenSharingPeers) {
+          if (sharingPeerId !== peerId) {
+            // Remove the screen share from grid
+            const screenContainer = document.getElementById(`screen-share-${sharingPeerId}`);
+            if (screenContainer) {
+              screenContainer.remove();
+            }
+            screenSharingPeers.delete(sharingPeerId);
+          }
+        }
+      }
+      
       // Create a separate dedicated stream just for this screen track
       const screenOnlyStream = new MediaStream();
       screenOnlyStream.addTrack(track);
@@ -4656,9 +4852,7 @@ window.onTrack = function(event, peerId) {
       addScreenShareToGrid(peerId, screenOnlyStream, 'Shared Screen', true);
       
       // Add to the set of screen sharing peers
-      if (!screenSharingPeers) {
-        screenSharingPeers = new Set();
-      }
+      screenSharingPeers.clear(); // Ensure only one peer can share
       screenSharingPeers.add(peerId);
       
       // Also set as active screen share for recording
@@ -4668,7 +4862,7 @@ window.onTrack = function(event, peerId) {
       addSystemMessage(`${peerName} is sharing their screen`);
       
       // We still want to process the original stream with any other tracks
-      // so do NOT return early
+      // so we don't return early
     }
   }
   
@@ -4813,8 +5007,13 @@ async function checkAuthState() {
       document.getElementById('auth-screen').classList.add('hidden');
       document.getElementById('main-app').classList.remove('hidden');
       
-      // Set username for video chat
-      usernameInput.value = result.user.handle;
+      // Set username for video chat - strip domain part (.pds.hapa.ai)
+      const handle = result.user.handle;
+      if (handle) {
+        const username = handle.split('.')[0]; // Get only the first part before any dot
+        usernameInput.value = username;
+        console.log(`Set username to ${username} (from handle ${handle})`);
+      }
       
       // Load saved settings
       loadSettings();
@@ -4848,8 +5047,13 @@ async function checkAuthState() {
             document.getElementById('auth-screen').classList.add('hidden');
             document.getElementById('main-app').classList.remove('hidden');
             
-            // Set username for video chat
-            usernameInput.value = response.user.handle;
+            // Set username for video chat - strip domain part (.pds.hapa.ai)
+            const handle = response.user.handle;
+            if (handle) {
+              const username = handle.split('.')[0]; // Get only the first part before any dot
+              usernameInput.value = username;
+              console.log(`Set username to ${username} (from handle ${handle})`);
+            }
             
             // Load saved settings
             loadSettings();
