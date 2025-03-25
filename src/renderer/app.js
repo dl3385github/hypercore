@@ -1393,6 +1393,8 @@ async function handleSignalReceived(peerId, from, signal) {
 // Handle screen sharing specific signals
 async function handleScreenShareSignal(peerId, from, signal) {
   try {
+    console.log(`Processing screen share signal from ${peerId}, type: ${signal.type}`, signal);
+    
     // Create or get the screen sharing connection for this peer
     let screenConnection;
     
@@ -1442,19 +1444,43 @@ async function handleScreenShareSignal(peerId, from, signal) {
         const [screenStream] = event.streams;
         
         if (screenStream) {
+          console.log(`Got screen stream from ${peerId} with id: ${screenStream.id}`);
+          
           // Add the peer to the set of screen sharing peers
+          if (!screenSharingPeers) {
+            screenSharingPeers = new Set();
+          }
           screenSharingPeers.add(peerId);
           
-          // Add screen share to UI
+          // Add screen share to UI - but check if it already exists first
           const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+          
+          // First, remove any existing screen share from this peer
+          removeScreenShareFromGrid(peerId);
+          
+          // Now add the new one
+          console.log(`Adding screen share for ${peerName} to the grid`);
           addScreenShareToGrid(peerId, screenStream, 'Screen Share', true);
           
           // Add system message
           addSystemMessage(`${peerName} is sharing their screen`);
+        } else {
+          console.warn(`Received track event but no stream for ${peerId}`);
+        }
+      };
+      
+      // Handle connection state changes
+      screenConnection.oniceconnectionstatechange = () => {
+        console.log(`Screen share ICE connection state for ${peerId}: ${screenConnection.iceConnectionState}`);
+        if (screenConnection.iceConnectionState === 'failed' || 
+            screenConnection.iceConnectionState === 'closed') {
+          console.log(`Screen share connection to ${peerId} ${screenConnection.iceConnectionState}`);
+          removeScreenShareFromGrid(peerId);
         }
       };
     } else {
       screenConnection = screenSharingConnections.get(peerId);
+      console.log(`Using existing screen share connection for ${peerId}`);
     }
     
     // Handle different screen share signal types
@@ -1467,32 +1493,42 @@ async function handleScreenShareSignal(peerId, from, signal) {
         return;
       }
       
-      const rtcSessionDescription = new RTCSessionDescription({
-        type: signal.sdp.type,
-        sdp: signal.sdp.sdp
-      });
-      
-      await screenConnection.setRemoteDescription(rtcSessionDescription);
-      
-      // Create and send answer
-      const answer = await screenConnection.createAnswer();
-      await screenConnection.setLocalDescription(answer);
-      
-      // Wait for the local description to be fully set
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Send answer with screen share flag
-      const answerSignal = {
-        type: 'answer',
-        isScreenShare: true,
-        sdp: {
-          type: screenConnection.localDescription.type,
-          sdp: screenConnection.localDescription.sdp
+      try {
+        const rtcSessionDescription = new RTCSessionDescription({
+          type: signal.sdp.type,
+          sdp: signal.sdp.sdp
+        });
+        
+        console.log(`Setting remote description for screen share from ${peerId}`);
+        await screenConnection.setRemoteDescription(rtcSessionDescription);
+        
+        // Create and send answer
+        console.log(`Creating screen share answer for ${peerId}`);
+        const answer = await screenConnection.createAnswer();
+        await screenConnection.setLocalDescription(answer);
+        
+        // Wait for the local description to be fully set
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Send answer with screen share flag
+        const answerSignal = {
+          type: 'answer',
+          isScreenShare: true,
+          sdp: {
+            type: screenConnection.localDescription.type,
+            sdp: screenConnection.localDescription.sdp
+          }
+        };
+        
+        console.log(`Sending screen share answer to ${peerId}`, answerSignal);
+        await window.electronAPI.sendSignal(peerId, answerSignal);
+      } catch (error) {
+        console.error(`Error processing screen share offer from ${peerId}:`, error);
+        // Try to recover from the error - clean up and prepare for next offer
+        if (screenSharingConnections.has(peerId)) {
+          screenSharingConnections.delete(peerId);
         }
-      };
-      
-      console.log(`Sending screen share answer to ${peerId}`, answerSignal);
-      await window.electronAPI.sendSignal(peerId, answerSignal);
+      }
       
     } else if (signal.type === 'answer') {
       console.log(`Processing screen share answer from ${peerId}`);
@@ -1503,25 +1539,35 @@ async function handleScreenShareSignal(peerId, from, signal) {
         return;
       }
       
-      const rtcSessionDescription = new RTCSessionDescription({
-        type: signal.sdp.type,
-        sdp: signal.sdp.sdp
-      });
-      
-      await screenConnection.setRemoteDescription(rtcSessionDescription);
+      try {
+        const rtcSessionDescription = new RTCSessionDescription({
+          type: signal.sdp.type,
+          sdp: signal.sdp.sdp
+        });
+        
+        await screenConnection.setRemoteDescription(rtcSessionDescription);
+        console.log(`Set remote description for screen share answer from ${peerId}`);
+      } catch (error) {
+        console.error(`Error processing screen share answer from ${peerId}:`, error);
+      }
       
     } else if (signal.type === 'ice-candidate') {
       console.log(`Processing screen share ICE candidate from ${peerId}`);
       
       if (signal.candidate) {
-        const iceCandidate = new RTCIceCandidate({
-          candidate: signal.candidate.candidate,
-          sdpMid: signal.candidate.sdpMid,
-          sdpMLineIndex: signal.candidate.sdpMLineIndex,
-          usernameFragment: signal.candidate.usernameFragment
-        });
-        
-        await screenConnection.addIceCandidate(iceCandidate);
+        try {
+          const iceCandidate = new RTCIceCandidate({
+            candidate: signal.candidate.candidate,
+            sdpMid: signal.candidate.sdpMid,
+            sdpMLineIndex: signal.candidate.sdpMLineIndex,
+            usernameFragment: signal.candidate.usernameFragment
+          });
+          
+          await screenConnection.addIceCandidate(iceCandidate);
+          console.log(`Added ICE candidate for screen share from ${peerId}`);
+        } catch (error) {
+          console.error(`Error adding screen share ICE candidate from ${peerId}:`, error);
+        }
       }
     }
   } catch (error) {
@@ -4568,17 +4614,25 @@ async function startScreenShare(sourceId) {
           }
         };
         
-        // Create and send offer
+        // Create offer for screen sharing
+        console.log(`Creating offer for screen share to peer ${peerId}`); // For debugging
         const offer = await screenConnection.createOffer();
         await screenConnection.setLocalDescription(offer);
         
-        // Wait a moment to ensure the local description is fully set
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Wait for the local description to be fully set
+        // This delay is important to ensure that the local description is complete
+        await new Promise(resolve => setTimeout(resolve, 200));
         
-        // Send the offer with screen share flag
+        // Ensure local description is available
+        if (!screenConnection.localDescription) {
+          throw new Error('Local description not set');
+        }
+        
+        // Send the offer with a flag indicating it's for screen sharing
+        // Properly format the SDP offer to match what the receiver expects
         const signal = {
           type: 'offer',
-          isScreenShare: true, // Mark as screen share offer
+          isScreenShare: true, // This flag tells the receiver it's a screen share offer
           sdp: {
             type: screenConnection.localDescription.type,
             sdp: screenConnection.localDescription.sdp
@@ -4820,7 +4874,7 @@ handleDataChannelMessage = function(peerId, message) {
     
     if (data.type === 'screen-share-started') {
       console.log(`Peer ${peerId} started screen sharing: ${data.sourceName}`);
-      addSystemMessage(`${data.username} started sharing their screen: ${data.sourceName}`);
+      // Don't add duplicate system message since the original handler already does this
       
       // Track that this peer is sharing their screen
       if (!screenSharingPeers) {
@@ -4833,7 +4887,7 @@ handleDataChannelMessage = function(peerId, message) {
       
     } else if (data.type === 'screen-share-stopped') {
       console.log(`Peer ${peerId} stopped screen sharing`);
-      addSystemMessage(`${data.username} stopped sharing their screen`);
+      // Don't add duplicate system message since the original handler already does this
       
       // Remove the screen share from grid
       const screenContainer = document.getElementById(`screen-share-${peerId}`);
@@ -5137,23 +5191,51 @@ async function leaveRoom() {
   try {
     console.log('Leaving current room...');
     
-    // Clean up all peer connections
+    // Notify server that we're leaving the room FIRST
+    // This should happen before any cleanup to ensure server knows we're disconnecting
+    try {
+      console.log('Notifying server about leaving room');
+      await window.electronAPI.joinRoom(''); // Join empty room to leave current
+      // Add a small delay to ensure server processes the leave request
+      await new Promise(resolve => setTimeout(resolve, 200));
+    } catch (err) {
+      console.warn('Error notifying server about leaving room:', err);
+    }
+    
+    // Now safe to clean up all connections
+    console.log('Cleaning up all peer connections...');
     for (const peerId of peers) {
       cleanupPeerConnection(peerId);
     }
     
     // Stop any screen sharing if active
     if (isScreenSharing) {
-      stopScreenSharing();
+      console.log('Stopping active screen sharing');
+      stopScreenShare();
+    }
+    
+    // Clean up any dedicated screen sharing connections
+    if (screenSharingConnections) {
+      console.log('Cleaning up dedicated screen sharing connections');
+      for (const [peerId, conn] of screenSharingConnections.entries()) {
+        try {
+          conn.close();
+        } catch (e) {
+          console.error(`Error closing screen sharing connection for ${peerId}:`, e);
+        }
+      }
+      screenSharingConnections.clear();
     }
     
     // Stop video recording if active
     if (isVideoRecording) {
+      console.log('Stopping active video recording');
       stopVideoRecording();
     }
     
     // Stop local audio recording if active
     if (isRecording) {
+      console.log('Stopping active audio recording');
       stopMediaRecording();
     }
     
@@ -5170,7 +5252,7 @@ async function leaveRoom() {
     peerUsernames.clear();
     pendingIceCandidates.clear();
     remoteRecorders.clear();
-    screenSharingPeers.clear();
+    if (screenSharingPeers) screenSharingPeers.clear();
     transcripts.clear();
     
     // Close any open popups or modals
@@ -5189,13 +5271,7 @@ async function leaveRoom() {
     // Add system message
     addSystemMessage('Left the room');
     
-    // Notify server that we're leaving the room
-    try {
-      await window.electronAPI.joinRoom(''); // Join empty room to leave current
-    } catch (err) {
-      console.warn('Error notifying server about leaving room:', err);
-    }
-    
+    console.log('Successfully left room and cleaned up resources');
     return true;
   } catch (error) {
     console.error('Error leaving room:', error);
@@ -5208,33 +5284,75 @@ async function handleLeaveRoom() {
   try {
     console.log('Leaving current room...');
     
+    // Check if we're actually in a room first
+    if (!currentRoom) {
+      console.log('Not currently in a room, just showing login screen');
+      loginScreen.classList.remove('hidden');
+      chatScreen.classList.add('hidden');
+      return;
+    }
+    
+    // First, disable all buttons to prevent any actions during cleanup
+    leaveRoomButton.disabled = true;
+    toggleVideoButton.disabled = true;
+    toggleAudioButton.disabled = true;
+    
+    // Reset all event listeners trying to send signals or negotiate connections
+    for (const peerId of peers) {
+      const connection = peerConnections.get(peerId);
+      if (connection) {
+        // Remove event listeners that might trigger new signals
+        connection.onicecandidate = null;
+        connection.onnegotiationneeded = null;
+        connection.oniceconnectionstatechange = null;
+      }
+    }
+    
     // Call the leaveRoom function (this handles all cleanup)
-    leaveRoom();
+    await leaveRoom();
     
-    // Show the login screen
-    loginScreen.classList.remove('hidden');
-    chatScreen.classList.add('hidden');
-    
-    // Add a success message on the login screen
-    const successMessage = document.createElement('div');
-    successMessage.className = 'system-notification';
-    successMessage.innerHTML = `
-      <p>You have left the room successfully. You can join another room below.</p>
-    `;
-    
-    // Insert at top of login screen
-    loginScreen.insertBefore(successMessage, loginScreen.firstChild);
-    
-    // Remove the message after 10 seconds
+    // Clear any potentially queued tasks trying to send signals
     setTimeout(() => {
-      successMessage.remove();
-    }, 10000);
+      // Show the login screen
+      loginScreen.classList.remove('hidden');
+      chatScreen.classList.add('hidden');
+      
+      // Add a success message on the login screen
+      const successMessage = document.createElement('div');
+      successMessage.className = 'system-notification';
+      successMessage.innerHTML = `
+        <p>You have left the room successfully. You can join another room below.</p>
+      `;
+      
+      // Insert at top of login screen
+      loginScreen.insertBefore(successMessage, loginScreen.firstChild);
+      
+      // Remove the message after 10 seconds
+      setTimeout(() => {
+        successMessage.remove();
+      }, 10000);
+      
+      // Clear the input fields
+      messageInput.value = '';
+      
+      // Re-enable buttons when back on login screen
+      leaveRoomButton.disabled = false;
+      toggleVideoButton.disabled = false;
+      toggleAudioButton.disabled = false;
+    }, 300); // Small delay to let any pending cleanup complete
     
-    // Clear the input fields
-    messageInput.value = '';
   } catch (error) {
     console.error('Error leaving room:', error);
     alert(`Error leaving room: ${error.message}`);
+    
+    // Show login screen even if there was an error
+    loginScreen.classList.remove('hidden');
+    chatScreen.classList.add('hidden');
+    
+    // Re-enable buttons
+    leaveRoomButton.disabled = false;
+    toggleVideoButton.disabled = false;
+    toggleAudioButton.disabled = false;
   }
 }
 
