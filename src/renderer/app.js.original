@@ -1282,13 +1282,24 @@ async function handleSignalReceived(peerId, from, signal) {
     
     // Handle different signal types
     if (signal.type === 'offer') {
-      // Parse the SDP object - handle both formats
+      // Make sure we have a valid SDP object
+      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+        console.error('Invalid SDP in offer:', signal.sdp);
+        return;
+      }
+      
+      console.log(`Setting remote description (offer) from ${peerId}`);
+      const rtcSessionDescription = new RTCSessionDescription({
+        type: signal.sdp.type,
+        sdp: signal.sdp.sdp
+      });
+      
+      // Make sure we have a valid SDP object - check both formats
       let rtcSessionDescription;
       
       if (signal.sdp) {
-        // Check if we have a nested object or direct RTCSessionDescription
         if (typeof signal.sdp === 'object' && signal.sdp.type && signal.sdp.sdp) {
-          // Regular format with nested type and sdp fields
+          // Traditional nested format
           rtcSessionDescription = new RTCSessionDescription({
             type: signal.sdp.type,
             sdp: signal.sdp.sdp
@@ -1328,7 +1339,7 @@ async function handleSignalReceived(peerId, from, signal) {
         await peerConnection.setLocalDescription(answer);
         
         // Wait a moment to ensure the local description is fully set
-        await new Promise(resolve => setTimeout(resolve, 500)); // Increased for better reliability
+        await new Promise(resolve => setTimeout(resolve, 100));
         
         // Ensure we have a valid local description before sending
         if (!peerConnection.localDescription) {
@@ -1336,13 +1347,16 @@ async function handleSignalReceived(peerId, from, signal) {
           return;
         }
         
-        // Send the answer - use the same format as screen sharing for consistency
+        // Send the answer
         const answerSignal = {
           type: 'answer',
-          sdp: peerConnection.localDescription // Send the entire RTCSessionDescription object
+          sdp: {
+            type: peerConnection.localDescription.type,
+            sdp: peerConnection.localDescription.sdp
+          }
         };
         
-        console.log(`Sending answer to peer ${peerId}`, JSON.stringify(answerSignal));
+        console.log(`Sending answer to peer ${peerId}`);
         window.electronAPI.sendSignal(peerId, answerSignal).then(result => {
           if (!result.success) {
             console.error(`Failed to send answer to ${peerId}:`, result.error);
@@ -1356,30 +1370,17 @@ async function handleSignalReceived(peerId, from, signal) {
         console.error(`Error processing offer from ${peerId}:`, error);
       }
     } else if (signal.type === 'answer') {
-      // Parse the SDP object - handle both formats
-      let rtcSessionDescription;
-      
-      if (signal.sdp) {
-        // Check if we have a nested object or direct RTCSessionDescription
-        if (typeof signal.sdp === 'object' && signal.sdp.type && signal.sdp.sdp) {
-          // Regular format with nested type and sdp fields
-          rtcSessionDescription = new RTCSessionDescription({
-            type: signal.sdp.type,
-            sdp: signal.sdp.sdp
-          });
-        } else if (signal.sdp.type === 'answer' && typeof signal.sdp.sdp === 'string') {
-          // Direct RTCSessionDescription object
-          rtcSessionDescription = signal.sdp;
-        } else {
-          console.error('Invalid SDP format in answer:', signal.sdp);
-          return;
-        }
-      } else {
-        console.error('Missing SDP in answer:', signal);
+      // Make sure we have a valid SDP object
+      if (!signal.sdp || !signal.sdp.type || !signal.sdp.sdp) {
+        console.error('Invalid SDP in answer:', signal.sdp);
         return;
       }
       
       console.log(`Setting remote description (answer) from ${peerId}`);
+      const rtcSessionDescription = new RTCSessionDescription({
+        type: signal.sdp.type,
+        sdp: signal.sdp.sdp
+      });
       
       try {
         await peerConnection.setRemoteDescription(rtcSessionDescription);
