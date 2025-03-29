@@ -5721,6 +5721,14 @@ async function createTask() {
     // Prevent multiple simultaneous task creation
     if (isCreatingTask) {
       console.log('Task creation already in progress');
+      alert('Task creation is already in progress. Please wait.');
+      return;
+    }
+    
+    // Check if there's already a pending task in the room
+    if (isPendingTask && currentPendingTask) {
+      console.log('There is already a pending task waiting for votes');
+      alert('There is already a task waiting for votes. Please vote on the current task first.');
       return;
     }
     
@@ -5898,9 +5906,8 @@ async function createTask() {
     // Create a Map to store votes for this task
     taskVotes.set(taskId, new Map());
     
-    // Add self vote (automatically vote for your own task)
-    const selfVote = { peerId, username: usernameInput.value.trim() || 'You', vote: 'accept' };
-    taskVotes.get(taskId).set(peerId, selfVote);
+    // Create self vote but DO NOT auto-accept
+    // Allow the creator to vote like everyone else
     
     // Update last task timestamp for next task creation
     lastTaskTimestamp = now;
@@ -5910,6 +5917,9 @@ async function createTask() {
     
     // Broadcast the task to other peers
     broadcastNewTask(task);
+    
+    // Display a message that the task has been created
+    addSystemMessage(`Task created: "${task.text}". Please vote to accept or reject.`);
     
     isCreatingTask = false;
     console.log('Task created successfully:', task);
@@ -5992,10 +6002,19 @@ function createTaskCard(task) {
   acceptBtn.addEventListener('click', () => handleVote(task.id, 'accept'));
   rejectBtn.addEventListener('click', () => handleVote(task.id, 'reject'));
   
-  // If you're the creator, disable your voting buttons (you auto-accept)
-  if (task.createdBy === (usernameInput.value.trim() || 'You')) {
+  // Check if this user has already voted
+  if (taskVotes.has(task.id) && ownPeerId && taskVotes.get(task.id).has(ownPeerId)) {
+    // User has already voted
     acceptBtn.disabled = true;
     rejectBtn.disabled = true;
+    
+    const userVote = taskVotes.get(task.id).get(ownPeerId);
+    // Highlight the button they voted for
+    if (userVote.vote === 'accept') {
+      acceptBtn.classList.add('voted');
+    } else if (userVote.vote === 'reject') {
+      rejectBtn.classList.add('voted');
+    }
   }
 
   return taskCardContainer;
@@ -6023,9 +6042,9 @@ function handleVote(taskId, voteType) {
     return;
   }
   
-  // Don't allow the creator to vote (they already auto-accept)
-  if (task.createdBy === (usernameInput.value.trim() || 'You')) {
-    console.warn('Task creator cannot vote');
+  // Check if user has already voted
+  if (taskVotes.has(taskId) && ownPeerId && taskVotes.get(taskId).has(ownPeerId)) {
+    console.warn('User has already voted on this task');
     return;
   }
   
@@ -6042,16 +6061,25 @@ function handleVote(taskId, voteType) {
   }
   taskVotes.get(taskId).set(ownPeerId, vote);
   
-  // Disable voting buttons
+  // Disable voting buttons and highlight selected vote
   const acceptBtn = taskCard.querySelector('.accept-btn');
   const rejectBtn = taskCard.querySelector('.reject-btn');
   if (acceptBtn) acceptBtn.disabled = true;
   if (rejectBtn) rejectBtn.disabled = true;
   
+  if (voteType === 'accept' && acceptBtn) {
+    acceptBtn.classList.add('voted');
+  } else if (voteType === 'reject' && rejectBtn) {
+    rejectBtn.classList.add('voted');
+  }
+  
   // Update vote counts
   const acceptCount = taskCard.querySelector('.accept-count');
   const rejectCount = taskCard.querySelector('.reject-count');
   updateTaskVoteCounts(taskId, acceptCount, rejectCount);
+  
+  // Show a message that the user has voted
+  addSystemMessage(`You voted to ${voteType} the task: "${task.text}"`);
   
   // Check if task is resolved (accepted or rejected)
   checkTaskResolution(taskId);
@@ -6159,6 +6187,8 @@ function updateTaskCardUI(task) {
 
 // Broadcast a vote to all peers
 function broadcastVote(taskId, voteType) {
+  console.log(`Broadcasting vote on task ${taskId} to all peers: ${voteType}`);
+  
   // Create vote message
   const voteMsg = {
     type: 'task-vote',
@@ -6169,15 +6199,22 @@ function broadcastVote(taskId, voteType) {
   };
   
   // Broadcast to all peers
+  let broadcastCount = 0;
   peers.forEach((peer, peerId) => {
     if (peer.connection && peer.connection.open) {
       try {
         peer.connection.send(JSON.stringify(voteMsg));
+        console.log(`Sharing vote with peer ${peerId}`);
+        broadcastCount++;
       } catch (err) {
         console.error(`Error sending vote to peer ${peerId}:`, err);
       }
+    } else {
+      console.warn(`Cannot send vote to peer ${peerId}: connection not open`);
     }
   });
+  
+  console.log(`Broadcast vote to ${broadcastCount} peers out of ${peers.size} total peers`);
 }
 
 // Handle a vote received from a peer
@@ -6189,6 +6226,8 @@ function handleReceivedVote(data) {
     console.error('Invalid vote data received:', data);
     return;
   }
+  
+  console.log(`Processing vote from ${username} (${peerId}) for task ${taskId}: ${vote}`);
   
   // Check if we have this task
   const task = tasks.find(t => t.id === taskId);
@@ -6206,12 +6245,24 @@ function handleReceivedVote(data) {
   const voteObj = { peerId, username, vote };
   taskVotes.get(taskId).set(peerId, voteObj);
   
-  // Update the UI
+  // Update the UI if the task card exists
   const taskCard = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
   if (taskCard) {
     const acceptCount = taskCard.querySelector('.accept-count');
     const rejectCount = taskCard.querySelector('.reject-count');
     updateTaskVoteCounts(taskId, acceptCount, rejectCount);
+  } else {
+    console.warn(`Task card for task ${taskId} not found in DOM`);
+    
+    // If task is pending but we don't have the card displayed, create it
+    if (task.status === 'pending') {
+      if (!isPendingTask || !currentPendingTask || currentPendingTask.id !== taskId) {
+        console.log(`Creating task card for task ${taskId} that we received a vote for but wasn't displayed`);
+        currentPendingTask = task;
+        isPendingTask = true;
+        createTaskCard(task);
+      }
+    }
   }
   
   // Check if task is resolved
@@ -6456,13 +6507,21 @@ function handlePeerData(peerId, data) {
               return;
             }
             
+            console.log(`Received new task from ${message.task.createdBy} via peer ${peerId}:`, message.task);
+            
             // Store the task
             tasks.push(message.task);
             
             // Set as current pending task if it's pending
             if (message.task.status === 'pending') {
-              currentPendingTask = message.task;
-              isPendingTask = true;
+              // If we already have a pending task, keep it
+              if (isPendingTask && currentPendingTask) {
+                console.log(`Already have a pending task ${currentPendingTask.id}, keeping it and adding the new task ${message.task.id} to the tasks array`);
+              } else {
+                console.log(`Setting task ${message.task.id} as current pending task`);
+                currentPendingTask = message.task;
+                isPendingTask = true;
+              }
             }
             
             // Initialize vote tracking
@@ -6473,17 +6532,19 @@ function handlePeerData(peerId, data) {
             // If this is an accepted task, add it to the to-do list
             if (message.task.status === 'accepted') {
               addTaskToTodoList(message.task);
+              addSystemMessage(`Task added to to-do list: "${message.task.text}"`);
             } else {
               // Create and show the task card
               createTaskCard(message.task);
+              
+              const peerUsername = peerUsernames.get(peerId) || peerId.substring(0, 6);
+              addSystemMessage(`New task received from ${message.task.createdBy}: "${message.task.text}". Please vote to accept or reject.`);
             }
             
             // Update last task timestamp for next task creation
             if (message.task.toTimestamp > lastTaskTimestamp) {
               lastTaskTimestamp = message.task.toTimestamp;
             }
-            
-            console.log(`Received new task from ${peerId}:`, message.task);
           } else {
             console.error('Received malformed task object:', message.task);
           }
@@ -6495,7 +6556,10 @@ function handlePeerData(peerId, data) {
         if (message.taskId !== undefined && message.vote && message.peerId && message.username) {
           // Process the vote
           handleReceivedVote(message);
-          console.log(`Received vote from ${message.username}:`, message.vote);
+          console.log(`Received vote from ${message.username}: ${message.vote}`);
+          
+          // Show message about the vote
+          addSystemMessage(`${message.username} voted to ${message.vote} the task.`);
         } else {
           console.error('Received malformed vote object:', message);
         }
@@ -6523,6 +6587,8 @@ function handleReceivedVote(data) {
     return;
   }
   
+  console.log(`Processing vote from ${username} (${peerId}) for task ${taskId}: ${vote}`);
+  
   // Check if we have this task
   const task = tasks.find(t => t.id === taskId);
   if (!task) {
@@ -6539,12 +6605,24 @@ function handleReceivedVote(data) {
   const voteObj = { peerId, username, vote };
   taskVotes.get(taskId).set(peerId, voteObj);
   
-  // Update the UI
+  // Update the UI if the task card exists
   const taskCard = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
   if (taskCard) {
     const acceptCount = taskCard.querySelector('.accept-count');
     const rejectCount = taskCard.querySelector('.reject-count');
     updateTaskVoteCounts(taskId, acceptCount, rejectCount);
+  } else {
+    console.warn(`Task card for task ${taskId} not found in DOM`);
+    
+    // If task is pending but we don't have the card displayed, create it
+    if (task.status === 'pending') {
+      if (!isPendingTask || !currentPendingTask || currentPendingTask.id !== taskId) {
+        console.log(`Creating task card for task ${taskId} that we received a vote for but wasn't displayed`);
+        currentPendingTask = task;
+        isPendingTask = true;
+        createTaskCard(task);
+      }
+    }
   }
   
   // Check if task is resolved
@@ -6553,6 +6631,8 @@ function handleReceivedVote(data) {
 
 // Broadcast a new task to all peers
 function broadcastNewTask(task) {
+  console.log(`Broadcasting new task to ${peers.size} peers:`, task);
+  
   // Create task message
   const taskMsg = {
     type: 'new-task',
@@ -6560,16 +6640,22 @@ function broadcastNewTask(task) {
   };
   
   // Broadcast to all peers
+  let broadcastCount = 0;
   peers.forEach((peer, peerId) => {
     if (peer.connection && peer.connection.open) {
       try {
         peer.connection.send(JSON.stringify(taskMsg));
         console.log(`Sharing new task with peer ${peerId}`);
+        broadcastCount++;
       } catch (err) {
         console.error(`Error sending task to peer ${peerId}:`, err);
       }
+    } else {
+      console.warn(`Cannot send task to peer ${peerId}: connection not open`);
     }
   });
+  
+  console.log(`Broadcast task to ${broadcastCount} peers out of ${peers.size} total peers`);
 }
 
 // Add debug UI for easier testing
@@ -6634,7 +6720,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (chatScreen) {
     // Only add in development or if URL has debug=true parameter
     const isDebugMode = window.location.search.includes('debug=true') || 
-                        process.env.NODE_ENV === 'development';
+                        (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development');
     
     if (isDebugMode) {
       document.body.appendChild(debugContainer);

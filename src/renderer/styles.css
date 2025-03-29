@@ -90,6 +90,21 @@
   cursor: not-allowed;
 }
 
+.accept-btn.voted {
+  background-color: #3d8b40;
+  border: 2px solid #4CAF50;
+  position: relative;
+}
+
+.accept-btn.voted::after {
+  content: '✓';
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-weight: bold;
+}
+
 .reject-btn {
   background-color: #F44336;
   color: white;
@@ -102,6 +117,21 @@
 .reject-btn:disabled {
   background-color: #e57373;
   cursor: not-allowed;
+}
+
+.reject-btn.voted {
+  background-color: #d32f2f;
+  border: 2px solid #F44336;
+  position: relative;
+}
+
+.reject-btn.voted::after {
+  content: '✓';
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-weight: bold;
 }
 
 .task-votes {
