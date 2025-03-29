@@ -709,6 +709,127 @@ function setupIpcHandlers() {
     }
   });
 
+  // Generate task from conversation
+  ipcMain.handle('generate-task', async (event, transcriptData, chatMessages) => {
+    try {
+      if (!transcriptData || transcriptData.length === 0) {
+        return { 
+          success: false, 
+          error: 'No transcript data available to create a task' 
+        };
+      }
+      
+      console.log(`Generating task from ${transcriptData.length} transcript entries and ${chatMessages?.length || 0} chat messages`);
+      
+      // Combine transcript and chat messages and sort by timestamp
+      const allContent = [
+        ...transcriptData.map(entry => ({
+          type: 'transcript',
+          username: entry.username,
+          content: entry.text,
+          timestamp: entry.timestamp
+        })),
+        ...chatMessages.map(msg => ({
+          type: 'chat',
+          username: msg.username,
+          content: msg.message,
+          timestamp: msg.timestamp
+        }))
+      ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      
+      // Format the content
+      const formattedContent = allContent
+        .map(entry => `[${new Date(entry.timestamp).toISOString()}] ${entry.username} (${entry.type}): ${entry.content}`)
+        .join('\n');
+      
+      // Use OpenAI to generate a task summary
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { 
+            role: "system", 
+            content: "You are an assistant that creates actionable tasks from meeting transcripts. Extract a clear task description from the conversation. Be specific about what needs to be done. Convert discussions into a concise, actionable to-do item." 
+          },
+          { 
+            role: "user", 
+            content: `Please create a task based on this conversation:\n\n${formattedContent}` 
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 500,
+      });
+      
+      const taskSummary = completion.choices[0].message.content;
+      console.log('Task summary generated successfully');
+      
+      // Create a task ID
+      const taskId = `task-${Date.now()}`;
+      
+      // Create a task object
+      const task = {
+        id: taskId,
+        summary: taskSummary,
+        createdAt: new Date().toISOString(),
+        createdBy: username,
+        votes: {},
+        status: 'pending'
+      };
+      
+      // Broadcast the task to all peers
+      for (const conn of activeConnections.values()) {
+        conn.write(JSON.stringify({
+          type: 'task-created',
+          task
+        }));
+      }
+      
+      // Notify the renderer
+      mainWindow.webContents.send('task-created', task);
+      
+      return { 
+        success: true, 
+        task
+      };
+    } catch (error) {
+      console.error('Error generating task:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to generate task'
+      };
+    }
+  });
+  
+  // Broadcast task vote
+  ipcMain.handle('broadcast-task-vote', async (event, taskId, vote) => {
+    try {
+      console.log(`Broadcasting vote for task ${taskId}: ${vote ? 'Accept' : 'Reject'}`);
+      
+      const voteMessage = {
+        type: 'task-vote',
+        taskId,
+        username,
+        vote,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Broadcast to all peers
+      for (const conn of activeConnections.values()) {
+        conn.write(JSON.stringify(voteMessage));
+      }
+      
+      // Also send to UI (so the current user sees their own vote)
+      mainWindow.webContents.send('task-vote', voteMessage);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error broadcasting task vote:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to broadcast task vote'
+      };
+    }
+  });
+
   // Get display media sources for screen sharing
   ipcMain.handle('get-screen-sources', async () => {
     try {
@@ -857,27 +978,70 @@ function handleConnection(conn, info) {
     // Handle incoming data
     conn.on('data', data => {
       try {
-        // Parse the message
         const message = JSON.parse(data.toString());
         
-        // Forward to UI based on message type
-        if (message.type === 'chat-message') {
-          if (mainWindow) {
+        // Process different message types
+        switch (message.type) {
+          case 'chat-message':
+            console.log(`Received chat message from ${message.username}: ${message.message}`);
+            
+            // Broadcast to all peers except the sender
+            for (const [otherPeerId, otherConn] of activeConnections.entries()) {
+              if (otherPeerId !== peerId) {
+                otherConn.write(data);
+              }
+            }
+            
+            // Also forward to the UI
             mainWindow.webContents.send('new-message', message);
-          }
-        } else if (message.type === 'rtc-signal') {
-          if (mainWindow) {
-            mainWindow.webContents.send('signal-received', {
-              peerId,
-              signal: message.signal,
-              from: message.from
-            });
-          }
+            break;
+            
+          case 'webrtc-signal':
+            console.log(`Received WebRTC signal from ${peerId} to ${message.to}`);
+            
+            // Forward the signal to the target peer
+            const targetConn = activeConnections.get(message.to);
+            if (targetConn) {
+              targetConn.write(data);
+            } else {
+              console.warn(`Target peer ${message.to} not found for signaling`);
+            }
+            break;
+            
+          case 'task-created':
+            console.log(`Received new task from ${peerId}`);
+            
+            // Broadcast to all peers except the sender
+            for (const [otherPeerId, otherConn] of activeConnections.entries()) {
+              if (otherPeerId !== peerId) {
+                otherConn.write(data);
+              }
+            }
+            
+            // Forward to the UI
+            mainWindow.webContents.send('task-created', message.task);
+            break;
+            
+          case 'task-vote':
+            console.log(`Received task vote from ${message.username} for task ${message.taskId}: ${message.vote ? 'Accept' : 'Reject'}`);
+            
+            // Broadcast to all peers except the sender
+            for (const [otherPeerId, otherConn] of activeConnections.entries()) {
+              if (otherPeerId !== peerId) {
+                otherConn.write(data);
+              }
+            }
+            
+            // Forward to the UI
+            mainWindow.webContents.send('task-vote', message);
+            break;
+            
+          default:
+            console.log(`Received unknown message type: ${message.type}`);
+            break;
         }
-        
-        console.log(`Received message:`, message);
       } catch (error) {
-        console.error(`Error handling message from ${peerId}:`, error);
+        console.error(`Error processing message from ${peerId}:`, error);
       }
     });
     
