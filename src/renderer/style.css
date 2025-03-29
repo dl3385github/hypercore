@@ -398,19 +398,39 @@ body {
 
 /* Content layout */
 .content-container {
-  display: flex;
-  flex: 1;
+  display: grid;
+  grid-template-columns: 3fr 1fr;
+  width: 100%;
+  height: calc(100% - 60px);
   overflow: hidden;
 }
 
 .video-container {
-  flex: 1;
+  flex: 3;
+  padding: 15px;
+  background-color: #f9f9f9;
+  border-right: 1px solid #e0e0e0;
   height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-container {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 400px;
 }
 
 .messages-container {
   flex: 1;
+  background-color: #fff;
+  padding: 15px;
   overflow-y: auto;
+  height: calc(100% - 60px);
+  border-bottom: 1px solid #e0e0e0;
 }
 
 .messages {
@@ -647,7 +667,7 @@ body {
     max-height: 60vh;
   }
   
-  .messages-container {
+  .chat-container {
     flex: 1;
     border-left: none;
     border-top: 1px solid #eee;
@@ -1232,181 +1252,178 @@ body {
   margin: 5px 0;
 }
 
-/* Updated chat container to fit sidebar */
-.chat-sidebar {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  max-width: 350px;
-  min-width: 250px;
-  height: 100%;
-  border-left: 1px solid #333;
-  background-color: #1e1e1e;
+/* Task management styles */
+.task-card-container {
+  width: 100%;
+  padding: 10px 0;
+  border-top: 1px solid #eee;
+  border-bottom: 1px solid #eee;
+  margin-bottom: 10px;
 }
 
-.chat-container {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 60%;
-  max-height: 60%;
-}
-
-/* To-do list container */
-.todo-container {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  border-top: 1px solid #333;
-  min-height: 40%;
-  max-height: 40%;
-}
-
-.todo-header {
-  padding: 10px;
-  background-color: #2a2a2a;
-  border-bottom: 1px solid #333;
-}
-
-.todo-header h3 {
-  margin: 0;
-  font-size: 16px;
-  color: #fff;
-}
-
-.todo-list {
-  overflow-y: auto;
-  padding: 10px;
-  flex: 1;
-}
-
-/* Task card styles */
 .task-card {
-  background-color: #2a2a2a;
-  border-radius: 5px;
-  margin-bottom: 10px;
-  padding: 10px;
-  border-left: 3px solid #4caf50;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  padding: 15px;
+  margin-bottom: 15px;
+  animation: fadeIn 0.3s ease-in-out;
 }
 
-.task-card.pending {
-  border-left-color: #ffc107;
-}
-
-.task-card-content {
-  margin-bottom: 10px;
-  color: #fff;
-}
-
-.task-card-meta {
-  font-size: 12px;
-  color: #aaa;
-  margin-bottom: 5px;
-}
-
-/* Voting UI */
-.task-voting {
+.task-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #444;
+  margin-bottom: 10px;
 }
 
-.voting-status {
-  font-size: 12px;
-  color: #ffffff;
+.task-creator {
+  font-weight: bold;
+  color: #4a69bd;
 }
 
-.voting-buttons {
+.task-time {
+  color: #777;
+  font-size: 0.9em;
+}
+
+.task-content {
+  margin-bottom: 15px;
+  font-size: 1.1em;
+  line-height: 1.4;
+  color: #333;
+  padding: 10px;
+  background-color: #fff;
+  border-radius: 5px;
+  border-left: 3px solid #4a69bd;
+}
+
+.task-votes {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.vote-status {
+  font-size: 0.9em;
+  color: #666;
+}
+
+.vote-buttons {
   display: flex;
   gap: 10px;
 }
 
-.vote-btn {
-  background-color: #3a3a3a;
-  border: 1px solid #555;
-  border-radius: 3px;
-  padding: 5px 12px;
-  font-size: 13px;
-  font-weight: bold;
+.vote-accept-btn, .vote-reject-btn {
+  padding: 8px 15px;
+  border: none;
+  border-radius: 4px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  font-weight: bold;
+  transition: background-color 0.2s;
 }
 
-.vote-btn:hover {
-  background-color: #444;
+.vote-accept-btn {
+  background-color: #4CAF50;
+  color: white;
 }
 
-.vote-btn.accept {
-  border-color: #4caf50;
-  color: #4caf50;
-  background-color: rgba(76, 175, 80, 0.15);
+.vote-accept-btn:hover {
+  background-color: #3e8e41;
 }
 
-.vote-btn.accept:hover {
-  background-color: rgba(76, 175, 80, 0.3);
-}
-
-.vote-btn.reject {
-  border-color: #f44336;
-  color: #f44336;
-  background-color: rgba(244, 67, 54, 0.15);
-}
-
-.vote-btn.reject:hover {
-  background-color: rgba(244, 67, 54, 0.3);
-}
-
-.vote-btn.disabled {
-  opacity: 0.5;
+.vote-accept-btn:disabled {
+  background-color: #a5d6a7;
   cursor: not-allowed;
 }
 
-/* Task modal */
-.task-modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.8);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 9999;
+.vote-reject-btn {
+  background-color: #f44336;
+  color: white;
 }
 
-.task-modal-content {
-  background-color: #2a2a2a;
-  border-radius: 5px;
-  width: 90%;
-  max-width: 600px;
-  max-height: 80vh;
-  overflow-y: auto;
-  padding: 20px;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+.vote-reject-btn:hover {
+  background-color: #d32f2f;
 }
 
-.task-modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.vote-reject-btn:disabled {
+  background-color: #ef9a9a;
+  cursor: not-allowed;
+}
+
+.task-status-message {
+  padding: 8px 12px;
+  text-align: center;
+  font-weight: bold;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.task-accepted {
+  border-left: 5px solid #4CAF50;
+}
+
+.task-rejected {
+  border-left: 5px solid #f44336;
+}
+
+/* To-do list styles */
+.todo-container {
+  background-color: #fafafa;
+  border-radius: 8px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+  padding: 15px;
   margin-bottom: 15px;
 }
 
-.task-modal-header h3 {
-  margin: 0;
-  color: #fff;
+.todo-container h3 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  color: #444;
+  border-bottom: 2px solid #4a69bd;
+  padding-bottom: 8px;
 }
 
-.task-modal-body {
-  margin-bottom: 20px;
-}
-
-.task-modal-footer {
+.todo-list {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
   gap: 10px;
+}
+
+.todo-item {
+  background-color: white;
+  border-radius: 5px;
+  padding: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border-left: 3px solid #4CAF50;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  animation: slideIn 0.3s ease-in-out;
+}
+
+.todo-text {
+  font-size: 1em;
+  color: #333;
+  line-height: 1.4;
+}
+
+.todo-meta {
+  font-size: 0.8em;
+  color: #777;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes slideIn {
+  from { transform: translateY(-20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 } 

@@ -1,0 +1,225 @@
+/* Task Card Styles */
+.task-card-container {
+  margin: 15px 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.task-card {
+  background-color: #2d2d2d;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  margin-bottom: 15px;
+  border-left: 4px solid #FFC107;
+  transition: all 0.3s ease;
+}
+
+.task-card.accepted {
+  border-left: 4px solid #4CAF50;
+}
+
+.task-card.rejected {
+  border-left: 4px solid #F44336;
+  opacity: 0.7;
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.task-header h3 {
+  color: #FFC107;
+  margin: 0;
+  font-size: 18px;
+}
+
+.task-meta {
+  font-size: 12px;
+  color: #aaa;
+  display: flex;
+  align-items: center;
+}
+
+.task-creator {
+  font-weight: bold;
+  margin-right: 8px;
+}
+
+.task-time {
+  color: #999;
+}
+
+.task-content {
+  color: white;
+  margin: 10px 0;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.task-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.task-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.accept-btn {
+  background-color: #4CAF50;
+  color: white;
+}
+
+.accept-btn:hover {
+  background-color: #3d8b40;
+}
+
+.accept-btn:disabled {
+  background-color: #81c784;
+  cursor: not-allowed;
+}
+
+.reject-btn {
+  background-color: #F44336;
+  color: white;
+}
+
+.reject-btn:hover {
+  background-color: #d32f2f;
+}
+
+.reject-btn:disabled {
+  background-color: #e57373;
+  cursor: not-allowed;
+}
+
+.task-votes {
+  display: flex;
+  font-size: 14px;
+  color: #bbb;
+  gap: 15px;
+}
+
+.accept-count, .reject-count {
+  display: inline-block;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  min-width: 20px;
+  text-align: center;
+}
+
+.accept-count {
+  border-left: 3px solid #4CAF50;
+}
+
+.reject-count {
+  border-left: 3px solid #F44336;
+}
+
+.status-badge {
+  font-weight: bold;
+  padding: 6px 12px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.status-badge.accepted {
+  background-color: rgba(76, 175, 80, 0.2);
+  color: #4CAF50;
+}
+
+.status-badge.rejected {
+  background-color: rgba(244, 67, 54, 0.2);
+  color: #F44336;
+}
+
+/* To-Do List Styles */
+.todo-list-container {
+  background-color: #2d2d2d;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 15px 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.todo-list-container h3 {
+  color: #FFC107;
+  margin: 0 0 15px 0;
+  font-size: 18px;
+  border-bottom: 1px solid #444;
+  padding-bottom: 8px;
+}
+
+.todo-list {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.todo-item {
+  padding: 10px;
+  border-bottom: 1px solid #444;
+  margin-bottom: 8px;
+}
+
+.todo-item:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.todo-text {
+  color: white;
+  margin-bottom: 6px;
+  font-weight: bold;
+}
+
+.todo-meta {
+  font-size: 12px;
+  color: #999;
+  display: flex;
+  justify-content: space-between;
+}
+
+.todo-creator {
+  font-weight: bold;
+  color: #bbb;
+}
+
+/* Task Creation Overlay */
+.app-exit-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.exit-message {
+  background-color: #2d2d2d;
+  padding: 20px;
+  border-radius: 8px;
+  color: white;
+  font-size: 18px;
+  max-width: 80%;
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+} 

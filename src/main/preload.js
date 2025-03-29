@@ -191,43 +191,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   
   // Generate task from conversation
-  generateTaskFromConversation: (transcriptData, chatMessages) => {
-    logEvent('generateTaskFromConversation', `Transcript data with ${transcriptData.length} entries and ${chatMessages.length} messages`);
-    return ipcRenderer.invoke('generate-task', transcriptData, chatMessages);
-  },
-  
-  // Vote on task
-  broadcastTaskVote: (taskId, vote) => {
-    logEvent('broadcastTaskVote', `Task ID: ${taskId}, Vote: ${vote ? 'Accept' : 'Reject'}`);
-    return ipcRenderer.invoke('broadcast-task-vote', taskId, vote);
-  },
-  
-  // Task vote event
-  onTaskVote: (callback) => {
-    console.log('[Preload] Setting up onTaskVote listener');
-    ipcRenderer.on('task-vote', (event, data) => {
-      logEvent('task-vote', data);
-      callback(data);
-    });
-    
-    return () => {
-      console.log('[Preload] Cleaning up onTaskVote listener');
-      ipcRenderer.removeAllListeners('task-vote');
-    };
-  },
-  
-  // Task created event
-  onTaskCreated: (callback) => {
-    console.log('[Preload] Setting up onTaskCreated listener');
-    ipcRenderer.on('task-created', (event, data) => {
-      logEvent('task-created', data);
-      callback(data);
-    });
-    
-    return () => {
-      console.log('[Preload] Cleaning up onTaskCreated listener');
-      ipcRenderer.removeAllListeners('task-created');
-    };
+  generateTaskFromConversation: (conversationData) => {
+    logEvent('generateTaskFromConversation', 'Creating task from conversation data');
+    return ipcRenderer.invoke('generate-task-from-conversation', conversationData);
   },
   
   // Listen for summary generation request

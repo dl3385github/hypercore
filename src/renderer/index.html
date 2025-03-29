@@ -149,28 +149,19 @@
                 </div>
               </div>
               
-              <div class="chat-sidebar">
-                <div class="chat-container">
-                  <div id="messages-container" class="messages-container">
-                    <div id="messages" class="messages"></div>
-                  </div>
-
-                  <div class="message-input-container">
-                    <input 
-                      type="text" 
-                      id="message-input" 
-                      placeholder="Type your message..." 
-                      maxlength="500"
-                    >
-                    <button id="send-btn">Send</button>
-                  </div>
+              <div class="chat-container">
+                <div id="messages-container" class="messages-container">
+                  <div id="messages" class="messages"></div>
                 </div>
-                
-                <div class="todo-container">
-                  <div class="todo-header">
-                    <h3>Tasks</h3>
-                  </div>
-                  <div id="todo-list" class="todo-list"></div>
+
+                <div class="message-input-container">
+                  <input 
+                    type="text" 
+                    id="message-input" 
+                    placeholder="Type your message..." 
+                    maxlength="500"
+                  >
+                  <button id="send-btn">Send</button>
                 </div>
               </div>
             </div>
@@ -331,26 +322,6 @@
             <button id="save-api-key-btn" class="action-btn">Save API Key</button>
             <span id="api-key-status" class="setting-status"></span>
           </div>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Task Creation Modal -->
-    <div id="task-modal" class="task-modal hidden">
-      <div class="task-modal-content">
-        <div class="task-modal-header">
-          <h3>New Task</h3>
-          <button id="close-task-modal" class="close-btn">×</button>
-        </div>
-        <div class="task-modal-body">
-          <p id="task-generating-message">Generating task summary from conversation...</p>
-          <div id="task-content" class="hidden">
-            <div class="task-summary"></div>
-          </div>
-        </div>
-        <div class="task-modal-footer">
-          <button id="reject-task-btn" class="action-btn danger-btn hidden">Reject</button>
-          <button id="accept-task-btn" class="action-btn hidden">Accept</button>
         </div>
       </div>
     </div>
