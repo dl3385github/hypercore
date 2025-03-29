@@ -1506,178 +1506,36 @@ function addRemoteStream(peerId, stream) {
       // Get the peer's username
       const peerName = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
       
-      // Create a new container for this peer
-      remoteContainer = document.createElement('div');
-      remoteContainer.className = 'remote-video-container';
+      // Create a new container for this peer using the template
+      const template = document.getElementById('remote-video-template');
+      remoteContainer = template.content.cloneNode(true).querySelector('.remote-video-container');
       remoteContainer.setAttribute('data-peer-id', peerId);
       
-      // Create video wrapper for aspect ratio
-      const videoWrapper = document.createElement('div');
-      videoWrapper.className = 'video-wrapper';
-      remoteContainer.appendChild(videoWrapper);
-      
-      // Add video element
-      const remoteVideo = document.createElement('video');
-      remoteVideo.className = 'remote-video';
-      remoteVideo.autoplay = true;
-      remoteVideo.playsInline = true;
-      videoWrapper.appendChild(remoteVideo);
-      
-      // Add transcript overlay container inside video wrapper
-      const transcriptOverlay = document.createElement('div');
-      transcriptOverlay.className = 'transcript-overlay hidden';
-      transcriptOverlay.id = `transcript-overlay-${peerId}`;
-      videoWrapper.appendChild(transcriptOverlay);
-      
-      // Add participant info section
-      const participantInfo = document.createElement('div');
-      participantInfo.className = 'participant-info';
-      remoteContainer.appendChild(participantInfo);
-      
-      // Add participant name
-      const nameElement = document.createElement('div');
-      nameElement.className = 'participant-name';
-      nameElement.textContent = peerName;
-      participantInfo.appendChild(nameElement);
-      
-      // Add transcript container
-      const transcriptContainer = document.createElement('div');
-      transcriptContainer.className = 'transcript-container';
-      participantInfo.appendChild(transcriptContainer);
-      
-      // Add transcript title
-      const transcriptTitle = document.createElement('div');
-      transcriptTitle.className = 'transcript-title';
-      transcriptTitle.textContent = 'Transcript';
-      transcriptContainer.appendChild(transcriptTitle);
-      
-      // Add transcript content
-      const transcriptContent = document.createElement('div');
-      transcriptContent.className = 'transcript-content';
-      transcriptContainer.appendChild(transcriptContent);
-      
-      // Store the username in our map if it's not a placeholder
-      if (peerName !== `Peer ${peerId.substring(0, 6)}`) {
-        peerUsernames.set(peerId, peerName);
-        console.log(`Stored username "${peerName}" for peer ${peerId}`);
-      }
-      
-      // Add video off indicator
-      const videoOffIndicator = document.createElement('div');
-      videoOffIndicator.className = 'video-off-indicator hidden';
-      videoOffIndicator.innerHTML = '📷❌';
-      videoWrapper.appendChild(videoOffIndicator);
-      
-      // Add audio off indicator
-      const audioOffIndicator = document.createElement('div');
-      audioOffIndicator.className = 'audio-off-indicator hidden';
-      audioOffIndicator.innerHTML = '🔇';
-      videoWrapper.appendChild(audioOffIndicator);
-      
-      // Add volume control
-      const volumeControl = document.createElement('div');
-      volumeControl.className = 'volume-control';
-      
-      const volumeLabel = document.createElement('label');
-      volumeLabel.textContent = 'Volume:';
-      volumeControl.appendChild(volumeLabel);
-      
-      const volumeSlider = document.createElement('input');
-      volumeSlider.type = 'range';
-      volumeSlider.min = '0';
-      volumeSlider.max = '2';
-      volumeSlider.step = '0.1';
-      volumeSlider.value = '1';
-      volumeSlider.className = 'volume-slider';
-      volumeControl.appendChild(volumeSlider);
-      
-      // Set initial volume
-      peerVolumes.set(peerId, 1.0);
-      
-      // Add event listener for volume change
-      volumeSlider.addEventListener('input', (e) => {
-        const volume = parseFloat(e.target.value);
-        peerVolumes.set(peerId, volume);
-        
-        // Find the audio element
-        const videoElement = remoteContainer.querySelector('video');
-        if (videoElement) {
-          videoElement.volume = volume;
-        }
-      });
-      
-      remoteContainer.appendChild(volumeControl);
-      
-      // Add the container to the video grid
-      remoteVideosContainer.appendChild(remoteContainer);
-      
-      console.log(`Remote container for ${peerName} (${peerId}) added to DOM with transcript overlay`);
-    } else {
-      // Update the name if we now have a real username
+      // Set the participant name
       const nameElement = remoteContainer.querySelector('.participant-name');
-      const currentName = nameElement.textContent;
-      
-      // If current name is a placeholder and we now have a real name
-      if (currentName.includes('Peer') && peerUsernames.has(peerId)) {
-        const realName = peerUsernames.get(peerId);
-        nameElement.textContent = realName;
-        console.log(`Updated name in DOM from "${currentName}" to "${realName}" for peer ${peerId}`);
+      if (nameElement) {
+        nameElement.textContent = peerName;
       }
-    }
-    
-    // Find the video element
-    const remoteVideo = remoteContainer.querySelector('.remote-video');
-    
-    // Set the srcObject to display the stream
-    remoteVideo.srcObject = stream;
-    
-    // Set the volume based on stored preference
-    if (peerVolumes.has(peerId)) {
-      remoteVideo.volume = peerVolumes.get(peerId);
-    }
-    
-    // Log active tracks
-    console.log(`Remote stream has ${stream.getTracks().length} tracks:`);
-    stream.getTracks().forEach(track => {
-      console.log(`- ${track.kind} track (${track.id}): enabled=${track.enabled}, readyState=${track.readyState}`);
-    });
-    
-    // Ensure the container is visible
-    remoteContainer.classList.remove('hidden');
-    
-    // Update connection count
-    updateConnectionCount();
-    
-    // Setup transcription for audio tracks
-    if (stream.getAudioTracks().length > 0) {
-      console.log(`Remote stream has audio tracks, setting up transcription for peer ${peerId}`);
       
-      // Make sure any audio tracks are enabled
-      stream.getAudioTracks().forEach(track => {
-        // Enable the track to ensure we can record it
-        if (!track.enabled) {
-          console.log(`Enabling audio track ${track.id} for transcription`);
-          track.enabled = true;
-        }
-        
-        console.log(`Audio track ${track.id} for peer ${peerId}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
+      // Add the remote container to the grid
+      document.getElementById('remote-videos').appendChild(remoteContainer);
+      console.log(`Created new container for peer ${peerId}`);
+    }
+    
+    // Find the video element and set its srcObject
+    const videoElement = remoteContainer.querySelector('video');
+    if (videoElement) {
+      videoElement.srcObject = stream;
+      videoElement.play().catch(err => {
+        console.error(`Error playing video for peer ${peerId}:`, err);
       });
-      
-      // Set up transcription with a short delay to ensure everything is initialized
-      setTimeout(() => {
-        // Call with correct parameter order (stream first, then peerId)
-        setupRemoteTranscription(stream, peerId);
-      }, 1000);
-    } else {
-      console.warn(`No audio tracks found in remote stream for peer ${peerId}, cannot set up transcription`);
+      console.log(`Set video srcObject for peer ${peerId}`);
     }
     
-    // Return the container for further modifications
+    // Return the container
     return remoteContainer;
-    
   } catch (error) {
-    console.error(`Error adding remote stream for peer ${peerId}:`, error);
-    return null;
+    console.error(`Error adding remote stream from peer ${peerId}:`, error);
   }
 }
 
@@ -2845,8 +2703,8 @@ async function generateTaskFromConversation() {
     
     isTaskGenerating = true;
     
-    if (transcripts.size === 0) {
-      alert('No transcripts available to create a task');
+    if (transcripts.size === 0 && recordedMessages.length === 0) {
+      alert('No transcripts or chat messages available to create a task');
       isTaskGenerating = false;
       return;
     }
@@ -2891,17 +2749,19 @@ async function generateTaskFromConversation() {
       ? recordedMessages.filter(msg => new Date(msg.timestamp) > new Date(lastTaskTimestamp))
       : recordedMessages;
     
-    // Sort by timestamp
+    // Sort all content by timestamp
     filteredTranscripts.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     
-    // Log the transcript data
+    // Log the transcript and chat message data
     console.log(`Sending ${filteredTranscripts.length} transcript entries and ${filteredMessages.length} chat messages for task generation...`);
     transcripts.forEach((entries, speaker) => {
       const filteredCount = lastTaskTimestamp 
         ? entries.filter(entry => new Date(entry.timestamp) > new Date(lastTaskTimestamp)).length
         : entries.length;
-      console.log(`- ${speaker}: ${filteredCount} entries since last task`);
+      console.log(`- ${speaker}: ${filteredCount} transcript entries since last task`);
     });
+    
+    console.log(`- Chat messages: ${filteredMessages.length} messages since last task`);
     
     // Generate task using GPT-4o
     const result = await window.electronAPI.generateTaskFromConversation(
@@ -3462,49 +3322,60 @@ async function applyDeviceSelection() {
   }
 }
 
+// Set up data channel
 function setupDataChannel(peerId, channel) {
-  // Store channel in our map
-  dataChannels.set(peerId, channel);
-  
-  channel.onopen = () => {
-    console.log(`Data channel to peer ${peerId} opened`);
-    // Send our media state when the channel opens
-    sendMediaStateViaDataChannel(channel);
+  try {
+    console.log(`Setting up data channel for peer ${peerId}`);
     
-    // Send any pending tasks to the new peer
-    if (tasks.size > 0) {
-      // Send each task to the new peer
-      tasks.forEach(task => {
-        try {
-          channel.send(JSON.stringify({
-            type: 'task-created',
-            task
-          }));
-          console.log(`Sent existing task ${task.id} to new peer ${peerId}`);
-        } catch (error) {
-          console.error(`Error sending task ${task.id} to peer ${peerId}:`, error);
-        }
-      });
-    }
-  };
-  
-  channel.onclose = () => {
-    console.log(`Data channel to peer ${peerId} closed`);
-    dataChannels.delete(peerId);
-  };
-  
-  channel.onerror = (error) => {
-    console.error(`Data channel error with peer ${peerId}:`, error);
-  };
-  
-  channel.onmessage = (event) => {
-    try {
-      const message = JSON.parse(event.data);
-      handleDataChannelMessage(peerId, message);
-    } catch (error) {
-      console.error(`Error parsing data channel message from ${peerId}:`, error);
-    }
-  };
+    // Add the data channel to our collection
+    dataChannels.set(peerId, channel);
+    
+    // Log the state
+    console.log(`Data channel state for peer ${peerId}: ${channel.readyState}`);
+    
+    // Set event handlers
+    channel.onopen = () => {
+      console.log(`Data channel with peer ${peerId} opened`);
+      
+      // Send initial media state
+      sendMediaStateViaDataChannel(channel);
+      
+      // Send all pending tasks to the new peer
+      if (tasks.size > 0) {
+        console.log(`Sending ${tasks.size} tasks to new peer ${peerId}`);
+        
+        tasks.forEach(task => {
+          try {
+            channel.send(JSON.stringify({
+              type: 'task-created',
+              task
+            }));
+            console.log(`Sent task ${task.id} to peer ${peerId}`);
+          } catch (error) {
+            console.error(`Error sending task ${task.id} to peer ${peerId}:`, error);
+          }
+        });
+      }
+    };
+    
+    channel.onclose = () => {
+      console.log(`Data channel with peer ${peerId} closed`);
+      dataChannels.delete(peerId);
+    };
+    
+    channel.onerror = (event) => {
+      console.error(`Data channel error with peer ${peerId}:`, event);
+    };
+    
+    channel.onmessage = (event) => {
+      handleDataChannelMessage(peerId, event.data);
+    };
+    
+    return channel;
+  } catch (error) {
+    console.error(`Error setting up data channel for peer ${peerId}:`, error);
+    throw error;
+  }
 }
 
 // Check authentication state on startup
@@ -5717,76 +5588,64 @@ function renderFrame() {
   ctx.fillText(`Room: ${currentRoomSpan.textContent}`, videoAreaWidth - 10, 30);
   
   // Draw local video
-  if (localVideo.srcObject && localVideo.srcObject.getVideoTracks().length > 0 && localVideo.videoWidth > 0) {
+  const localVideo = document.getElementById('local-video');
+  if (localVideo.srcObject) {
     ctx.save();
     
-    // Position in bottom right of video area
-    const aspectRatio = localVideo.videoWidth / localVideo.videoHeight;
-    const width = Math.min(320, videoAreaWidth * 0.3);
-    const height = width / aspectRatio;
-    const x = videoAreaWidth - width - 20;
-    const y = videoCanvas.height - height - 20;
+    // Determine local video size based on peer count
+    let videosCount = 1; // Local video
+    const remoteVideos = document.querySelectorAll('.remote-video-container:not(.hidden)');
+    videosCount += remoteVideos.length;
     
-    // Draw a border
-    ctx.strokeStyle = '#3f51b5';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, width, height);
+    const gridCols = Math.ceil(Math.sqrt(videosCount));
+    const gridRows = Math.ceil(videosCount / gridCols);
     
-    // Draw the video
-    ctx.drawImage(localVideo, x, y, width, height);
+    // Calculate video size
+    const videoWidth = videoAreaWidth / gridCols;
+    const videoHeight = videoCanvas.height / gridRows;
     
-    // Add username overlay
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    ctx.fillRect(x, y + height - 30, width, 30);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '14px Arial';
-    ctx.textAlign = 'left';
-    ctx.fillText('You', x + 10, y + height - 10);
+    // Draw local video first
+    try {
+      // Draw label for local video
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.fillRect(0, 0, 80, 30);
+      
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'left';
+      ctx.fillText('You', 10, 20);
+      
+      ctx.drawImage(localVideo, 0, 0, videoWidth, videoHeight);
+    } catch (e) {
+      console.warn('Error drawing local video:', e);
+    }
     
-    ctx.restore();
-  }
-  
-  // Draw remote videos in a grid
-  const remoteVideos = document.querySelectorAll('#remote-videos video:not([id^="screen-"]):not(.fullscreen-video)');
-  if (remoteVideos.length > 0) {
-    ctx.save();
-    
-    // Calculate grid dimensions
-    const maxPerRow = Math.min(remoteVideos.length, 2);
-    const rows = Math.ceil(remoteVideos.length / maxPerRow);
-    const vidWidth = Math.floor((videoAreaWidth - 40) / maxPerRow);
-    const vidHeight = Math.floor((videoCanvas.height - 60) / rows);
-    
-    remoteVideos.forEach((video, index) => {
-      if (video.srcObject && video.srcObject.getVideoTracks().length > 0 && video.videoWidth > 0) {
-        const row = Math.floor(index / maxPerRow);
-        const col = index % maxPerRow;
-        
-        const x = 20 + col * vidWidth;
-        const y = 60 + row * vidHeight;
-        
-        // Get peer username from container
-        const container = video.closest('.remote-video-container');
-        let username = 'Peer';
-        if (container && container.dataset.peerUsername) {
-          username = container.dataset.peerUsername;
+    // Draw remote videos
+    remoteVideos.forEach((container, index) => {
+      try {
+        const remoteVideo = container.querySelector('video');
+        if (remoteVideo && remoteVideo.srcObject) {
+          // Calculate position
+          const row = Math.floor((index + 1) / gridCols);
+          const col = (index + 1) % gridCols;
+          
+          const x = col * videoWidth;
+          const y = row * videoHeight;
+          
+          // Draw video
+          ctx.drawImage(remoteVideo, x, y, videoWidth, videoHeight);
+          
+          // Draw label
+          const peerName = container.querySelector('.participant-name').textContent;
+          
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+          ctx.fillRect(x, y, peerName.length * 10 + 20, 30);
+          
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'left';
+          ctx.fillText(peerName, x + 10, y + 20);
         }
-        
-        // Draw border
-        ctx.strokeStyle = '#4caf50';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(x, y, vidWidth - 10, vidHeight - 10);
-        
-        // Draw video
-        ctx.drawImage(video, x, y, vidWidth - 10, vidHeight - 10);
-        
-        // Add username overlay
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.fillRect(x, y + vidHeight - 40, vidWidth - 10, 30);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '14px Arial';
-        ctx.textAlign = 'left';
-        ctx.fillText(username, x + 10, y + vidHeight - 20);
+      } catch (e) {
+        console.warn('Error drawing remote video:', e);
       }
     });
     
@@ -5796,126 +5655,48 @@ function renderFrame() {
   // Draw chat messages
   ctx.save();
   
-  // Chat area header
-  ctx.fillStyle = '#333333';
+  // Draw chat area header
+  ctx.fillStyle = '#2a2a2a';
   ctx.fillRect(chatAreaX, 0, chatAreaWidth, 40);
+  
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 18px Arial';
+  ctx.font = 'bold 16px Arial';
   ctx.textAlign = 'center';
-  ctx.fillText('Chat', chatAreaX + chatAreaWidth / 2, 25);
+  ctx.fillText('Chat Messages', chatAreaX + chatAreaWidth / 2, 25);
   
-  // Draw chat messages
-  const messageY = 60;
-  const messageHeight = 20;
-  const maxMessages = Math.floor((videoCanvas.height - messageY) / messageHeight);
+  // Get recent chat messages
+  const chatMessages = recordedChatMessages.slice(-10); // Show last 10 messages
   
-  let displayMessages = [];
-  
-  // If recording in progress, use the recorded messages
-  if (recordedChatMessages.length > 0) {
-    displayMessages = [...recordedChatMessages];
-  }
-  
-  // Only show the last 'maxMessages' messages
-  if (displayMessages.length > maxMessages) {
-    displayMessages = displayMessages.slice(displayMessages.length - maxMessages);
-  }
-  
-  displayMessages.forEach((msg, index) => {
-    const y = messageY + index * messageHeight;
-    
-    ctx.font = '14px Arial';
+  if (chatMessages.length > 0) {
     ctx.textAlign = 'left';
+    let y = 60;
     
-    // Calculate width of username for proper spacing
-    ctx.font = 'bold 14px Arial';
-    const usernameWidth = ctx.measureText(msg.username + ':').width + 10; // Add some spacing
-
-    // Draw username in bold
-    ctx.fillStyle = msg.isSystem ? '#ffeb3b' : '#4fc3f7';
-    ctx.fillText(msg.username + ':', chatAreaX + 10, y);
-    
-    // Draw message content after username with proper spacing
-    ctx.font = '14px Arial';
-    ctx.fillStyle = '#ffffff';
-    
-    // Calculate max width for the text (with some margin)
-    const maxWidth = chatAreaWidth - 20 - usernameWidth;
-    const textX = chatAreaX + 10 + usernameWidth;
-    
-    // Simple word wrap for message content
-    const words = msg.content.split(' ');
-    let line = '';
-    let lineY = y;
-    
-    words.forEach(word => {
-      const testLine = line + (line ? ' ' : '') + word;
-      const testWidth = ctx.measureText(testLine).width;
+    chatMessages.forEach(msg => {
+      // Format date
+      const date = new Date(msg.timestamp);
+      const formattedTime = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
       
-      if (testWidth > maxWidth && line) {
-        // Draw the current line
-        ctx.fillText(line, textX, lineY);
-        // Start a new line
-        line = word;
-        lineY += messageHeight;
-      } else {
-        line = testLine;
-      }
-    });
-    
-    // Draw the last line
-    if (line) {
-      ctx.fillText(line, textX, lineY);
-    }
-  });
-  
-  // Draw transcripts if they are recorded and not empty
-  if (recordedTranscripts.length > 0) {
-    // Draw transcripts header
-    const transcriptHeaderY = Math.min(videoCanvas.height - 120, messageY + displayMessages.length * messageHeight + 40);
-    ctx.fillStyle = '#333333';
-    ctx.fillRect(chatAreaX, transcriptHeaderY, chatAreaWidth, 30);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('Transcripts', chatAreaX + chatAreaWidth / 2, transcriptHeaderY + 20);
-    
-    // Draw transcript content
-    let transcriptY = transcriptHeaderY + 40;
-    
-    // Only show a few recent transcripts to not overcrowd
-    const maxTranscripts = 3;
-    const recentTranscripts = recordedTranscripts.slice(-maxTranscripts);
-    
-    recentTranscripts.forEach(transcript => {
-      // Calculate username width for proper spacing
-      ctx.font = 'bold 14px Arial';
-      const usernameWidth = ctx.measureText(transcript.username + ':').width + 10;
+      // Draw username and time
+      ctx.fillStyle = '#aaaaaa';
+      ctx.font = '12px Arial';
+      ctx.fillText(`${msg.username} • ${formattedTime}`, chatAreaX + 10, y);
       
-      // Draw username
-      ctx.fillStyle = '#26a69a';
-      ctx.textAlign = 'left';
-      ctx.fillText(transcript.username + ':', chatAreaX + 10, transcriptY);
-      
-      // Draw transcript content
-      ctx.font = '14px Arial';
+      // Draw message with word wrap
       ctx.fillStyle = '#ffffff';
+      ctx.font = '14px Arial';
       
-      // Draw transcript with simple word wrap
-      const maxWidth = chatAreaWidth - 20 - usernameWidth;
-      const textX = chatAreaX + 10 + usernameWidth;
-      
-      // Simple word wrap
-      const words = transcript.content.split(' ');
+      const maxWidth = chatAreaWidth - 20;
+      const words = msg.message?.split(' ') || [];
       let line = '';
-      let lineY = transcriptY;
+      let lineY = y + 20;
       
       words.forEach(word => {
         const testLine = line + (line ? ' ' : '') + word;
-        const testWidth = ctx.measureText(testLine).width;
+        const metrics = ctx.measureText(testLine);
+        const testWidth = metrics.width;
         
         if (testWidth > maxWidth && line) {
-          ctx.fillText(line, textX, lineY);
+          ctx.fillText(line, chatAreaX + 10, lineY);
           line = word;
           lineY += 20;
         } else {
@@ -5923,22 +5704,34 @@ function renderFrame() {
         }
       });
       
+      // Draw the last line
       if (line) {
-        ctx.fillText(line, textX, lineY);
+        ctx.fillText(line, chatAreaX + 10, lineY);
       }
       
-      transcriptY = lineY + 30;
+      // Move y position for next message (account for wrapped text)
+      y = lineY + 20;
     });
+  } else {
+    ctx.fillStyle = '#999999';
+    ctx.font = '16px Arial';
+    ctx.fillText('No chat messages yet', chatAreaX + 20, 80);
   }
   
-  // Draw task list header
-  ctx.fillStyle = '#4caf50';
-  ctx.font = 'bold 16px Arial';
-  ctx.textAlign = 'left';
-  ctx.fillText('Tasks', todoAreaX + 10, 50);
+  // Draw To-Do list
+  ctx.fillStyle = '#2a2a2a';
+  ctx.fillRect(todoAreaX, 0, todoAreaWidth, 40);
   
-  // Draw to-do list items
-  const taskList = Array.from(tasks.values()).filter(task => task.status === 'accepted');
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 16px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('Tasks', todoAreaX + todoAreaWidth / 2, 25);
+  
+  // Get tasks that are accepted or pending
+  const taskList = Array.from(tasks.values()).filter(task => 
+    task.status === 'accepted' || task.status === 'pending'
+  ).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  
   if (taskList.length > 0) {
     const lineHeight = 80; // Each task card height
     let y = 70;
@@ -5948,8 +5741,8 @@ function renderFrame() {
       ctx.fillStyle = '#2a2a2a';
       ctx.fillRect(todoAreaX + 5, y, todoAreaWidth - 10, lineHeight - 5);
       
-      // Draw green left border
-      ctx.fillStyle = '#4caf50';
+      // Draw left border based on status
+      ctx.fillStyle = task.status === 'accepted' ? '#4caf50' : '#ffc107'; // Green for accepted, yellow for pending
       ctx.fillRect(todoAreaX + 5, y, 3, lineHeight - 5);
       
       // Draw task meta info (creator)
@@ -5957,6 +5750,13 @@ function renderFrame() {
       ctx.font = '12px Arial';
       ctx.textAlign = 'left';
       ctx.fillText(task.createdBy, todoAreaX + 15, y + 20);
+      
+      // If task is pending, show voting status
+      if (task.status === 'pending') {
+        const totalVotes = Object.keys(task.votes).length;
+        const totalNeeded = peers.size + 1;
+        ctx.fillText(`Votes: ${totalVotes}/${totalNeeded}`, todoAreaX + todoAreaWidth - 70, y + 20);
+      }
       
       // Draw task content with word wrapping
       ctx.fillStyle = '#ffffff';
@@ -6000,4 +5800,50 @@ function renderFrame() {
   // Store canvas data for recording
   videoCanvas._lastFrameTime = Date.now();
   return videoCanvas;
+}
+
+// Handle WebRTC track event
+function handleTrackEvent(event, peerId) {
+  try {
+    console.log(`Track event from peer ${peerId}`, event.track.kind);
+    
+    // Create a new MediaStream to hold this track
+    let remoteStream;
+    
+    // Check if we already have a stream for this peer
+    const existingContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+    const videoElement = existingContainer ? existingContainer.querySelector('video') : null;
+    
+    if (videoElement && videoElement.srcObject) {
+      // Use the existing stream
+      remoteStream = videoElement.srcObject;
+      remoteStream.addTrack(event.track);
+      console.log(`Added ${event.track.kind} track to existing stream for peer ${peerId}`);
+    } else {
+      // Create a new stream
+      remoteStream = new MediaStream([event.track]);
+      console.log(`Created new stream with ${event.track.kind} track for peer ${peerId}`);
+      
+      // Add the stream to the video element
+      if (event.track.kind === 'video') {
+        // This is important - we need to add the stream to the UI
+        addRemoteStream(peerId, remoteStream);
+      } else if (existingContainer && videoElement) {
+        // For audio tracks, add to existing container
+        videoElement.srcObject = remoteStream;
+      }
+    }
+    
+    // Handle track ended event
+    event.track.onended = () => {
+      console.log(`Track ${event.track.kind} from peer ${peerId} ended`);
+    };
+    
+    // If this is an audio track, set up transcription
+    if (event.track.kind === 'audio') {
+      setupRemoteTranscription(remoteStream, peerId);
+    }
+  } catch (error) {
+    console.error(`Error handling track event from peer ${peerId}:`, error);
+  }
 }

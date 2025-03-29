@@ -1316,7 +1316,7 @@ body {
 
 .voting-status {
   font-size: 12px;
-  color: #aaa;
+  color: #ffffff;
 }
 
 .voting-buttons {
@@ -1325,35 +1325,38 @@ body {
 }
 
 .vote-btn {
-  background-color: #2c2c2c;
-  border: 1px solid #444;
+  background-color: #3a3a3a;
+  border: 1px solid #555;
   border-radius: 3px;
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: bold;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .vote-btn:hover {
-  background-color: #333;
+  background-color: #444;
 }
 
 .vote-btn.accept {
   border-color: #4caf50;
   color: #4caf50;
+  background-color: rgba(76, 175, 80, 0.15);
 }
 
 .vote-btn.accept:hover {
-  background-color: rgba(76, 175, 80, 0.1);
+  background-color: rgba(76, 175, 80, 0.3);
 }
 
 .vote-btn.reject {
   border-color: #f44336;
   color: #f44336;
+  background-color: rgba(244, 67, 54, 0.15);
 }
 
 .vote-btn.reject:hover {
-  background-color: rgba(244, 67, 54, 0.1);
+  background-color: rgba(244, 67, 54, 0.3);
 }
 
 .vote-btn.disabled {
