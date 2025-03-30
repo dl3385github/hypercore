@@ -1038,67 +1038,53 @@ function sendMediaStateViaDataChannel(dataChannel) {
 
 // Handle messages received via data channel
 function handleDataChannelMessage(peerId, message) {
-  // Check message type and handle accordingly
-  try {
-    console.log(`Received data channel message from ${peerId}, type: ${message.type}`);
+  console.log(`Received data channel message from ${peerId}:`, message);
+  
+  if (message.type === 'media-state') {
+    // Update remote media state UI
+    updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
+  } else if (message.type === 'transcript') {
+    // Handle transcript message from peer
+    // Get the speaker from the message or use the peer's username
+    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
+    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
     
-    switch (message.type) {
-      case 'media-state':
-        if (message.username && typeof message.videoEnabled === 'boolean' && typeof message.audioEnabled === 'boolean') {
-          updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
-        }
-        break;
-        
-      case 'chat-message':
-        if (message.username && message.text) {
-          addMessageToUI({
-            username: message.username,
-            message: message.text
-          });
-        }
-        break;
-        
-      case 'transcript':
-        if (message.username && message.text) {
-          updateTranscription(message.username, message.text);
-        }
-        break;
-        
-      case 'new-task':
-        if (message.task) {
-          console.log(`Received new task from peer ${peerId}:`, message.task);
-          handleNewTask(message.task, peerId);
-          addSystemMessage(`${message.task.createdBy || 'Someone'} created a new task. Please vote to accept or reject.`);
-        } else {
-          console.error(`Received invalid task data from peer ${peerId}:`, message);
-        }
-        break;
-        
-      case 'task-vote':
-        if (message.taskId && message.vote && message.peerId && message.username) {
-          console.log(`Received vote from peer ${peerId} (${message.username}): ${message.vote} for task ${message.taskId}`);
-          handleReceivedVote(message);
-          addSystemMessage(`${message.username} voted to ${message.vote} the task.`);
-        } else {
-          console.error(`Received invalid vote data from peer ${peerId}:`, message);
-        }
-        break;
-        
-      case 'system-message':
-        if (message.text) {
-          addSystemMessage(message.text);
-        }
-        break;
-        
-      default:
-        console.log(`Received unknown message type via data channel from ${peerId}:`, message);
+    // Make sure we store this username for the peer if we don't have it already
+    if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
+      peerUsernames.set(peerId, speaker);
     }
-  } catch (err) {
-    // Check if process is defined before logging to console
-    if (typeof process !== 'undefined') {
-      console.error(`Error handling data channel message from ${peerId}:`, err);
-    } else {
-      console.error(`Error handling data channel message from ${peerId}: ${err.message}`);
+    
+    // Skip empty or very short transcriptions
+    if (!message.text || message.text.trim().length < 3) {
+      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
+      return;
+    }
+    
+    // Update UI with the transcript
+    updateTranscription(speaker, message.text);
+    
+    // No need to add to transcript map again since updateTranscription already does this
+  } else if (message.type === 'screen-share-started') {
+    console.log(`Peer ${peerId} started screen sharing: ${message.sourceName}`);
+    addSystemMessage(`${message.username} started sharing their screen: ${message.sourceName}`);
+    
+    // Update active screen sharer
+    activeScreenSharePeerId = peerId;
+    
+    // No longer stopping our own share - we support multiple simultaneous shares
+  } else if (message.type === 'screen-share-stopped') {
+    console.log(`Peer ${peerId} stopped screen sharing`);
+    addSystemMessage(`${message.username} stopped sharing their screen`);
+    
+    // Remove the screen share from grid
+    const screenContainer = document.getElementById(`screen-share-${peerId}`);
+    if (screenContainer) {
+      screenContainer.remove();
+    }
+    
+    // Clear active screen sharer only if it was this peer
+    if (activeScreenSharePeerId === peerId) {
+      activeScreenSharePeerId = null;
     }
   }
 }
@@ -4026,9 +4012,8 @@ function stopVideoRecording() {
   
   try {
     console.log('Stopping video recording');
-    isVideoRecording = false;
     
-    // Fix: Set up onstop handler BEFORE stopping the recorder
+    // Set the onstop handler BEFORE stopping the recorder
     videoRecorder.onstop = () => {
       console.log(`Recording stopped with ${videoRecordedChunks.length} chunks`);
       
@@ -4039,22 +4024,25 @@ function stopVideoRecording() {
       
       // Create a blob from the recorded chunks
       const blob = new Blob(videoRecordedChunks, { type: 'video/webm' });
+      console.log(`Created video blob of ${blob.size} bytes`);
       
       // Save the video file and metadata
       saveRecordedVideo(blob);
-      
-      // Important: Reset the chunks array after saving to ensure we don't mix chunks
-      videoRecordedChunks = [];
     };
     
-    // Stop the recorder after the handler is defined
+    // Stop the recorder (this will trigger the onstop event handler)
     videoRecorder.stop();
-    console.log('MediaRecorder stop called');
+    isVideoRecording = false;
     
+    // Update UI
+    const recordButton = document.getElementById('record-video-btn');
+    if (recordButton) {
+      recordButton.textContent = 'Record Video';
+      recordButton.classList.remove('recording');
+    }
   } catch (error) {
     console.error('Error stopping video recording:', error);
     addSystemMessage(`Error stopping recording: ${error.message}`);
-    isVideoRecording = false;
   }
 }
 
@@ -5579,7 +5567,6 @@ function broadcastNewTask(task) {
         console.warn(`Cannot send task to peer ${peerId}: no open connection available`);
       }
     } catch (err) {
-      // Fix: Added error handling here to prevent forEach loop interruption
       if (processExists) {
         console.error(`Error broadcasting task to peer ${peerId}:`, err);
       } else {
@@ -5601,9 +5588,292 @@ function broadcastNewTask(task) {
   if (peers.size === 0) {
     addSystemMessage('No other participants in the call to share the task with');
   }
-  
-  // Return for better debugging
-  return broadcastCount;
+}
+
+// Create a task card in the UI
+function createTaskCard(task) {
+  try {
+    console.log(`Creating task card for task ${task.id}`);
+    
+    // Check if a task card for this task already exists
+    const existingCard = document.querySelector(`.task-card[data-task-id="${task.id}"]`);
+    if (existingCard) {
+      console.log(`Task card for task ${task.id} already exists`);
+      return existingCard;
+    }
+    
+    // Create task card container
+    const taskCardContainer = document.createElement('div');
+    taskCardContainer.className = 'task-card-container';
+    
+    // Create task card
+    const taskCard = document.createElement('div');
+    taskCard.className = `task-card ${task.status || 'pending'}`;
+    taskCard.dataset.taskId = task.id;
+    
+    // Create task header
+    const taskHeader = document.createElement('div');
+    taskHeader.className = 'task-header';
+    
+    const taskTitle = document.createElement('h3');
+    taskTitle.textContent = 'Task';
+    taskHeader.appendChild(taskTitle);
+    
+    const taskMeta = document.createElement('div');
+    taskMeta.className = 'task-meta';
+    
+    const taskCreator = document.createElement('span');
+    taskCreator.className = 'task-creator';
+    taskCreator.textContent = task.createdBy;
+    taskMeta.appendChild(taskCreator);
+    
+    const taskTime = document.createElement('span');
+    taskTime.className = 'task-time';
+    taskTime.textContent = new Date(task.createdAt).toLocaleTimeString();
+    taskMeta.appendChild(taskTime);
+    
+    taskHeader.appendChild(taskMeta);
+    taskCard.appendChild(taskHeader);
+    
+    // Create task content
+    const taskContent = document.createElement('div');
+    taskContent.className = 'task-content';
+    taskContent.textContent = task.text;
+    taskCard.appendChild(taskContent);
+    
+    // Create vote tracking area
+    const voteTracking = document.createElement('div');
+    voteTracking.className = 'task-votes';
+    
+    const acceptCount = document.createElement('span');
+    acceptCount.className = 'accept-count';
+    acceptCount.textContent = '0';
+    voteTracking.appendChild(acceptCount);
+    
+    const rejectCount = document.createElement('span');
+    rejectCount.className = 'reject-count';
+    rejectCount.textContent = '0';
+    voteTracking.appendChild(rejectCount);
+    
+    taskCard.appendChild(voteTracking);
+    
+    // Create vote buttons if the task is still pending
+    if (task.status === 'pending' || !task.status) {
+      const voteButtons = document.createElement('div');
+      voteButtons.className = 'task-actions';
+      
+      const acceptButton = document.createElement('button');
+      acceptButton.className = 'task-btn accept-btn';
+      acceptButton.textContent = 'Accept';
+      acceptButton.disabled = task.createdBy === usernameInput.value.trim(); // Disable for creator
+      
+      // Add accept vote handler
+      acceptButton.addEventListener('click', async function() {
+        // Disable both buttons to prevent double voting
+        acceptButton.disabled = true;
+        rejectButton.disabled = true;
+        
+        // Mark button as voted
+        acceptButton.classList.add('voted');
+        
+        try {
+          // Store the vote locally
+          const voteObj = {
+            peerId: ownPeerId,
+            username: usernameInput.value.trim() || 'You',
+            vote: 'accept'
+          };
+          
+          // Initialize vote map if needed
+          if (!taskVotes.has(task.id)) {
+            taskVotes.set(task.id, new Map());
+          }
+          
+          // Store vote
+          taskVotes.get(task.id).set(ownPeerId, voteObj);
+          
+          // Update vote counts
+          updateTaskVoteCounts(task.id, acceptCount, rejectCount);
+          
+          // Broadcast vote to peers
+          broadcastVote(task.id, 'accept');
+          
+          // Check if task is resolved
+          checkTaskResolution(task.id);
+        } catch (error) {
+          console.error('Error voting on task:', error);
+          // Re-enable buttons if there's an error
+          acceptButton.disabled = task.createdBy === usernameInput.value.trim();
+          rejectButton.disabled = false;
+          acceptButton.classList.remove('voted');
+        }
+      });
+      voteButtons.appendChild(acceptButton);
+      
+      const rejectButton = document.createElement('button');
+      rejectButton.className = 'task-btn reject-btn';
+      rejectButton.textContent = 'Reject';
+      rejectButton.disabled = task.createdBy === usernameInput.value.trim(); // Disable for creator
+      
+      // Add reject vote handler
+      rejectButton.addEventListener('click', async function() {
+        // Disable both buttons to prevent double voting
+        acceptButton.disabled = true;
+        rejectButton.disabled = true;
+        
+        // Mark button as voted
+        rejectButton.classList.add('voted');
+        
+        try {
+          // Store the vote locally
+          const voteObj = {
+            peerId: ownPeerId,
+            username: usernameInput.value.trim() || 'You',
+            vote: 'reject'
+          };
+          
+          // Initialize vote map if needed
+          if (!taskVotes.has(task.id)) {
+            taskVotes.set(task.id, new Map());
+          }
+          
+          // Store vote
+          taskVotes.get(task.id).set(ownPeerId, voteObj);
+          
+          // Update vote counts
+          updateTaskVoteCounts(task.id, acceptCount, rejectCount);
+          
+          // Broadcast vote to peers
+          broadcastVote(task.id, 'reject');
+          
+          // Check if task is resolved
+          checkTaskResolution(task.id);
+        } catch (error) {
+          console.error('Error voting on task:', error);
+          // Re-enable buttons if there's an error
+          acceptButton.disabled = task.createdBy === usernameInput.value.trim();
+          rejectButton.disabled = false;
+          rejectButton.classList.remove('voted');
+        }
+      });
+      voteButtons.appendChild(rejectButton);
+      
+      taskCard.appendChild(voteButtons);
+    } else {
+      // If task is already resolved, show status instead of vote buttons
+      const statusBadge = document.createElement('div');
+      statusBadge.className = `status-badge ${task.status}`;
+      statusBadge.textContent = task.status === 'accepted' ? 'Accepted ✓' : 'Rejected ✗';
+      
+      const statusContainer = document.createElement('div');
+      statusContainer.className = 'task-actions';
+      statusContainer.appendChild(statusBadge);
+      
+      taskCard.appendChild(statusContainer);
+    }
+    
+    // Add the task card to the container
+    taskCardContainer.appendChild(taskCard);
+    
+    // Add to messages container
+    const chatContainer = document.querySelector('.chat-container');
+    if (!chatContainer) {
+      console.error('Chat container not found');
+      return;
+    }
+    
+    // Check if messagesContainer exists and is a child of chatContainer
+    const messagesContainer = document.getElementById('messages');
+    if (messagesContainer && chatContainer.contains(messagesContainer)) {
+      // Insert before messages container if it exists
+      chatContainer.insertBefore(taskCardContainer, messagesContainer);
+    } else {
+      // Otherwise append at the top of the chat container
+      chatContainer.prepend(taskCardContainer);
+    }
+    
+    return taskCard;
+  } catch (error) {
+    console.error('Error creating task card:', error);
+    addSystemMessage(`Error creating task card: ${error.message}`);
+  }
+}
+
+// Add a task to the to-do list
+function addTaskToTodoList(task) {
+  try {
+    console.log(`Adding task ${task.id} to to-do list`);
+    
+    // Get the chat container
+    const chatContainer = document.querySelector('.chat-container');
+    if (!chatContainer) {
+      console.error('Chat container not found');
+      return;
+    }
+    
+    // Check if to-do list container already exists
+    let todoListContainer = document.querySelector('.todo-list-container');
+    if (!todoListContainer) {
+      // Create to-do list container
+      todoListContainer = document.createElement('div');
+      todoListContainer.className = 'todo-list-container';
+      todoListContainer.innerHTML = `<h3>To-Do List</h3>`;
+      
+      // Create to-do list
+      const todoList = document.createElement('ul');
+      todoList.className = 'todo-list';
+      todoListContainer.appendChild(todoList);
+      
+      // Add to chat container at top
+      // Check if messagesContainer exists and is a child of chatContainer
+      const messagesContainer = document.getElementById('messages');
+      if (messagesContainer && chatContainer.contains(messagesContainer)) {
+        // Insert before messages container if it exists
+        chatContainer.insertBefore(todoListContainer, messagesContainer);
+      } else {
+        // Otherwise append at the top of the chat container
+        chatContainer.prepend(todoListContainer);
+      }
+    }
+    
+    // Get the to-do list
+    const todoList = todoListContainer.querySelector('.todo-list');
+    
+    // Create task item
+    const taskItem = document.createElement('li');
+    taskItem.className = 'todo-item';
+    taskItem.dataset.taskId = task.id;
+    
+    // Add task text
+    const taskText = document.createElement('div');
+    taskText.className = 'todo-text';
+    taskText.textContent = task.text;
+    taskItem.appendChild(taskText);
+    
+    // Add task meta info
+    const taskMeta = document.createElement('div');
+    taskMeta.className = 'todo-meta';
+    
+    const taskCreator = document.createElement('span');
+    taskCreator.className = 'todo-creator';
+    taskCreator.textContent = `Created by ${task.createdBy}`;
+    taskMeta.appendChild(taskCreator);
+    
+    const taskTime = document.createElement('span');
+    taskTime.className = 'todo-time';
+    taskTime.textContent = new Date(task.createdAt).toLocaleTimeString();
+    taskMeta.appendChild(taskTime);
+    
+    taskItem.appendChild(taskMeta);
+    
+    // Add to to-do list
+    todoList.appendChild(taskItem);
+    
+    return taskItem;
+  } catch (error) {
+    console.error('Error adding task to to-do list:', error);
+    addSystemMessage(`Error adding task to to-do list: ${error.message}`);
+  }
 }
 
 // Broadcast a vote on a task to all peers
@@ -5656,7 +5926,6 @@ function broadcastVote(taskId, voteType) {
           console.warn(`Cannot send vote to peer ${peerId}: no open connection available`);
         }
       } catch (err) {
-        // Fix: Added complete error handling here to prevent forEach loop interruption
         if (processExists) {
           console.error(`Error broadcasting vote to peer ${peerId}:`, err);
         } else {
