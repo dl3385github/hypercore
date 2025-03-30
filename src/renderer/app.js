@@ -668,116 +668,86 @@ function generateDefaultRoomId() {
 
 // Join the chat with a username and room
 async function joinChat() {
-  const username = usernameInput.value.trim();
-  const roomId = roomInput.value.trim() || generateDefaultRoomId();
-  
-  if (!username) {
-    alert('Please enter a username');
-    return;
-  }
-  
   try {
-    // Try to get user media (camera and microphone)
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        },
-        audio: true
-      });
-      
-      // If we got here, both video and audio are available
-      isVideoEnabled = true;
-      isAudioEnabled = true;
-      
-    } catch (mediaError) {
-      // Try fallback options if full access wasn't granted
-      console.warn('Could not access both camera and microphone, trying fallback options', mediaError);
-      
-      try {
-        // Try just audio
-        localStream = await navigator.mediaDevices.getUserMedia({
-          video: false,
-          audio: true
-        });
-        isVideoEnabled = false;
-        isAudioEnabled = true;
-        addSystemMessage('Camera access not available. Audio only mode enabled.');
-      } catch (audioError) {
-        // No media devices available
-        console.warn('Could not access any media devices', audioError);
-        localStream = null;
-        isVideoEnabled = false;
-        isAudioEnabled = false;
-        addSystemMessage('⚠️ No camera or microphone access. Voice and video unavailable.');
-      }
+    // Get form values
+    const username = usernameInput.value.trim();
+    const roomId = roomInput.value.trim() || generateDefaultRoomId();
+    
+    // Validate required fields
+    if (!username) {
+      alert('Please enter a username to join the chat');
+      return;
     }
     
-    // If we have a stream, set it up for the local video display
-    if (localStream) {
-      // Setup local video display
-      localVideo.srcObject = localStream;
-      
-      // Check what tracks we got
-      const hasMicrophone = localStream.getAudioTracks().length > 0;
-      const hasCamera = localStream.getVideoTracks().length > 0;
-      
-      // Store the IDs of the devices we're actually using
-      if (hasMicrophone) {
-        const audioTrack = localStream.getAudioTracks()[0];
-        if (audioTrack.getSettings && audioTrack.getSettings().deviceId) {
-          selectedMicrophoneId = audioTrack.getSettings().deviceId;
-          console.log(`Using microphone: ${selectedMicrophoneId}`);
-        }
-      }
-      
-      if (hasCamera) {
-        const videoTrack = localStream.getVideoTracks()[0];
-        if (videoTrack.getSettings && videoTrack.getSettings().deviceId) {
-          selectedWebcamId = videoTrack.getSettings().deviceId;
-          console.log(`Using camera: ${selectedWebcamId}`);
-        }
-      }
-      
-      // If we have audio, setup the audio recording for transcription
-      if (hasMicrophone) {
-        setupMediaRecording();
-      }
-    }
-
-    // Set app username
-    await window.electronAPI.setUsername(username);
+    // Hide the join screen
+    document.getElementById('join-screen').style.display = 'none';
     
-    // Join the specified room or use the default
-    const joinRoomResult = await window.electronAPI.joinRoom(roomId);
+    // Show the chat screen
+    const chatScreen = document.getElementById('chat-screen');
+    chatScreen.style.display = 'flex';
     
-    if (!joinRoomResult.success) {
-      throw new Error(joinRoomResult.error || 'Failed to join room');
+    // Set room ID in chat header
+    document.getElementById('room-id-display').textContent = roomId;
+    
+    // Show current username
+    const userElement = document.getElementById('current-user-display');
+    if (userElement) {
+      userElement.textContent = username;
     }
     
-    // Get and display our own peer ID
-    ownPeerId = await window.electronAPI.getOwnId(); // Store in our variable
-    console.log(`Our peer ID: ${ownPeerId}`);
+    // Initialize the core components
+    await window.electronAPI.initializeHypercore(roomId, username);
     
-    // Track the room we're in
-    currentRoomSpan.textContent = roomId;
+    // Start media
+    await setupLocalMedia();
+    
+    // Initialize any UI elements
+    initializeAppUI();
+    
+    // Create the leave button
+    const leaveButton = document.createElement('button');
+    leaveButton.id = 'leave-button';
+    leaveButton.className = 'leave-btn';
+    leaveButton.textContent = 'Leave Room';
+    leaveButton.addEventListener('click', () => handleLeaveRoom());
+    
+    // Add to toolbar
+    const toolbar = document.querySelector('.chat-controls');
+    if (toolbar) {
+      toolbar.appendChild(leaveButton);
+    }
+    
+    // Update connection count
+    updateConnectionCount();
+    
+    // Add a welcome message
+    addSystemMessage(`Welcome to room ${roomId}, ${username}!`);
+    addSystemMessage('Waiting for peers to join...');
+    
+    // Set save transcript handler
+    document.getElementById('save-transcript-btn').addEventListener('click', saveAllTranscripts);
+    
+    // Add event listener for task creation
+    const createTaskElement = document.getElementById('create-task-btn');
+    if (!createTaskElement) {
+      // If it doesn't exist yet, create it
+      createTaskButton();
+    }
+    
+    // Update UI state
+    updateCreateTaskButton();
+    
+    // Add window close event handler
+    window.addEventListener('beforeunload', handleAppExit);
+    
+    console.log(`Joined room ${roomId} as ${username}`);
+    
     currentRoom = roomId;
     
-    // Switch to chat screen
-    loginScreen.classList.add('hidden');
-    chatScreen.classList.remove('hidden');
-    
-    // Add welcome message
-    addSystemMessage(`Welcome ${username}! You've joined room: ${roomId}`);
-    
-    // Focus on message input
-    messageInput.focus();
-    
-    // Don't show transcript popup by default
-    // transcriptPopup.classList.remove('hidden');
+    return roomId;
   } catch (error) {
-    alert(`Error joining chat: ${error.message || 'Unknown error'}`);
+    console.error('Error joining chat:', error);
+    alert(`Failed to join the chat: ${error.message}`);
   }
 }
 
@@ -1164,77 +1134,10 @@ function handleDataChannelMessage(peerId, message) {
     }
   } else if (message.type === 'new-task') {
     // Handle new task from peer
-    if (message.task) {
-      console.log(`Received new task via data channel from peer ${peerId}:`, message.task);
-      
-      // Use the same handler as in handlePeerData to ensure consistent processing
-      // But first check if we already have this task
-      const existingTaskIndex = tasks.findIndex(t => t.id === message.task.id);
-      if (existingTaskIndex !== -1) {
-        console.log(`Task ${message.task.id} already exists, skipping`);
-        return;
-      }
-      
-      // Store the task
-      tasks.push(message.task);
-      
-      // Initialize vote tracking
-      if (!taskVotes.has(message.task.id)) {
-        taskVotes.set(message.task.id, new Map());
-      }
-      
-      // If this is an accepted task, add it to the to-do list
-      if (message.task.status === 'accepted') {
-        addTaskToTodoList(message.task);
-        addSystemMessage(`Task added to to-do list: "${message.task.text}"`);
-      } else if (message.task.status === 'pending') {
-        // Set as current pending task if we don't have one already
-        if (!isPendingTask || !currentPendingTask) {
-          console.log(`Setting task ${message.task.id} as current pending task`);
-          currentPendingTask = message.task;
-          isPendingTask = true;
-          
-          // Create and show the task card
-          createTaskCard(message.task);
-          
-          // Display notification
-          const peerUsername = peerUsernames.get(peerId) || message.task.createdBy;
-          addSystemMessage(`New task from ${peerUsername}: "${message.task.text}". Please vote to accept or reject.`);
-        } else {
-          console.log(`Already have a pending task ${currentPendingTask.id}, storing new task ${message.task.id} for later`);
-          // Still add it to tasks array for tracking
-          addSystemMessage(`New task received but will be shown after current task is resolved.`);
-        }
-      }
-      
-      // Update last task timestamp for next task creation
-      if (message.task.toTimestamp > lastTaskTimestamp) {
-        lastTaskTimestamp = message.task.toTimestamp;
-      }
-    } else {
-      console.error('Received malformed task object via data channel:', message);
-    }
+    handleNewTask(message.task, peerId);
   } else if (message.type === 'task-vote') {
     // Handle task vote from peer
-    if (message.taskId !== undefined && message.vote && message.peerId && message.username) {
-      // Process the vote
-      handleReceivedVote(message);
-      console.log(`Received vote from ${message.username} via data channel: ${message.vote} for task ${message.taskId}`);
-      
-      // Show message about the vote
-      addSystemMessage(`${message.username} voted to ${message.vote} the task.`);
-    } else {
-      console.error('Received malformed vote object via data channel:', message);
-    }
-  } else {
-    console.log(`Received unknown message type from ${peerId} via data channel:`, message);
-    
-    // Process message using main handler as a fallback
-    try {
-      handlePeerData(peerId, JSON.stringify(message));
-    } catch (err) {
-      console.error(`Error forwarding data channel message to peer data handler:`, err);
-    }
+    handleTaskVote(message.taskId, message.username, message.vote, peerId);
   }
 }
 
@@ -4152,18 +4055,12 @@ function startVideoRecording() {
         
         // Draw background rectangle for to-do list
         ctx.fillStyle = 'rgba(45, 45, 45, 0.7)'; // Match todo-list-container background
-        ctx.fillRect(chatAreaX + 10, todoY + 10, chatAreaWidth - 20, Math.min(250, 70 * acceptedTasks.length));
-        
-        // Debug info about accepted tasks
-        console.log(`Drawing ${acceptedTasks.length} accepted tasks in video recording:`);
-        acceptedTasks.forEach((task, i) => {
-          console.log(`Task ${i+1}: ${task.text.substring(0, 30)}... (ID: ${task.id})`);
-        });
+        ctx.fillRect(chatAreaX + 10, todoY + 10, chatAreaWidth - 20, Math.min(200, 50 * acceptedTasks.length));
         
         // Draw each to-do item
         ctx.font = '16px Arial';
         acceptedTasks.forEach((task, index) => {
-          const itemY = todoY + 40 + (index * 70);
+          const itemY = todoY + 40 + (index * 60);
           
           // Draw a separator line between tasks (except before the first one)
           if (index > 0) {
@@ -4207,8 +4104,6 @@ function startVideoRecording() {
           ctx.fillText(`Added by ${task.createdBy} at ${new Date(task.createdAt).toLocaleTimeString()}`, 
                        textX, lineY + 20);
         });
-      } else {
-        console.log('No to-do list items to display in video recording');
       }
       
       // Draw pending task card if there is one
@@ -5772,7 +5667,7 @@ function renderFrame() {
       const textX = chatAreaX + 10 + usernameWidth;
       
       // Simple word wrap
-      const words = transcript.text.split(' ');
+      const words = transcript.content.split(' ');
       let line = '';
       let lineY = transcriptY;
       
@@ -5840,6 +5735,7 @@ async function createTask() {
     
     console.log("Transcript data structure:", Array.from(transcripts.entries()).map(([username, entries]) => 
       `${username}: ${entries.length} entries`));
+    console.log("Last task timestamp:", new Date(lastTaskTimestamp).toISOString(), "Now:", new Date(now).toISOString());
     
     // Collect transcripts from lastTaskTimestamp to now
     let transcriptsToSummarize = [];
@@ -5994,9 +5890,6 @@ async function createTask() {
     
     // Create a Map to store votes for this task
     taskVotes.set(taskId, new Map());
-    
-    // Create self vote but DO NOT auto-accept
-    // Allow the creator to vote like everyone else
     
     // Update last task timestamp for next task creation
     lastTaskTimestamp = now;
@@ -6252,6 +6145,9 @@ function checkTaskResolution(taskId) {
     isPendingTask = false;
     currentPendingTask = null;
     
+    // Enable the create task button
+    updateCreateTaskButton();
+    
     console.log(`Task ${taskId} has been accepted`);
   }
   
@@ -6266,6 +6162,9 @@ function checkTaskResolution(taskId) {
     // Remove pending task status
     isPendingTask = false;
     currentPendingTask = null;
+    
+    // Enable the create task button
+    updateCreateTaskButton();
     
     console.log(`Task ${taskId} has been rejected`);
   }
@@ -6315,62 +6214,21 @@ function broadcastVote(taskId, voteType) {
   
   // Broadcast to all peers
   let broadcastCount = 0;
-  let failCount = 0;
-  
-  if (peers.size === 0) {
-    console.warn('No peers connected to broadcast vote to');
-    return;
-  }
-  
-  // Log peer connections for debugging
-  console.log('Current peer connections for vote broadcast:');
   peers.forEach((peer, peerId) => {
-    console.log(`Peer ${peerId}: connection ${peer.connection ? 'exists' : 'missing'}, open: ${peer.connection?.open}`);
-    console.log(`Peer ${peerId}: data channel ${dataChannels.has(peerId) ? 'exists' : 'missing'}, state: ${dataChannels.get(peerId)?.readyState || 'N/A'}`);
-  });
-  
-  peers.forEach((peer, peerId) => {
-    // Try to send via data channel first (more reliable)
-    const dataChannel = dataChannels.get(peerId);
-    let sentSuccessfully = false;
-    
-    // 1. Try data channel first if available and open
-    if (dataChannel && dataChannel.readyState === 'open') {
-      try {
-        dataChannel.send(JSON.stringify(voteMsg));
-        console.log(`Sent vote to peer ${peerId} via data channel`);
-        broadcastCount++;
-        sentSuccessfully = true;
-      } catch (err) {
-        console.error(`Failed to send vote via data channel to peer ${peerId}:`, err);
-      }
-    }
-    
-    // 2. Try peer connection send if data channel failed or not available
-    if (!sentSuccessfully && peer.connection && peer.connection.open) {
+    if (peer.connection && peer.connection.open) {
       try {
         peer.connection.send(JSON.stringify(voteMsg));
-        console.log(`Sent vote to peer ${peerId} via peer connection`);
+        console.log(`Sharing vote with peer ${peerId}`);
         broadcastCount++;
-        sentSuccessfully = true;
       } catch (err) {
-        console.error(`Failed to send vote via peer connection to peer ${peerId}:`, err);
+        console.error(`Error sending vote to peer ${peerId}:`, err);
       }
-    }
-    
-    // Track failures
-    if (!sentSuccessfully) {
-      failCount++;
-      console.warn(`Could not send vote to peer ${peerId}: all methods failed`);
+    } else {
+      console.warn(`Cannot send vote to peer ${peerId}: connection not open`);
     }
   });
   
-  console.log(`Broadcast vote to ${broadcastCount} peers out of ${peers.size} total peers. Failed: ${failCount}`);
-  
-  if (failCount > 0 && broadcastCount === 0) {
-    // If all broadcasts failed, show an error
-    addSystemMessage('Warning: Could not share your vote with other participants due to connection issues.');
-  }
+  console.log(`Broadcast vote to ${broadcastCount} peers out of ${peers.size} total peers`);
 }
 
 // Handle a vote received from a peer
@@ -6678,7 +6536,7 @@ function handlePeerData(peerId, data) {
       case 'new-task':
         if (message.task) {
           // Validate the task object
-          const requiredFields = ['id', 'text', 'createdAt', 'createdBy', 'status'];
+          const requiredFields = ['id', 'text', 'createdAt', 'createdBy', 'status', 'fromTimestamp', 'toTimestamp'];
           if (requiredFields.every(field => message.task[field] !== undefined)) {
             // Check if we already have this task
             const existingTaskIndex = tasks.findIndex(t => t.id === message.task.id);
@@ -6701,9 +6559,38 @@ function handlePeerData(peerId, data) {
             if (message.task.status === 'accepted') {
               addTaskToTodoList(message.task);
               addSystemMessage(`Task added to to-do list: "${message.task.text}"`);
+              
+              // Update last task timestamp if this accepted task is more recent
+              if (message.task.toTimestamp > lastTaskTimestamp) {
+                console.log(`Updating lastTaskTimestamp from ${new Date(lastTaskTimestamp).toISOString()} to ${new Date(message.task.toTimestamp).toISOString()}`);
+                lastTaskTimestamp = message.task.toTimestamp;
+              }
             } else if (message.task.status === 'pending') {
-              // Set as current pending task if we don't have one already
-              if (!isPendingTask || !currentPendingTask) {
+              // Check if we already have a pending task
+              if (isPendingTask && currentPendingTask) {
+                // If current pending task is newer, keep it; if older, replace it
+                if (currentPendingTask.createdAt > message.task.createdAt) {
+                  console.log(`Already have a newer pending task ${currentPendingTask.id}, storing new task ${message.task.id} for later`);
+                  addSystemMessage(`New task received from ${message.task.createdBy} but will be queued until current task is resolved.`);
+                } else {
+                  console.log(`Received older pending task ${message.task.id}, replacing current task ${currentPendingTask.id}`);
+                  
+                  // Remove the current task card
+                  const existingTaskCard = document.getElementById('task-card-container');
+                  if (existingTaskCard) {
+                    existingTaskCard.remove();
+                  }
+                  
+                  // Set the new task as current
+                  currentPendingTask = message.task;
+                  
+                  // Create and show the new task card
+                  createTaskCard(message.task);
+                  
+                  // Display notification
+                  addSystemMessage(`New task from ${message.task.createdBy}: "${message.task.text}". Please vote to accept or reject.`);
+                }
+              } else {
                 console.log(`Setting task ${message.task.id} as current pending task`);
                 currentPendingTask = message.task;
                 isPendingTask = true;
@@ -6713,19 +6600,26 @@ function handlePeerData(peerId, data) {
                 
                 // Display notification
                 addSystemMessage(`New task from ${message.task.createdBy}: "${message.task.text}". Please vote to accept or reject.`);
-              } else {
-                console.log(`Already have a pending task ${currentPendingTask.id}, storing new task ${message.task.id} for later`);
-                // Still add it to tasks array for tracking
-                addSystemMessage(`New task received from ${message.task.createdBy} but will be shown after current task is resolved.`);
+              }
+              
+              // Update UI of Create Task button based on pending state
+              const createTaskBtn = document.getElementById('create-task-btn');
+              if (createTaskBtn) {
+                createTaskBtn.disabled = isPendingTask;
+                createTaskBtn.title = isPendingTask ? 
+                  'Cannot create a new task while another is pending' : 
+                  'Create a task from conversation';
               }
             }
             
-            // Update last task timestamp for next task creation
+            // Update last task timestamp for next task creation if more recent
             if (message.task.toTimestamp > lastTaskTimestamp) {
+              console.log(`Updating lastTaskTimestamp from ${new Date(lastTaskTimestamp).toISOString()} to ${new Date(message.task.toTimestamp).toISOString()}`);
               lastTaskTimestamp = message.task.toTimestamp;
             }
           } else {
-            console.error('Received malformed task object:', message.task);
+            console.error('Received malformed task object:', message.task, 'Missing fields:', 
+              requiredFields.filter(field => message.task[field] === undefined));
           }
         }
         break;
@@ -6735,7 +6629,7 @@ function handlePeerData(peerId, data) {
         if (message.taskId !== undefined && message.vote && message.peerId && message.username) {
           // Process the vote
           handleReceivedVote(message);
-          console.log(`Received vote from ${message.username}: ${message.vote}`);
+          console.log(`Received vote from ${message.username}: ${message.vote} for task ${message.taskId}`);
           
           // Show message about the vote
           addSystemMessage(`${message.username} voted to ${message.vote} the task.`);
@@ -6820,70 +6714,27 @@ function broadcastNewTask(task) {
   
   // Broadcast to all peers
   let broadcastCount = 0;
-  let failCount = 0;
-  
-  if (peers.size === 0) {
-    console.warn('No peers connected to broadcast task to');
-    addSystemMessage('No other participants are connected to share this task with');
-    return;
-  }
-  
-  // Log all peer connections for debugging
-  console.log('Current peer connections:');
-  peers.forEach((peer, peerId) => {
-    console.log(`Peer ${peerId}: connection ${peer.connection ? 'exists' : 'missing'}, open: ${peer.connection?.open}`);
-  });
-  
   peers.forEach((peer, peerId) => {
     if (peer.connection && peer.connection.open) {
       try {
-        // Try to send via data channel first (more reliable)
-        const dataChannel = dataChannels.get(peerId);
-        if (dataChannel && dataChannel.readyState === 'open') {
-          dataChannel.send(JSON.stringify(taskMsg));
-          console.log(`Sharing new task with peer ${peerId} via data channel`);
-          broadcastCount++;
-        } 
-        // Fallback to peer connection
-        else if (peer.connection.send) {
-          peer.connection.send(JSON.stringify(taskMsg));
-          console.log(`Sharing new task with peer ${peerId} via peer connection`);
-          broadcastCount++;
-        } else {
-          console.error(`No way to send task to peer ${peerId}: data channel not open and connection doesn't support send`);
-          failCount++;
-        }
+        console.log(`Attempting to send task to peer ${peerId}`);
+        peer.connection.send(JSON.stringify(taskMsg));
+        console.log(`Successfully shared new task with peer ${peerId}`);
+        broadcastCount++;
       } catch (err) {
         console.error(`Error sending task to peer ${peerId}:`, err);
-        failCount++;
-        
-        // Try alternative method if first one failed
-        try {
-          const dataChannel = dataChannels.get(peerId);
-          if (!dataChannel && peer.connection.send) {
-            peer.connection.send(JSON.stringify(taskMsg));
-            console.log(`Retried sharing new task with peer ${peerId} via peer connection`);
-            broadcastCount++;
-            failCount--; // Reduce fail count since we succeeded on retry
-          }
-        } catch (retryErr) {
-          console.error(`Retry error sending task to peer ${peerId}:`, retryErr);
-        }
       }
     } else {
-      console.warn(`Cannot send task to peer ${peerId}: connection not open`);
-      failCount++;
+      console.warn(`Cannot send task to peer ${peerId}: connection not open. Connection state:`, 
+        peer.connection ? peer.connection.readyState : 'No connection object');
     }
   });
   
-  const message = `Broadcast task to ${broadcastCount} peers out of ${peers.size} total peers. Failed: ${failCount}`;
-  console.log(message);
+  console.log(`Broadcast task to ${broadcastCount} peers out of ${peers.size} total peers`);
   
-  if (failCount > 0 && broadcastCount === 0) {
-    // If all broadcasts failed, show an error
-    addSystemMessage('Warning: Could not share task with other participants due to connection issues.');
-  } else if (broadcastCount > 0) {
-    addSystemMessage(`Task shared with ${broadcastCount} participants.`);
+  // If no peers received the task, show a message
+  if (broadcastCount === 0 && peers.size > 0) {
+    addSystemMessage('Warning: Could not share task with any peers. They may not be able to vote.');
   }
 }
 
@@ -6954,5 +6805,222 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isDebugMode) {
       document.body.appendChild(debugContainer);
     }
+    
+    // Initialize the create task button state
+    const createTaskBtn = document.getElementById('create-task-btn');
+    if (createTaskBtn) {
+      // Set initial state
+      updateCreateTaskButton();
+      
+      // Add click handler if not already added
+      if (!createTaskBtn.hasEventListener) {
+        createTaskBtn.addEventListener('click', () => {
+          createTask().catch(err => console.error('Error creating task:', err));
+        });
+        createTaskBtn.hasEventListener = true;
+      }
+    }
   }
 });
+
+// Function to update Create Task button state
+function updateCreateTaskButton() {
+  const createTaskBtn = document.getElementById('create-task-btn');
+  if (createTaskBtn) {
+    createTaskBtn.disabled = isPendingTask;
+    createTaskBtn.title = isPendingTask ? 
+      'Cannot create a new task while another is pending' : 
+      'Create a task from conversation';
+    
+    if (isPendingTask) {
+      createTaskBtn.classList.add('disabled');
+    } else {
+      createTaskBtn.classList.remove('disabled');
+    }
+    
+    console.log(`Updated Create Task button state: ${isPendingTask ? 'disabled' : 'enabled'}`);
+  }
+}
+
+// Create a task button in the UI if it doesn't exist yet
+function createTaskButton() {
+  // Check if it already exists
+  let createTaskBtn = document.getElementById('create-task-btn');
+  if (createTaskBtn) return createTaskBtn;
+  
+  // Get chat container
+  const chatContainer = document.querySelector('.chat-container');
+  if (!chatContainer) {
+    console.error('Chat container not found, cannot create task button');
+    return null;
+  }
+  
+  // Create button container
+  const buttonContainer = document.createElement('div');
+  buttonContainer.className = 'task-button-container';
+  buttonContainer.style.display = 'flex';
+  buttonContainer.style.justifyContent = 'center';
+  buttonContainer.style.marginBottom = '10px';
+  
+  // Create button
+  createTaskBtn = document.createElement('button');
+  createTaskBtn.id = 'create-task-btn';
+  createTaskBtn.className = 'task-btn create-task-btn';
+  createTaskBtn.textContent = 'Create Task from Conversation';
+  createTaskBtn.style.padding = '8px 16px';
+  createTaskBtn.style.backgroundColor = '#4a69bd';
+  createTaskBtn.style.color = 'white';
+  createTaskBtn.style.border = 'none';
+  createTaskBtn.style.borderRadius = '4px';
+  createTaskBtn.style.cursor = 'pointer';
+  createTaskBtn.style.fontWeight = 'bold';
+  
+  // Add hover effect
+  createTaskBtn.style.transition = 'background-color 0.2s';
+  createTaskBtn.addEventListener('mouseover', () => {
+    if (!createTaskBtn.disabled) {
+      createTaskBtn.style.backgroundColor = '#5878d4';
+    }
+  });
+  createTaskBtn.addEventListener('mouseout', () => {
+    if (!createTaskBtn.disabled) {
+      createTaskBtn.style.backgroundColor = '#4a69bd';
+    }
+  });
+  
+  // Add click handler
+  createTaskBtn.addEventListener('click', () => {
+    createTask().catch(err => console.error('Error creating task:', err));
+  });
+  createTaskBtn.hasEventListener = true;
+  
+  // Add to container
+  buttonContainer.appendChild(createTaskBtn);
+  
+  // Append to DOM
+  const messagesContainer = document.querySelector('.messages-container');
+  if (messagesContainer && chatContainer.contains(messagesContainer)) {
+    chatContainer.insertBefore(buttonContainer, messagesContainer);
+  } else {
+    chatContainer.appendChild(buttonContainer);
+  }
+  
+  // Set initial state
+  updateCreateTaskButton();
+  
+  return createTaskBtn;
+}
+
+// Initialize UI components when the app is ready
+function initializeAppUI() {
+  // Create task button
+  createTaskButton();
+  
+  // Set up other UI components as needed
+}
+
+// Call initialization when DOM is loaded
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeAppUI);
+} else {
+  // If DOMContentLoaded has already fired
+  initializeAppUI();
+}
+
+// Setup local media (camera and microphone)
+async function setupLocalMedia() {
+  try {
+    // Try to get user media (camera and microphone)
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        },
+        audio: true
+      });
+      
+      // If we got here, both video and audio are available
+      isVideoEnabled = true;
+      isAudioEnabled = true;
+      
+    } catch (mediaError) {
+      // Try fallback options if full access wasn't granted
+      console.warn('Could not access both camera and microphone, trying fallback options', mediaError);
+      
+      try {
+        // Try just audio
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: false,
+          audio: true
+        });
+        isVideoEnabled = false;
+        isAudioEnabled = true;
+        addSystemMessage('Camera access not available. Audio only mode enabled.');
+      } catch (audioError) {
+        // No media devices available
+        console.warn('Could not access any media devices', audioError);
+        localStream = null;
+        isVideoEnabled = false;
+        isAudioEnabled = false;
+        addSystemMessage('⚠️ No camera or microphone access. Voice and video unavailable.');
+      }
+    }
+    
+    // If we have a stream, set it up for the local video display
+    if (localStream) {
+      // Setup local video display
+      localVideo.srcObject = localStream;
+      
+      // Check what tracks we got
+      const hasMicrophone = localStream.getAudioTracks().length > 0;
+      const hasCamera = localStream.getVideoTracks().length > 0;
+      
+      // Store the IDs of the devices we're actually using
+      if (hasMicrophone) {
+        const audioTrack = localStream.getAudioTracks()[0];
+        if (audioTrack.getSettings && audioTrack.getSettings().deviceId) {
+          selectedMicrophoneId = audioTrack.getSettings().deviceId;
+          console.log(`Using microphone: ${selectedMicrophoneId}`);
+        }
+      }
+      
+      if (hasCamera) {
+        const videoTrack = localStream.getVideoTracks()[0];
+        if (videoTrack.getSettings && videoTrack.getSettings().deviceId) {
+          selectedWebcamId = videoTrack.getSettings().deviceId;
+          console.log(`Using camera: ${selectedWebcamId}`);
+        }
+      }
+      
+      // If we have audio, setup the audio recording for transcription
+      if (hasMicrophone) {
+        setupMediaRecording();
+      }
+    }
+    
+    // Set video/audio toggle buttons to match initial state
+    const videoToggleBtn = document.getElementById('toggle-video');
+    const audioToggleBtn = document.getElementById('toggle-audio');
+    
+    if (videoToggleBtn) {
+      videoToggleBtn.textContent = isVideoEnabled ? '📷 Video On' : '🚫 Video Off';
+      videoToggleBtn.classList.toggle('control-active', isVideoEnabled);
+    }
+    
+    if (audioToggleBtn) {
+      audioToggleBtn.textContent = isAudioEnabled ? '🎤 Audio On' : '🔇 Audio Off';
+      audioToggleBtn.classList.toggle('control-active', isAudioEnabled);
+    }
+    
+    // Get and store our own peer ID
+    ownPeerId = await window.electronAPI.getOwnId();
+    console.log(`Our peer ID: ${ownPeerId}`);
+    
+    return true;
+  } catch (error) {
+    console.error('Error setting up local media:', error);
+    addSystemMessage(`Error setting up camera/microphone: ${error.message}`);
+    return false;
+  }
+}
