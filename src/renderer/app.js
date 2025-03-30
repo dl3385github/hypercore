@@ -3650,15 +3650,32 @@ function startVideoRecording() {
       }
     }
     
-    // Create MediaRecorder for the combined stream
-    const options = { mimeType: 'video/webm;codecs=vp9,opus' };
+    // Determine the best supported MIME type for video recording
+    let mimeType = 'video/webm;codecs=vp9,opus';
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = 'video/webm;codecs=vp8,opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm;codecs=vp8';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'video/webm';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = '';
+            console.warn('No preferred MIME types are supported, using browser default');
+          }
+        }
+      }
+    }
+    
+    // Create MediaRecorder with appropriate options
+    const options = mimeType ? { mimeType } : {};
+    console.log(`Creating video recorder with MIME type: ${mimeType || 'browser default'}`);
     videoRecorder = new MediaRecorder(canvasStream, options);
     
     // Handle data available event
     videoRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
         videoRecordedChunks.push(event.data);
-        console.log(`Recorded video chunk: ${event.data.size} bytes`);
+        console.log(`Recorded video chunk: ${event.data.size} bytes, type: ${event.data.type}`);
       }
     };
     
@@ -4263,8 +4280,15 @@ function stopVideoRecording() {
         return;
       }
       
-      // Create a blob from the recorded chunks
-      const blob = new Blob(videoRecordedChunks, { type: 'video/webm' });
+      // Get the MIME type from the recorder or fallback to webm
+      const mimeType = (videoRecorder.mimeType && videoRecorder.mimeType.includes('video/')) 
+                     ? videoRecorder.mimeType 
+                     : 'video/webm';
+      
+      console.log(`Creating final video blob with MIME type: ${mimeType}`);
+      
+      // Create a blob from the recorded chunks with explicit MIME type
+      const blob = new Blob(videoRecordedChunks, { type: mimeType });
       
       // Save the video file and metadata
       saveRecordedVideo(blob);
@@ -4291,31 +4315,49 @@ function saveRecordedVideo(videoBlob) {
       transcripts: recordedTranscripts
     };
     
-    // Save metadata as JSON
+    // Ensure proper MIME type for video blob
+    const videoType = videoBlob.type || 'video/webm';
+    if (videoType !== 'video/webm') {
+      console.warn(`Video blob has unexpected MIME type: ${videoType}, forcing video/webm`);
+      // Create a new blob with the correct MIME type
+      videoBlob = new Blob([videoBlob], { type: 'video/webm' });
+    }
+    
+    // Save metadata as JSON - create and save the file separately to avoid confusion
     const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
     const metadataUrl = URL.createObjectURL(metadataBlob);
     const metadataLink = document.createElement('a');
     metadataLink.href = metadataUrl;
     metadataLink.download = `meeting-metadata-${roomName}-${timestamp}.json`;
     
-    // Save video
+    // Save video - ensure it has .webm extension and is downloaded first
     const videoUrl = URL.createObjectURL(videoBlob);
     const videoLink = document.createElement('a');
     videoLink.href = videoUrl;
-    videoLink.download = `meeting-recording-${roomName}-${timestamp}.webm`;
     
-    // Trigger downloads
+    // Ensure the filename has the .webm extension
+    let videoFilename = `meeting-recording-${roomName}-${timestamp}.webm`;
+    // Double-check that the extension is included
+    if (!videoFilename.toLowerCase().endsWith('.webm')) {
+      videoFilename += '.webm';
+    }
+    videoLink.download = videoFilename;
+    
+    // Trigger video download first
     document.body.appendChild(videoLink);
     videoLink.click();
     document.body.removeChild(videoLink);
     
-    document.body.appendChild(metadataLink);
-    metadataLink.click();
-    document.body.removeChild(metadataLink);
-    
-    // Clean up URLs
-    URL.revokeObjectURL(videoUrl);
-    URL.revokeObjectURL(metadataUrl);
+    // Short delay before triggering metadata download to avoid confusion
+    setTimeout(() => {
+      document.body.appendChild(metadataLink);
+      metadataLink.click();
+      document.body.removeChild(metadataLink);
+      
+      // Clean up URLs
+      URL.revokeObjectURL(videoUrl);
+      URL.revokeObjectURL(metadataUrl);
+    }, 1000);
     
     addSystemMessage('Video recording saved successfully.');
   } catch (error) {
@@ -6530,21 +6572,40 @@ function handlePeerData(peerId, data) {
               addTaskToTodoList(message.task);
               addSystemMessage(`Task added to to-do list: "${message.task.text}"`);
             } else if (message.task.status === 'pending') {
-              // There should only be one pending task at a time across all peers
+              // Check if there's already a pending task with different ID
               if (isPendingTask && currentPendingTask && currentPendingTask.id !== message.task.id) {
-                console.warn(`Received new pending task ${message.task.id} but we already have pending task ${currentPendingTask.id}`);
-                // If the new task is newer, replace the current pending task
-                if (message.task.createdAt > currentPendingTask.createdAt) {
-                  console.log(`New task is newer, replacing current pending task`);
-                  // Remove old task card
+                // If the current task is already resolved (but UI hasn't been updated),
+                // we should allow the new pending task to be processed
+                const currentTaskVotes = taskVotes.get(currentPendingTask.id);
+                const currentTaskResolved = currentTaskVotes && isTaskResolved(currentTaskVotes);
+                
+                if (!currentTaskResolved) {
+                  console.warn(`Received new pending task ${message.task.id} but we already have pending task ${currentPendingTask.id}`);
+                  
+                  // If the new task is newer, replace the current pending task
+                  if (message.task.createdAt > currentPendingTask.createdAt) {
+                    console.log(`New task is newer, replacing current pending task`);
+                    // Remove old task card
+                    const oldTaskCard = document.getElementById('task-card-container');
+                    if (oldTaskCard) {
+                      oldTaskCard.remove();
+                    }
+                  } else {
+                    console.log(`Current pending task is newer, keeping it and storing new task for later`);
+                    addSystemMessage(`New task received from ${message.task.createdBy} but will be processed after current task is resolved.`);
+                    return;
+                  }
+                } else {
+                  console.log(`Current pending task is already resolved, processing new task`);
+                  // Clean up the old resolved task UI
                   const oldTaskCard = document.getElementById('task-card-container');
                   if (oldTaskCard) {
                     oldTaskCard.remove();
                   }
-                } else {
-                  console.log(`Current pending task is newer, keeping it and storing new task for later`);
-                  addSystemMessage(`New task received from ${message.task.createdBy} but will be processed after current task is resolved.`);
-                  return;
+                  
+                  // Reset the pending task state
+                  isPendingTask = false;
+                  currentPendingTask = null;
                 }
               }
               
@@ -6595,6 +6656,27 @@ function handlePeerData(peerId, data) {
   } catch (err) {
     console.error(`Error parsing data from peer ${peerId}:`, err, data);
   }
+}
+
+// Helper function to check if a task is resolved based on its votes
+function isTaskResolved(votes) {
+  if (!votes || votes.size === 0) return false;
+  
+  // Count accept and reject votes
+  let acceptCount = 0;
+  let rejectCount = 0;
+  
+  for (const vote of votes.values()) {
+    if (vote.vote === 'accept') acceptCount++;
+    else if (vote.vote === 'reject') rejectCount++;
+  }
+  
+  // Calculate total peers for majority
+  const totalPeers = peerConnections.size + 1; // +1 for self
+  const majority = Math.ceil(totalPeers / 2);
+  
+  // Task is resolved if either accept or reject has majority
+  return acceptCount >= majority || rejectCount >= majority;
 }
 
 // Add a task to the to-do list
