@@ -21,6 +21,7 @@ const transcriptPopupContent = document.querySelector('.transcript-popup-content
 const toggleTranscriptPopupBtn = document.getElementById('toggle-transcript-popup-btn');
 const closeTranscriptPopupBtn = document.getElementById('close-transcript-popup');
 const summarizeBtn = document.getElementById('summarize-btn');
+const createTaskBtn = document.getElementById('create-task-btn');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsPopup = document.getElementById('settings-popup');
 const closeSettingsPopupBtn = document.getElementById('close-settings-popup');
@@ -105,6 +106,16 @@ let isSummaryGenerating = false;
 
 // Store volume levels for remote peers
 const peerVolumes = new Map();
+
+// Global variables for task management
+let tasks = []; // Array of task objects
+let currentTaskId = 1; // Counter for task IDs
+let lastTaskTimestamp = 0; // Timestamp of the last accepted task
+let taskVotes = new Map(); // Map of task ID to votes (Map of peer ID to vote)
+let acceptedTasks = []; // Array of accepted task objects
+let isPendingTask = false; // Flag to indicate if there's a task pending votes
+let currentPendingTask = null; // The current task waiting for votes
+let isCreatingTask = false; // Flag to indicate if a task is being created
 
 // Device selection state
 let selectedMicrophoneId = '';
@@ -297,6 +308,32 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Add event listener for summarize button
   summarizeBtn.addEventListener('click', generateCallSummary);
+  
+  // Add event listener for create task button
+  createTaskBtn.addEventListener('click', async () => {
+    // Check if transcripts map is empty or if there are no entries
+    let hasTranscriptData = false;
+    transcripts.forEach((entries, username) => {
+      if (entries.length > 0) hasTranscriptData = true;
+    });
+    
+    // If no transcript data is available, offer to add test data
+    if (!hasTranscriptData) {
+      console.warn("No transcript data available for task creation");
+      if (confirm("No transcript data found. Would you like to add some test transcript data for debugging?")) {
+        window.addTestTranscriptData();
+        return;
+      }
+    }
+    
+    // Proceed with creating task
+    try {
+      await createTask();
+    } catch (err) {
+      console.error('Error creating task:', err);
+      alert('Error creating task: ' + (err.message || 'Unknown error'));
+    }
+  });
   
   // Add event listeners for settings popup
   settingsBtn.addEventListener('click', toggleSettingsPopup);
@@ -516,6 +553,45 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (leaveRoomButton) {
     leaveRoomButton.addEventListener('click', handleLeaveRoom);
   }
+  
+  // Initialize variables
+  document.addEventListener('DOMContentLoaded', () => {
+    // Initialize the transcripts map if it's undefined
+    if (!transcripts || !(transcripts instanceof Map)) {
+      console.log("Initializing transcripts Map");
+      transcripts = new Map();
+    }
+    
+    // Reset lastTaskTimestamp to ensure transcripts are included
+    lastTaskTimestamp = 0;
+    
+    // Testing function to add dummy transcript data if needed
+    window.addTestTranscriptData = function() {
+      try {
+        const testUser = usernameInput.value.trim() || 'You';
+        const testTime = Date.now();
+        
+        if (!transcripts.has(testUser)) {
+          transcripts.set(testUser, []);
+        }
+        
+        transcripts.get(testUser).push({
+          text: "This is a test transcript entry for debugging task creation.",
+          timestamp: testTime - 30000 // 30 seconds ago
+        });
+        
+        transcripts.get(testUser).push({
+          text: "Let's make sure transcript data is being included in tasks.",
+          timestamp: testTime - 15000 // 15 seconds ago
+        });
+        
+        console.log(`Added test transcript data for ${testUser}:`, transcripts.get(testUser));
+        alert("Added test transcript data. Try creating a task now.");
+      } catch (error) {
+        console.error("Error adding test transcript data:", error);
+      }
+    };
+  });
 });
 
 // Initialize OpenAI API key settings
@@ -1086,6 +1162,12 @@ function handleDataChannelMessage(peerId, message) {
     if (activeScreenSharePeerId === peerId) {
       activeScreenSharePeerId = null;
     }
+  } else if (message.type === 'new-task') {
+    // Handle new task from peer
+    handleNewTask(message.task, peerId);
+  } else if (message.type === 'task-vote') {
+    // Handle task vote from peer
+    handleTaskVote(message.taskId, message.username, message.vote, peerId);
   }
 }
 
@@ -2372,15 +2454,21 @@ function updateTranscription(speaker, text) {
   // Get current username from the currentUser object
   const currentUsername = currentUser ? currentUser.handle : 'You';
   
-  // Store transcript entry in memory
+  // Store transcript entry in memory with a numeric timestamp
   if (!transcripts.has(speaker)) {
     transcripts.set(speaker, []);
   }
   
-  const timestamp = new Date().toISOString();
+  // Use numeric timestamp to ensure compatibility with task creation
+  const now = Date.now();
   transcripts.get(speaker).push({
     text,
-    timestamp
+    timestamp: now
+  });
+  
+  console.log(`Added transcript entry for ${speaker}:`, {
+    text,
+    timestamp: now
   });
   
   // Find the appropriate container for this speaker
@@ -2497,7 +2585,7 @@ function updateTranscription(speaker, text) {
   }
   
   // Add to transcript popup
-  addTranscriptToPopup(speaker, text, timestamp);
+  addTranscriptToPopup(speaker, text, now);
   
   // Ensure the transcript popup is scrolled to the bottom if visible
   if (!transcriptPopup.classList.contains('hidden')) {
@@ -2516,71 +2604,73 @@ function addTranscriptToPopup(speaker, text, timestamp) {
   const entry = document.createElement('div');
   entry.className = 'transcript-entry';
   
-  // Style the entry to be more visible
-  entry.style.display = 'flex';
-  entry.style.flexDirection = 'column';
-  entry.style.marginBottom = '12px';
-  entry.style.padding = '8px 12px';
-  entry.style.borderRadius = '8px';
-  entry.style.backgroundColor = speaker === currentUsername ? '#e3f2fd' : '#f5f5f5';
-  entry.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
-  entry.style.borderLeft = speaker === currentUsername ? '4px solid #2196f3' : '4px solid #9e9e9e';
-  
-  // Add header row with speaker and timestamp
+  // Create header with speaker and time
   const header = document.createElement('div');
-  header.className = 'transcript-header';
-  header.style.display = 'flex';
-  header.style.justifyContent = 'space-between';
-  header.style.marginBottom = '4px';
+  header.className = 'transcript-entry-header';
   
-  // Add speaker name
-  const speakerElement = document.createElement('div');
+  // Create speaker element with styling
+  const speakerElement = document.createElement('span');
   speakerElement.className = 'transcript-speaker';
-  speakerElement.textContent = speaker === currentUsername ? `${speaker} (You)` : speaker;
-  speakerElement.style.fontWeight = 'bold';
-  speakerElement.style.color = speaker === currentUsername ? '#0277bd' : '#424242';
-  speakerElement.style.fontSize = '14px';
-  header.appendChild(speakerElement);
+  speakerElement.textContent = speaker;
   
-  // Add timestamp
-  const timeElement = document.createElement('div');
+  // Add special styling for local user
+  if (speaker === currentUsername) {
+    speakerElement.style.color = '#4CAF50';
+    speakerElement.style.fontWeight = 'bold';
+  } else {
+    speakerElement.style.color = '#2196F3';
+    speakerElement.style.fontWeight = 'bold';
+  }
+  
+  // Create time element with styling
+  const timeElement = document.createElement('span');
   timeElement.className = 'transcript-time';
   
-  // Format timestamp
-  const date = new Date(timestamp);
-  const formattedTime = date.toLocaleTimeString([], { 
-    hour: '2-digit', 
-    minute: '2-digit', 
-    second: '2-digit' 
-  });
+  // Ensure we handle both string timestamps and numeric timestamps
+  let timestampDate;
+  if (typeof timestamp === 'string') {
+    timestampDate = new Date(timestamp);
+  } else if (typeof timestamp === 'number') {
+    timestampDate = new Date(timestamp);
+  } else {
+    timestampDate = new Date(); // Fallback to current time
+  }
   
-  timeElement.textContent = formattedTime;
-  timeElement.style.color = '#757575';
-  timeElement.style.fontSize = '12px';
+  timeElement.textContent = timestampDate.toLocaleTimeString();
+  timeElement.style.color = '#999';
+  timeElement.style.marginLeft = '8px';
+  timeElement.style.fontSize = '0.85em';
+  
+  // Add elements to header
+  header.appendChild(speakerElement);
+  header.appendChild(document.createTextNode(' • '));
   header.appendChild(timeElement);
   
-  entry.appendChild(header);
+  // Style the header
+  header.style.marginBottom = '4px';
   
-  // Add transcript text
+  // Create transcript text element with styling
   const textElement = document.createElement('div');
   textElement.className = 'transcript-text';
   textElement.textContent = text;
-  textElement.style.marginTop = '4px';
-  textElement.style.lineHeight = '1.4';
-  textElement.style.fontSize = '15px';
-  textElement.style.color = '#212121';
+  textElement.style.marginBottom = '8px';
+  textElement.style.marginLeft = '8px';
+  
+  // Add header and text to entry
+  entry.appendChild(header);
   entry.appendChild(textElement);
   
-  // Add to popup content
-  transcriptPopupContent.appendChild(entry);
+  // Style the entry
+  entry.style.marginBottom = '10px';
+  entry.style.borderBottom = '1px solid #eee';
+  entry.style.paddingBottom = '10px';
   
-  // Auto-scroll to the bottom
-  transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
-  
-  // Limit the number of entries to avoid memory issues
-  const maxEntries = 100;
-  while (transcriptPopupContent.children.length > maxEntries) {
-    transcriptPopupContent.removeChild(transcriptPopupContent.firstChild);
+  // Add entry to popup content
+  if (transcriptPopupContent) {
+    transcriptPopupContent.appendChild(entry);
+    
+    // Scroll to bottom
+    transcriptPopupContent.scrollTop = transcriptPopupContent.scrollHeight;
   }
 }
 
@@ -3982,10 +4072,136 @@ function startVideoRecording() {
       } else {
         ctx.fillStyle = '#999999';
         ctx.font = '16px Arial';
-        ctx.fillText('No transcripts yet', chatAreaX + 20, (canvas.height / 2) + 40);
+        ctx.fillText('No transcripts yet', chatAreaX + 20, canvas.height / 2 + 40);
       }
       
-      // Request next frame
+      // Add To-Do List to the recording if there are accepted tasks
+      if (acceptedTasks && acceptedTasks.length > 0) {
+        // Title for the to-do list section
+        const todoY = Math.min(canvas.height - 250, (canvas.height / 2) + 300);
+        ctx.fillStyle = '#FFC107'; // Match the amber color from CSS
+        ctx.font = 'bold 22px Arial';
+        ctx.fillText('To-Do List', chatAreaX + 20, todoY);
+        
+        // Draw background rectangle for to-do list
+        ctx.fillStyle = 'rgba(45, 45, 45, 0.7)'; // Match todo-list-container background
+        ctx.fillRect(chatAreaX + 10, todoY + 10, chatAreaWidth - 20, Math.min(200, 50 * acceptedTasks.length));
+        
+        // Draw each to-do item
+        ctx.font = '16px Arial';
+        acceptedTasks.forEach((task, index) => {
+          const itemY = todoY + 40 + (index * 60);
+          
+          // Draw a separator line between tasks (except before the first one)
+          if (index > 0) {
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(chatAreaX + 20, itemY - 20);
+            ctx.lineTo(chatAreaX + chatAreaWidth - 20, itemY - 20);
+            ctx.stroke();
+          }
+          
+          // Draw task content
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 16px Arial';
+          
+          // Draw task text with word wrap
+          const maxWidth = chatAreaWidth - 40;
+          const textX = chatAreaX + 20;
+          const words = task.text.split(' ');
+          let line = '';
+          let lineY = itemY;
+          
+          words.forEach(word => {
+            const testLine = line + (line ? ' ' : '') + word;
+            const metrics = ctx.measureText(testLine);
+            
+            if (metrics.width > maxWidth && line !== '') {
+              ctx.fillText(line, textX, lineY);
+              line = word;
+              lineY += 20;
+            } else {
+              line = testLine;
+            }
+          });
+          
+          ctx.fillText(line, textX, lineY);
+          
+          // Draw task creator and time
+          ctx.fillStyle = '#999999';
+          ctx.font = '12px Arial';
+          ctx.fillText(`Added by ${task.createdBy} at ${new Date(task.createdAt).toLocaleTimeString()}`, 
+                       textX, lineY + 20);
+        });
+      }
+      
+      // Draw pending task card if there is one
+      if (isPendingTask && currentPendingTask) {
+        const task = currentPendingTask;
+        const taskCardY = 80; // Position it right after chat messages title
+        
+        // Draw card background
+        ctx.fillStyle = 'rgba(40, 40, 40, 0.9)';
+        ctx.fillRect(chatAreaX + 10, taskCardY + 250, chatAreaWidth - 20, 160);
+        
+        // Draw card border
+        ctx.strokeStyle = '#4a69bd';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(chatAreaX + 10, taskCardY + 250, chatAreaWidth - 20, 160);
+        
+        // Draw task header
+        ctx.fillStyle = '#4a69bd';
+        ctx.font = 'bold 18px Arial';
+        ctx.fillText('Current Task Proposal', chatAreaX + 20, taskCardY + 25 + 250);
+        
+        // Draw task creator and time
+        ctx.fillStyle = '#aaaaaa';
+        ctx.font = '14px Arial';
+        ctx.fillText(`Proposed by ${task.createdBy} at ${new Date(task.createdAt).toLocaleTimeString()}`, 
+                     chatAreaX + 20, taskCardY + 45 + 250);
+        
+        // Draw task content
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '16px Arial';
+        
+        // Draw task text with word wrap
+        const maxWidth = chatAreaWidth - 40;
+        const textX = chatAreaX + 20;
+        const words = task.text.split(' ');
+        let line = '';
+        let lineY = taskCardY + 75 + 250;
+        
+        words.forEach(word => {
+          const testLine = line + (line ? ' ' : '') + word;
+          const metrics = ctx.measureText(testLine);
+          
+          if (metrics.width > maxWidth && line !== '') {
+            ctx.fillText(line, textX, lineY);
+            line = word;
+            lineY += 20;
+          } else {
+            line = testLine;
+          }
+        });
+        
+        ctx.fillText(line, textX, lineY);
+        
+        // Draw voting status
+        const votes = taskVotes.get(task.id);
+        if (votes) {
+          const voteCount = votes.size;
+          const totalParticipants = peers.size + 1; // Include self
+          const acceptVotes = Array.from(votes.values()).filter(v => v.vote === 'accept').length;
+          
+          ctx.fillStyle = '#aaaaaa';
+          ctx.font = '14px Arial';
+          ctx.fillText(`Votes: ${voteCount}/${totalParticipants} (${acceptVotes} accept)`, 
+                       textX, lineY + 30);
+        }
+      }
+      
+      // Record this frame
       requestAnimationFrame(renderFrame);
     }
     
@@ -5427,7 +5643,7 @@ function renderFrame() {
       const testLine = line + (line ? ' ' : '') + word;
       const testWidth = ctx.measureText(testLine).width;
       
-      if (testWidth > maxWidth && line) {
+      if (testWidth > maxWidth && line !== '') {
         // Draw the current line
         ctx.fillText(line, textX, lineY);
         // Start a new line
@@ -5489,7 +5705,7 @@ function renderFrame() {
         const testLine = line + (line ? ' ' : '') + word;
         const testWidth = ctx.measureText(testLine).width;
         
-        if (testWidth > maxWidth && line) {
+        if (testWidth > maxWidth && line !== '') {
           ctx.fillText(line, textX, lineY);
           line = word;
           lineY += 20;
@@ -5512,3 +5728,1065 @@ function renderFrame() {
   videoCanvas._lastFrameTime = Date.now();
   return videoCanvas;
 }
+
+// Task management functions
+async function createTask() {
+  try {
+    // Prevent multiple simultaneous task creation
+    if (isCreatingTask) {
+      console.log('Task creation already in progress');
+      alert('Task creation is already in progress. Please wait.');
+      return;
+    }
+    
+    // Check if there's already a pending task in the room
+    if (isPendingTask && currentPendingTask) {
+      console.log('There is already a pending task waiting for votes');
+      alert('There is already a task waiting for votes. Please vote on the current task first.');
+      return;
+    }
+    
+    isCreatingTask = true;
+    
+    // Get our own peer ID from the main process
+    const peerId = await window.electronAPI.getOwnId();
+    if (!peerId) {
+      console.error("Failed to get local peer ID");
+      alert("Cannot create task: Unable to get local peer ID");
+      isCreatingTask = false;
+      return;
+    }
+    
+    // Store our peer ID for voting
+    ownPeerId = peerId;
+    
+    // Prepare the data to summarize (from lastTaskTimestamp to now)
+    const now = Date.now();
+    
+    console.log("Transcript data structure:", Array.from(transcripts.entries()).map(([username, entries]) => 
+      `${username}: ${entries.length} entries`));
+    
+    // Collect transcripts from lastTaskTimestamp to now
+    let transcriptsToSummarize = [];
+    transcripts.forEach((entries, username) => {
+      console.log(`Processing transcripts for ${username}: ${entries.length} entries`);
+      entries.forEach(entry => {
+        // Convert string timestamp to number if needed
+        const entryTimestamp = typeof entry.timestamp === 'string' 
+          ? new Date(entry.timestamp).getTime() 
+          : entry.timestamp;
+        
+        if ((entryTimestamp > lastTaskTimestamp) && (entryTimestamp < now)) {
+          transcriptsToSummarize.push({
+            timestamp: entryTimestamp,
+            username,
+            text: entry.text,
+            type: 'transcript'
+          });
+          console.log(`Added transcript from ${username}: "${entry.text}"`);
+        }
+      });
+    });
+    
+    // Get chat messages from lastTaskTimestamp to now
+    // Get all message elements in the chat
+    const messageElements = document.querySelectorAll('.messages .message');
+    console.log(`Found ${messageElements.length} message elements in DOM`);
+    
+    const chatMessagesToSummarize = Array.from(messageElements).map(msgElement => {
+      const meta = msgElement.querySelector('.message-meta')?.textContent || '';
+      const text = msgElement.querySelector('.message-text')?.textContent || '';
+      
+      // Extract username and time from meta (format: "username • time")
+      const parts = meta.split(' • ');
+      const username = parts[0] || 'Unknown';
+      
+      // Create a timestamp from the time string (this is approximate)
+      const timeString = parts[1] || '';
+      // Parse the time string - this is a basic approximation
+      let timestamp = now; // Default to current time if parsing fails
+      if (timeString) {
+        try {
+          const [hours, minutes] = timeString.split(':').map(num => parseInt(num, 10));
+          const date = new Date();
+          date.setHours(hours || 0, minutes || 0, 0, 0);
+          timestamp = date.getTime();
+          
+          // If timestamp is in the future (due to hour parsing), subtract a day
+          if (timestamp > now) {
+            timestamp -= 24 * 60 * 60 * 1000;
+          }
+        } catch (err) {
+          console.error('Error parsing message time:', err);
+        }
+      }
+      
+      return {
+        timestamp,
+        username,
+        text,
+        type: 'chat'
+      };
+    }).filter(msg => (msg.timestamp > lastTaskTimestamp) && (msg.timestamp < now));
+    
+    // Log counts for debugging
+    console.log(`Found ${transcriptsToSummarize.length} transcript entries and ${chatMessagesToSummarize.length} chat messages`);
+    
+    // Debug transcription data
+    if (transcriptsToSummarize.length === 0) {
+      console.warn("No transcript data found. Check if transcripts are being stored correctly.");
+      console.log("Current lastTaskTimestamp:", new Date(lastTaskTimestamp).toISOString());
+      console.log("Current time:", new Date(now).toISOString());
+      
+      // Print some raw transcript data regardless of timestamp
+      let totalTranscriptEntries = 0;
+      transcripts.forEach((entries, username) => {
+        totalTranscriptEntries += entries.length;
+        if (entries.length > 0) {
+          console.log(`Sample entry for ${username}:`, entries[0]);
+        }
+      });
+      console.log(`Total transcript entries available: ${totalTranscriptEntries}`);
+    }
+    
+    // Combine and sort all messages by timestamp
+    const allMessages = [...transcriptsToSummarize, ...chatMessagesToSummarize]
+      .sort((a, b) => a.timestamp - b.timestamp);
+    
+    if (allMessages.length === 0) {
+      alert('No conversation data available since the last task was created');
+      isCreatingTask = false;
+      return;
+    }
+    
+    console.log('Creating task from conversation with', allMessages.length, 'items');
+    console.log('Sample messages:', allMessages.slice(0, 3));
+    
+    // Show a generating overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'app-exit-overlay';
+    overlay.innerHTML = '<div class="exit-message">Creating task from conversation, please wait...</div>';
+    document.body.appendChild(overlay);
+    
+    // Format the conversation data for GPT
+    const formattedConversation = allMessages.map(msg => 
+      `[${new Date(msg.timestamp).toLocaleTimeString()}] ${msg.username} (${msg.type}): ${msg.text}`
+    ).join('\n');
+    
+    // Ask GPT to summarize and convert to a task
+    const taskCreationPrompt = `
+      Please summarize the following conversation and convert it into a clear, actionable task.
+      Focus on commitments, decisions, and action items mentioned. 
+      Keep the task brief (under 150 characters if possible) and specific.
+
+      CONVERSATION:
+      ${formattedConversation}
+      
+      TASK:
+    `;
+    
+    // Call the API to generate the task
+    const result = await window.electronAPI.generateTaskFromConversation(taskCreationPrompt);
+    
+    // Remove overlay
+    document.body.removeChild(overlay);
+    
+    if (!result.success) {
+      console.error('Failed to generate task:', result.error);
+      alert(`Error creating task: ${result.error}`);
+      isCreatingTask = false;
+      return;
+    }
+    
+    // Create a new task object
+    const taskId = currentTaskId++;
+    const task = {
+      id: taskId,
+      text: result.task,
+      createdAt: now,
+      createdBy: usernameInput.value.trim() || 'You',
+      status: 'pending', // pending, accepted, rejected
+      fromTimestamp: lastTaskTimestamp,
+      toTimestamp: now
+    };
+    
+    // Add to tasks array
+    tasks.push(task);
+    
+    // Set as the current pending task
+    currentPendingTask = task;
+    isPendingTask = true;
+    
+    // Create a Map to store votes for this task
+    taskVotes.set(taskId, new Map());
+    
+    // Create self vote but DO NOT auto-accept
+    // Allow the creator to vote like everyone else
+    
+    // Update last task timestamp for next task creation
+    lastTaskTimestamp = now;
+    
+    // Create and show the task card
+    createTaskCard(task);
+    
+    // Broadcast the task to other peers
+    broadcastNewTask(task);
+    
+    // Display a message that the task has been created
+    addSystemMessage(`Task created: "${task.text}". Please vote to accept or reject.`);
+    
+    isCreatingTask = false;
+    console.log('Task created successfully:', task);
+  } catch (error) {
+    console.error('Error creating task:', error);
+    alert(`Error creating task: ${error.message || 'Unknown error'}`);
+    isCreatingTask = false;
+  }
+}
+
+// Create a UI card for a new task
+function createTaskCard(task) {
+  // Check for any existing task cards and remove them
+  const existingTaskCard = document.getElementById('task-card-container');
+  if (existingTaskCard) {
+    existingTaskCard.remove();
+  }
+
+  // Create task card container
+  const taskCardContainer = document.createElement('div');
+  taskCardContainer.id = 'task-card-container';
+  taskCardContainer.className = 'task-card-container';
+
+  // Create task card
+  const taskCard = document.createElement('div');
+  taskCard.className = 'task-card';
+  taskCard.dataset.taskId = task.id;
+
+  // Add task content
+  taskCard.innerHTML = `
+    <div class="task-header">
+      <h3>Task</h3>
+      <div class="task-meta">
+        <span class="task-creator">${task.createdBy}</span>
+        <span class="task-time">${new Date(task.createdAt).toLocaleTimeString()}</span>
+      </div>
+    </div>
+    <div class="task-content">${task.text}</div>
+    <div class="task-actions">
+      <button class="task-btn accept-btn" data-action="accept">Accept</button>
+      <button class="task-btn reject-btn" data-action="reject">Reject</button>
+      <div class="task-votes">
+        <span class="accept-count">0</span>
+        <span class="reject-count">0</span>
+      </div>
+    </div>
+  `;
+
+  // Add the task card to the container
+  taskCardContainer.appendChild(taskCard);
+
+  // Get chat container
+  const chatContainer = document.querySelector('.chat-container');
+  if (!chatContainer) {
+    console.error('Chat container not found for task card insertion');
+    return null;
+  }
+
+  // Get messages container
+  const messagesContainer = document.querySelector('.messages-container');
+
+  // Ensure proper DOM insertion
+  if (messagesContainer && chatContainer.contains(messagesContainer)) {
+    // If messagesContainer exists and is a child of chatContainer, insert before it
+    chatContainer.insertBefore(taskCardContainer, messagesContainer);
+  } else {
+    // Otherwise, insert at the top of the chat container
+    if (chatContainer.firstChild) {
+      chatContainer.insertBefore(taskCardContainer, chatContainer.firstChild);
+    } else {
+      chatContainer.appendChild(taskCardContainer);
+    }
+    console.log('Inserted task card at the top of chat container');
+  }
+
+  // Get vote buttons
+  const acceptBtn = taskCard.querySelector('.accept-btn');
+  const rejectBtn = taskCard.querySelector('.reject-btn');
+  
+  // Get vote count elements
+  const acceptCount = taskCard.querySelector('.accept-count');
+  const rejectCount = taskCard.querySelector('.reject-count');
+  
+  // Update vote counts initially
+  updateTaskVoteCounts(task.id, acceptCount, rejectCount);
+  
+  // Add event listeners for voting
+  acceptBtn.addEventListener('click', () => handleVote(task.id, 'accept'));
+  rejectBtn.addEventListener('click', () => handleVote(task.id, 'reject'));
+  
+  // Check if this user has already voted
+  if (taskVotes.has(task.id) && ownPeerId && taskVotes.get(task.id).has(ownPeerId)) {
+    // User has already voted
+    acceptBtn.disabled = true;
+    rejectBtn.disabled = true;
+    
+    const userVote = taskVotes.get(task.id).get(ownPeerId);
+    // Highlight the button they voted for
+    if (userVote.vote === 'accept') {
+      acceptBtn.classList.add('voted');
+    } else if (userVote.vote === 'reject') {
+      rejectBtn.classList.add('voted');
+    }
+  }
+
+  console.log(`Task card created for task ${task.id} with text: "${task.text}"`);
+  return taskCardContainer;
+}
+
+// Handle voting on a task (accept or reject)
+function handleVote(taskId, voteType) {
+  // Don't allow voting if there's no pending task
+  if (!isPendingTask || !currentPendingTask || currentPendingTask.id !== taskId) {
+    console.warn('Cannot vote: no pending task or task ID mismatch');
+    return;
+  }
+  
+  // Get the task card
+  const taskCard = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
+  if (!taskCard) {
+    console.error('Task card not found for voting');
+    return;
+  }
+  
+  // Get the task from our array
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) {
+    console.error('Task not found for voting');
+    return;
+  }
+  
+  // Check if user has already voted
+  if (taskVotes.has(taskId) && ownPeerId && taskVotes.get(taskId).has(ownPeerId)) {
+    console.warn('User has already voted on this task');
+    return;
+  }
+  
+  // Create vote object
+  const vote = {
+    peerId: ownPeerId,
+    username: usernameInput.value.trim() || 'You',
+    vote: voteType
+  };
+  
+  // Store the vote
+  if (!taskVotes.has(taskId)) {
+    taskVotes.set(taskId, new Map());
+  }
+  taskVotes.get(taskId).set(ownPeerId, vote);
+  
+  // Disable voting buttons and highlight selected vote
+  const acceptBtn = taskCard.querySelector('.accept-btn');
+  const rejectBtn = taskCard.querySelector('.reject-btn');
+  if (acceptBtn) acceptBtn.disabled = true;
+  if (rejectBtn) rejectBtn.disabled = true;
+  
+  if (voteType === 'accept' && acceptBtn) {
+    acceptBtn.classList.add('voted');
+  } else if (voteType === 'reject' && rejectBtn) {
+    rejectBtn.classList.add('voted');
+  }
+  
+  // Update vote counts
+  const acceptCount = taskCard.querySelector('.accept-count');
+  const rejectCount = taskCard.querySelector('.reject-count');
+  updateTaskVoteCounts(taskId, acceptCount, rejectCount);
+  
+  // Show a message that the user has voted
+  addSystemMessage(`You voted to ${voteType} the task: "${task.text}"`);
+  
+  // Check if task is resolved (accepted or rejected)
+  checkTaskResolution(taskId);
+  
+  // Broadcast the vote to all peers
+  broadcastVote(taskId, voteType);
+}
+
+// Update the vote counts for a task
+function updateTaskVoteCounts(taskId, acceptCountEl, rejectCountEl) {
+  if (!taskVotes.has(taskId)) {
+    console.warn('No votes available for task', taskId);
+    return;
+  }
+  
+  // Count the votes
+  let acceptCount = 0;
+  let rejectCount = 0;
+  
+  taskVotes.get(taskId).forEach(vote => {
+    if (vote.vote === 'accept') acceptCount++;
+    else if (vote.vote === 'reject') rejectCount++;
+  });
+  
+  // Update the UI elements if provided
+  if (acceptCountEl) acceptCountEl.textContent = acceptCount;
+  if (rejectCountEl) rejectCountEl.textContent = rejectCount;
+  
+  return { acceptCount, rejectCount };
+}
+
+// Check if a task is resolved based on votes
+function checkTaskResolution(taskId) {
+  // Find the task
+  const task = tasks.find(t => t.id === taskId);
+  if (!task || task.status !== 'pending') {
+    return; // Task is already resolved or not found
+  }
+  
+  // Get vote counts
+  const votes = taskVotes.get(taskId);
+  if (!votes) return;
+  
+  let acceptCount = 0;
+  let rejectCount = 0;
+  votes.forEach(vote => {
+    if (vote.vote === 'accept') acceptCount++;
+    else if (vote.vote === 'reject') rejectCount++;
+  });
+  
+  // Calculate total participants (peers + self)
+  const totalParticipants = peers.size + 1;
+  
+  // Task is accepted if majority votes to accept
+  if (acceptCount > totalParticipants / 2) {
+    task.status = 'accepted';
+    updateTaskCardUI(task);
+    
+    // Add to accepted tasks array if not already there
+    if (!acceptedTasks.find(t => t.id === task.id)) {
+      acceptedTasks.push(task);
+      console.log(`Task ${taskId} added to acceptedTasks array. Total: ${acceptedTasks.length}`);
+    }
+    
+    // Add to to-do list UI
+    addTaskToTodoList(task);
+    
+    // Display notification
+    addSystemMessage(`Task accepted and added to To-Do list: "${task.text}"`);
+    
+    // Remove pending task status
+    isPendingTask = false;
+    currentPendingTask = null;
+    
+    console.log(`Task ${taskId} has been accepted`);
+  }
+  
+  // Task is rejected if majority votes to reject
+  else if (rejectCount > totalParticipants / 2) {
+    task.status = 'rejected';
+    updateTaskCardUI(task);
+    
+    // Display notification
+    addSystemMessage(`Task rejected: "${task.text}"`);
+    
+    // Remove pending task status
+    isPendingTask = false;
+    currentPendingTask = null;
+    
+    console.log(`Task ${taskId} has been rejected`);
+  }
+  
+  // Update the task in our array
+  const taskIndex = tasks.findIndex(t => t.id === taskId);
+  if (taskIndex !== -1) {
+    tasks[taskIndex] = task;
+  }
+}
+
+// Update the task card UI based on status
+function updateTaskCardUI(task) {
+  const taskCard = document.querySelector(`.task-card[data-task-id="${task.id}"]`);
+  if (!taskCard) return;
+  
+  // Update class based on status
+  taskCard.classList.remove('pending', 'accepted', 'rejected');
+  taskCard.classList.add(task.status);
+  
+  // Update UI elements
+  const voteButtons = taskCard.querySelector('.task-actions');
+  if (voteButtons) {
+    if (task.status === 'accepted') {
+      voteButtons.innerHTML = '<div class="status-badge accepted">Accepted ✓</div>';
+    } else if (task.status === 'rejected') {
+      voteButtons.innerHTML = '<div class="status-badge rejected">Rejected ✗</div>';
+    }
+  }
+}
+
+// Broadcast a vote to all peers
+function broadcastVote(taskId, voteType) {
+  console.log(`Broadcasting vote on task ${taskId} to all peers: ${voteType}`);
+  
+  // Create vote message
+  const voteMsg = {
+    type: 'task-vote',
+    taskId: taskId,
+    vote: voteType,
+    peerId: ownPeerId,
+    username: usernameInput.value.trim() || 'You'
+  };
+  
+  // Store the vote locally too for consistency
+  handleReceivedVote(voteMsg);
+  
+  // Broadcast to all peers
+  let broadcastCount = 0;
+  peers.forEach((peer, peerId) => {
+    if (peer.connection && peer.connection.open) {
+      try {
+        peer.connection.send(JSON.stringify(voteMsg));
+        console.log(`Sharing vote with peer ${peerId}`);
+        broadcastCount++;
+      } catch (err) {
+        console.error(`Error sending vote to peer ${peerId}:`, err);
+      }
+    } else {
+      console.warn(`Cannot send vote to peer ${peerId}: connection not open`);
+    }
+  });
+  
+  console.log(`Broadcast vote to ${broadcastCount} peers out of ${peers.size} total peers`);
+}
+
+// Handle a vote received from a peer
+function handleReceivedVote(data) {
+  const { taskId, vote, peerId, username } = data;
+  
+  // Validate data
+  if (!taskId || !vote || !peerId) {
+    console.error('Invalid vote data received:', data);
+    return;
+  }
+  
+  console.log(`Processing vote from ${username} (${peerId}) for task ${taskId}: ${vote}`);
+  
+  // Check if we have this task
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) {
+    console.warn(`Received vote for unknown task ${taskId}`);
+    return;
+  }
+  
+  // Store the vote
+  if (!taskVotes.has(taskId)) {
+    taskVotes.set(taskId, new Map());
+  }
+  
+  // Create vote object
+  const voteObj = { peerId, username, vote };
+  taskVotes.get(taskId).set(peerId, voteObj);
+  
+  // Update the UI if the task card exists
+  const taskCard = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
+  if (taskCard) {
+    const acceptCount = taskCard.querySelector('.accept-count');
+    const rejectCount = taskCard.querySelector('.reject-count');
+    updateTaskVoteCounts(taskId, acceptCount, rejectCount);
+    
+    // Mark voted button if this is the current user's vote
+    if (peerId === ownPeerId) {
+      const acceptBtn = taskCard.querySelector('.accept-btn');
+      const rejectBtn = taskCard.querySelector('.reject-btn');
+      
+      if (acceptBtn) acceptBtn.disabled = true;
+      if (rejectBtn) rejectBtn.disabled = true;
+      
+      if (vote === 'accept' && acceptBtn) {
+        acceptBtn.classList.add('voted');
+      } else if (vote === 'reject' && rejectBtn) {
+        rejectBtn.classList.add('voted');
+      }
+    }
+  } else {
+    console.warn(`Task card for task ${taskId} not found in DOM`);
+    
+    // If task is pending but we don't have the card displayed, create it
+    if (task.status === 'pending') {
+      if (!isPendingTask || !currentPendingTask || currentPendingTask.id !== taskId) {
+        console.log(`Creating task card for task ${taskId} that we received a vote for but wasn't displayed`);
+        currentPendingTask = task;
+        isPendingTask = true;
+        createTaskCard(task);
+      }
+    }
+  }
+  
+  // Check if task is resolved
+  checkTaskResolution(taskId);
+}
+
+// Handle receiving a new task from a peer
+function handleNewTask(task, peerId) {
+  console.log(`Received new task from peer ${peerId}:`, task);
+  
+  // Add the task to our local tasks array if it doesn't exist
+  if (!tasks.find(t => t.id === task.id)) {
+    tasks.push(task);
+    
+    // Create a Map to store votes for this task
+    taskVotes.set(task.id, new Map());
+    
+    // Set as the current pending task
+    currentPendingTask = task;
+    isPendingTask = true;
+    
+    // Show the task card in the UI
+    createTaskCard(task);
+  }
+}
+
+// Handle receiving a task vote from a peer
+function handleTaskVote(taskId, username, vote, peerId) {
+  console.log(`Received task vote from ${username} (${peerId}): ${vote} for task ${taskId}`);
+  
+  // Add the vote to our local votes map
+  if (taskVotes.has(taskId)) {
+    taskVotes.get(taskId).set(peerId, { peerId, username, vote });
+    
+    // Update the UI
+    updateTaskCardVotes(taskId);
+    
+    // Check if all votes are in
+    checkAllVotesReceived(taskId);
+  }
+}
+
+// Update the vote count on the task card
+function updateTaskCardVotes(taskId) {
+  const taskCard = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
+  if (!taskCard) return;
+  
+  const votes = taskVotes.get(taskId);
+  const acceptVotes = Array.from(votes.values()).filter(v => v.vote === 'accept').length;
+  
+  // Update vote count in UI
+  const voteCount = taskCard.querySelector('.vote-count');
+  if (voteCount) {
+    voteCount.textContent = votes.size;
+  }
+  
+  // Update peer count
+  const peersCount = taskCard.querySelector('.peers-count');
+  if (peersCount) {
+    peersCount.textContent = peers.size + 1; // +1 for self
+  }
+}
+
+// Check if all participants have voted and process accordingly
+function checkAllVotesReceived(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  if (!task || task.status !== 'pending') return;
+  
+  const votes = taskVotes.get(taskId);
+  const totalParticipants = peers.size + 1; // Include self
+  
+  // Check if all participants have voted
+  if (votes.size >= totalParticipants) {
+    // Count accept votes
+    const acceptVotes = Array.from(votes.values()).filter(v => v.vote === 'accept').length;
+    const majority = Math.ceil(totalParticipants / 2);
+    
+    // If majority accepts, add to accepted tasks
+    if (acceptVotes > majority) {
+      task.status = 'accepted';
+      acceptedTasks.push(task);
+      lastTaskTimestamp = task.toTimestamp;
+      
+      // Update UI
+      updateTaskCard(task, 'accepted');
+      addTaskToTodoList(task);
+    } else {
+      task.status = 'rejected';
+      updateTaskCard(task, 'rejected');
+    }
+    
+    // Reset pending task state
+    isPendingTask = false;
+    currentPendingTask = null;
+    
+    // After a delay, remove the task card
+    setTimeout(() => {
+      const taskCard = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
+      if (taskCard) {
+        taskCard.style.animation = 'fadeOut 0.5s';
+        setTimeout(() => taskCard.remove(), 500);
+      }
+    }, 3000);
+  }
+}
+
+// Update the task card UI based on status
+function updateTaskCard(task, status) {
+  const taskCard = document.querySelector(`.task-card[data-task-id="${task.id}"]`);
+  if (!taskCard) return;
+  
+  taskCard.classList.add(`task-${status}`);
+  
+  const statusMessage = document.createElement('div');
+  statusMessage.className = 'task-status-message';
+  
+  if (status === 'accepted') {
+    statusMessage.textContent = '✅ Task accepted and added to To-Do list';
+  } else {
+    statusMessage.textContent = '❌ Task rejected';
+  }
+  
+  // Replace the vote buttons with the status message
+  const voteButtons = taskCard.querySelector('.vote-buttons');
+  if (voteButtons) {
+    voteButtons.innerHTML = '';
+    voteButtons.appendChild(statusMessage);
+  }
+}
+
+// Add a task to the to-do list
+function addTaskToTodoList(task) {
+  console.log(`Adding task to to-do list: ${task.id} - ${task.text}`);
+  
+  // Add to accepted tasks array if not already there
+  if (!acceptedTasks.find(t => t.id === task.id)) {
+    acceptedTasks.push(task);
+    console.log(`Task ${task.id} added to acceptedTasks array. Total: ${acceptedTasks.length}`);
+  }
+  
+  // Get chat container
+  const chatContainer = document.querySelector('.chat-container');
+  if (!chatContainer) {
+    console.error('Chat container not found for to-do list insertion');
+    return null;
+  }
+  
+  // Create a to-do list container if it doesn't exist
+  let todoListContainer = document.getElementById('todo-list-container');
+  if (!todoListContainer) {
+    todoListContainer = document.createElement('div');
+    todoListContainer.id = 'todo-list-container';
+    todoListContainer.className = 'todo-list-container';
+    todoListContainer.innerHTML = '<h3>To-Do List</h3><ul id="todo-list" class="todo-list"></ul>';
+    
+    // Insert the to-do list at the appropriate position in the DOM
+    const messagesContainer = document.querySelector('.messages-container');
+    if (messagesContainer && chatContainer.contains(messagesContainer)) {
+      // If messagesContainer exists and is a child of chatContainer, insert before it
+      chatContainer.insertBefore(todoListContainer, messagesContainer);
+    } else {
+      // Otherwise, append to the beginning of the chat container
+      const firstChild = chatContainer.firstChild;
+      if (firstChild) {
+        chatContainer.insertBefore(todoListContainer, firstChild);
+      } else {
+        chatContainer.appendChild(todoListContainer);
+      }
+    }
+  }
+  
+  // Get the to-do list element
+  const todoList = document.getElementById('todo-list');
+  if (!todoList) {
+    console.error('To-do list element not found');
+    return todoListContainer;
+  }
+  
+  // Check if this task is already in the list
+  const existingItem = Array.from(todoList.children).find(item => 
+    item.dataset.taskId === task.id.toString()
+  );
+  
+  if (!existingItem) {
+    // Create a new task item
+    const taskItem = document.createElement('li');
+    taskItem.className = 'todo-item';
+    taskItem.dataset.taskId = task.id;
+    
+    // Add task content
+    taskItem.innerHTML = `
+      <div class="todo-text">${task.text}</div>
+      <div class="todo-meta">
+        <span class="todo-creator">${task.createdBy}</span>
+        <span class="todo-time">${new Date(task.createdAt).toLocaleTimeString()}</span>
+      </div>
+    `;
+    
+    // Add to the list
+    todoList.appendChild(taskItem);
+    console.log(`Task item added to todo list in DOM: ${task.id}`);
+  }
+  
+  // Update UI to show to-do list is visible
+  todoListContainer.style.display = 'block';
+  
+  return todoListContainer;
+}
+
+// Handle app exit
+function handleAppExit() {
+  // Just do some basic cleanup before quitting
+  console.log('App closing, cleaning up connections...');
+  
+  try {
+    // Clean up connections
+    for (const peerId of Object.keys(peerConnections)) {
+      cleanupPeerConnection(peerId);
+    }
+    
+    // Stop local media
+    stopLocalMedia();
+  } catch (error) {
+    console.error('Error during cleanup:', error);
+  }
+  
+  // Don't need to quit explicitly since Electron will handle closing the window
+}
+
+// Handle incoming data from a peer
+function handlePeerData(peerId, data) {
+  try {
+    const message = JSON.parse(data);
+    
+    switch (message.type) {
+      case 'chat-message':
+        if (message.username && message.text) {
+          renderChatMessage(message.username, message.text, true);
+        }
+        break;
+        
+      case 'new-task':
+        if (message.task) {
+          // Validate the task object
+          const requiredFields = ['id', 'text', 'createdAt', 'createdBy', 'status'];
+          if (requiredFields.every(field => message.task[field] !== undefined)) {
+            // Check if we already have this task
+            const existingTaskIndex = tasks.findIndex(t => t.id === message.task.id);
+            if (existingTaskIndex !== -1) {
+              console.log(`Task ${message.task.id} already exists, skipping`);
+              return;
+            }
+            
+            console.log(`Received new task from ${message.task.createdBy} via peer ${peerId}:`, message.task);
+            
+            // Store the task
+            tasks.push(message.task);
+            
+            // Initialize vote tracking
+            if (!taskVotes.has(message.task.id)) {
+              taskVotes.set(message.task.id, new Map());
+            }
+            
+            // If this is an accepted task, add it to the to-do list
+            if (message.task.status === 'accepted') {
+              addTaskToTodoList(message.task);
+              addSystemMessage(`Task added to to-do list: "${message.task.text}"`);
+            } else if (message.task.status === 'pending') {
+              // Set as current pending task if we don't have one already
+              if (!isPendingTask || !currentPendingTask) {
+                console.log(`Setting task ${message.task.id} as current pending task`);
+                currentPendingTask = message.task;
+                isPendingTask = true;
+                
+                // Create and show the task card
+                createTaskCard(message.task);
+                
+                // Display notification
+                addSystemMessage(`New task from ${message.task.createdBy}: "${message.task.text}". Please vote to accept or reject.`);
+              } else {
+                console.log(`Already have a pending task ${currentPendingTask.id}, storing new task ${message.task.id} for later`);
+                // Still add it to tasks array for tracking
+                addSystemMessage(`New task received from ${message.task.createdBy} but will be shown after current task is resolved.`);
+              }
+            }
+            
+            // Update last task timestamp for next task creation
+            if (message.task.toTimestamp > lastTaskTimestamp) {
+              lastTaskTimestamp = message.task.toTimestamp;
+            }
+          } else {
+            console.error('Received malformed task object:', message.task);
+          }
+        }
+        break;
+        
+      case 'task-vote':
+        // Handle received vote
+        if (message.taskId !== undefined && message.vote && message.peerId && message.username) {
+          // Process the vote
+          handleReceivedVote(message);
+          console.log(`Received vote from ${message.username}: ${message.vote}`);
+          
+          // Show message about the vote
+          addSystemMessage(`${message.username} voted to ${message.vote} the task.`);
+        } else {
+          console.error('Received malformed vote object:', message);
+        }
+        break;
+        
+      case 'transcript-message':
+        handleTranscriptMessage(message);
+        break;
+        
+      default:
+        console.log(`Received unknown message type from ${peerId}:`, message);
+    }
+  } catch (err) {
+    console.error(`Error parsing data from peer ${peerId}:`, err, data);
+  }
+}
+
+// Handle a vote received from a peer
+function handleReceivedVote(data) {
+  const { taskId, vote, peerId, username } = data;
+  
+  // Validate data
+  if (!taskId || !vote || !peerId) {
+    console.error('Invalid vote data received:', data);
+    return;
+  }
+  
+  console.log(`Processing vote from ${username} (${peerId}) for task ${taskId}: ${vote}`);
+  
+  // Check if we have this task
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) {
+    console.warn(`Received vote for unknown task ${taskId}`);
+    return;
+  }
+  
+  // Store the vote
+  if (!taskVotes.has(taskId)) {
+    taskVotes.set(taskId, new Map());
+  }
+  
+  // Create vote object
+  const voteObj = { peerId, username, vote };
+  taskVotes.get(taskId).set(peerId, voteObj);
+  
+  // Update the UI if the task card exists
+  const taskCard = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
+  if (taskCard) {
+    const acceptCount = taskCard.querySelector('.accept-count');
+    const rejectCount = taskCard.querySelector('.reject-count');
+    updateTaskVoteCounts(taskId, acceptCount, rejectCount);
+  } else {
+    console.warn(`Task card for task ${taskId} not found in DOM`);
+    
+    // If task is pending but we don't have the card displayed, create it
+    if (task.status === 'pending') {
+      if (!isPendingTask || !currentPendingTask || currentPendingTask.id !== taskId) {
+        console.log(`Creating task card for task ${taskId} that we received a vote for but wasn't displayed`);
+        currentPendingTask = task;
+        isPendingTask = true;
+        createTaskCard(task);
+      }
+    }
+  }
+  
+  // Check if task is resolved
+  checkTaskResolution(taskId);
+}
+
+// Broadcast a new task to all peers
+function broadcastNewTask(task) {
+  console.log(`Broadcasting new task to ${peers.size} peers:`, task);
+  
+  // Create task message
+  const taskMsg = {
+    type: 'new-task',
+    task: task
+  };
+  
+  // Broadcast to all peers
+  let broadcastCount = 0;
+  peers.forEach((peer, peerId) => {
+    if (peer.connection && peer.connection.open) {
+      try {
+        peer.connection.send(JSON.stringify(taskMsg));
+        console.log(`Sharing new task with peer ${peerId}`);
+        broadcastCount++;
+      } catch (err) {
+        console.error(`Error sending task to peer ${peerId}:`, err);
+      }
+    } else {
+      console.warn(`Cannot send task to peer ${peerId}: connection not open`);
+    }
+  });
+  
+  console.log(`Broadcast task to ${broadcastCount} peers out of ${peers.size} total peers`);
+}
+
+// Add debug UI for easier testing
+document.addEventListener('DOMContentLoaded', () => {
+  // Create a debug button for testing purposes
+  const debugContainer = document.createElement('div');
+  debugContainer.style.position = 'fixed';
+  debugContainer.style.bottom = '20px';
+  debugContainer.style.left = '20px';
+  debugContainer.style.zIndex = '1000';
+  debugContainer.style.display = 'flex';
+  debugContainer.style.flexDirection = 'column';
+  debugContainer.style.gap = '10px';
+  
+  const addTestDataBtn = document.createElement('button');
+  addTestDataBtn.textContent = 'Add Test Transcript Data';
+  addTestDataBtn.style.padding = '8px';
+  addTestDataBtn.style.backgroundColor = '#4caf50';
+  addTestDataBtn.style.color = 'white';
+  addTestDataBtn.style.border = 'none';
+  addTestDataBtn.style.borderRadius = '4px';
+  addTestDataBtn.style.cursor = 'pointer';
+  addTestDataBtn.addEventListener('click', () => {
+    window.addTestTranscriptData();
+  });
+  
+  const debugTaskBtn = document.createElement('button');
+  debugTaskBtn.textContent = 'Debug Task Creation';
+  debugTaskBtn.style.padding = '8px';
+  debugTaskBtn.style.backgroundColor = '#2196f3';
+  debugTaskBtn.style.color = 'white';
+  debugTaskBtn.style.border = 'none';
+  debugTaskBtn.style.borderRadius = '4px';
+  debugTaskBtn.style.cursor = 'pointer';
+  debugTaskBtn.addEventListener('click', () => {
+    console.log('===== DEBUG TASK CREATION =====');
+    console.log('transcripts Map:', transcripts);
+    console.log('lastTaskTimestamp:', lastTaskTimestamp, 'Date:', new Date(lastTaskTimestamp).toISOString());
+    
+    // Count total transcript entries
+    let totalEntries = 0;
+    transcripts.forEach((entries) => {
+      totalEntries += entries.length;
+    });
+    console.log('Total transcript entries:', totalEntries);
+    
+    // Check DOM for message elements
+    const messages = document.querySelectorAll('.messages .message');
+    console.log('Chat messages in DOM:', messages.length);
+    
+    // Execute task creation
+    createTask()
+      .then(() => console.log('Task creation completed'))
+      .catch(err => console.error('Task creation failed:', err));
+  });
+  
+  debugContainer.appendChild(addTestDataBtn);
+  debugContainer.appendChild(debugTaskBtn);
+  
+  // Add to DOM when chat screen is visible
+  const chatScreen = document.getElementById('chat-screen');
+  if (chatScreen) {
+    // Only add in development or if URL has debug=true parameter
+    const isDebugMode = window.location.search.includes('debug=true') || 
+                        (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development');
+    
+    if (isDebugMode) {
+      document.body.appendChild(debugContainer);
+    }
+  }
+});
