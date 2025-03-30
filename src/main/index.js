@@ -556,10 +556,11 @@ function setupIpcHandlers() {
       // Write to file
       fs.writeFileSync(filename, Buffer.from(audioData));
       
-      // Call OpenAI's transcription API with the current model setting
-      console.log(`Sending audio file to OpenAI for transcription using model: ${TRANSCRIPTION_MODEL}`);
+      // Call OpenAI's transcription API
+      console.log(`Sending audio file to OpenAI for transcription: ${filename}`);
+      const transcription = await transcribeAudio(filename);
       
-      const transcriptionResult = await transcribeAudio(filename, TRANSCRIPTION_MODEL);
+      console.log(`Transcription received: ${transcription}`);
       
       // Delete the temporary file
       try {
@@ -568,39 +569,12 @@ function setupIpcHandlers() {
         console.error(`Error deleting temp file ${filename}:`, err);
       }
       
-      // Check if there was an error
-      if (transcriptionResult.error) {
-        console.error(`Transcription error: ${transcriptionResult.error}`);
-        return { 
-          success: false, 
-          error: transcriptionResult.error
-        };
-      }
-      
-      // Extract text from the transcription result
-      const transcriptionText = transcriptionResult.text || '';
-      
-      // Validate transcription
-      if (!transcriptionText || transcriptionText.trim() === '' || transcriptionText.length < 2) {
-        console.log(`Empty or short transcription: "${transcriptionText}", skipping`);
-        return { 
-          success: true, 
-          transcription: '',
-          username,
-          speaker: username,
-          text: '',
-          timestamp
-        };
-      }
-      
-      console.log(`Valid transcription: "${transcriptionText.substring(0, 50)}..."`);
-      
       return { 
         success: true, 
-        transcription: transcriptionText,
+        transcription,
         username,
         speaker: username,
-        text: transcriptionText,
+        text: transcription,
         timestamp 
       };
     } catch (error) {
@@ -858,63 +832,84 @@ function setupIpcHandlers() {
   });
 }
 
-// Transcribe audio file
-async function transcribeAudio(audioPath, model = 'whisper-1') {
+// Transcribe audio using OpenAI
+async function transcribeAudio(filePath) {
   try {
-    console.log(`Transcribing audio using model: ${model}`);
-    
-    if (!fs.existsSync(audioPath)) {
-      console.error(`Audio file not found: ${audioPath}`);
-      return { error: 'Audio file not found' };
-    }
-    
+    // Check if OpenAI client is initialized
     if (!openai) {
-      console.error('OpenAI client not initialized');
-      return { error: 'OpenAI client not initialized' };
+      throw new Error('OpenAI API key not set. Please configure in settings.');
     }
     
-    // Calculate file size in MB
-    const stats = fs.statSync(audioPath);
-    const fileSizeMB = stats.size / (1024 * 1024);
-    console.log(`Audio file size: ${fileSizeMB.toFixed(2)} MB`);
-    
-    // Check file size (25MB is the OpenAI limit)
-    if (fileSizeMB > 24) {
-      console.error(`File size too large: ${fileSizeMB.toFixed(2)} MB (max 24MB)`);
-      return { error: `File size too large: ${fileSizeMB.toFixed(2)} MB (max 24MB)` };
-    }
-    
-    // Create form data with the audio file
-    const file = fs.createReadStream(audioPath);
+    console.log(`Using transcription model: ${TRANSCRIPTION_MODEL}`);
     
     let transcription;
     
-    // Use the appropriate API for different models
-    if (model.startsWith('gpt-4')) {
-      // For GPT-4o models, use audio.transcriptions.create
+    // Handle different model formats
+    if (TRANSCRIPTION_MODEL === 'whisper-1') {
+      // Use the whisper model API
       transcription = await openai.audio.transcriptions.create({
-        file,
-        model
+        file: fs.createReadStream(filePath),
+        model: TRANSCRIPTION_MODEL,
+        language: "en",
       });
+      
+      console.log(`OpenAI Whisper transcription returned: "${transcription.text}"`);
+      
+      // Validation for whisper model result
+      if (!transcription.text || transcription.text.trim() === '') {
+        console.log(`Transcription ignored (too short): ${transcription.text}`);
+        return '';
+      }
+      
+      if (transcription.text.length < 2) {
+        console.log(`Empty or short transcription: "${transcription.text}"`);
+        return '';
+      }
+      
+      console.log(`Valid transcription: "${transcription.text}"`);
+      return transcription.text;
+    } else if (TRANSCRIPTION_MODEL === 'gpt-4o-mini-transcribe' || TRANSCRIPTION_MODEL === 'gpt-4o-transcribe') {
+      // Use the gpt-4o transcription API format
+      transcription = await openai.audio.speech.transcriptions.create({
+        file: fs.createReadStream(filePath),
+        model: TRANSCRIPTION_MODEL,
+        language: "en",
+      });
+      
+      console.log(`OpenAI GPT-4o transcription returned:`, transcription);
+      
+      // Extract text from GPT-4o transcription result
+      // The actual structure depends on the API response format
+      const transcribedText = transcription.text || '';
+      
+      // Validation
+      if (!transcribedText || transcribedText.trim() === '') {
+        console.log(`GPT-4o transcription ignored (too short): ${transcribedText}`);
+        return '';
+      }
+      
+      if (transcribedText.length < 2) {
+        console.log(`Empty or short GPT-4o transcription: "${transcribedText}"`);
+        return '';
+      }
+      
+      console.log(`Valid GPT-4o transcription: "${transcribedText}"`);
+      return transcribedText;
     } else {
-      // For Whisper models, use audio.transcriptions.create
+      // Default to whisper-1 if model is not recognized
+      console.warn(`Unrecognized transcription model: ${TRANSCRIPTION_MODEL}, falling back to whisper-1`);
+      
       transcription = await openai.audio.transcriptions.create({
-        file,
-        model
+        file: fs.createReadStream(filePath),
+        model: "whisper-1",
+        language: "en",
       });
+      
+      return transcription.text || '';
     }
-    
-    // Check and validate response
-    if (!transcription || !transcription.text) {
-      console.error('Empty or invalid transcription result:', transcription);
-      return { error: 'Failed to get valid transcription' };
-    }
-    
-    console.log('Transcription successful:', transcription.text.substring(0, 100) + '...');
-    return transcription;
   } catch (error) {
-    console.error('Error transcribing audio:', error);
-    return { error: error.message || 'Unknown error in transcription' };
+    console.error('Error in OpenAI transcription API call:', error);
+    throw error;
   }
 }
 
