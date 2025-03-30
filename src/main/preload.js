@@ -283,6 +283,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startScreenShare: (sourceId) => {
     logEvent('startScreenShare', `Starting screen share with source ID: ${sourceId}`);
     return ipcRenderer.invoke('start-screen-share', sourceId);
+  },
+  
+  // Save metadata with recording in background
+  saveMetadataWithRecording: async (metadataContent, filename) => {
+    return ipcRenderer.invoke('save-metadata-silently', metadataContent, filename);
   }
 });
 

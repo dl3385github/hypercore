@@ -889,6 +889,33 @@ function setupIpcHandlers() {
       };
     }
   });
+
+  // Save metadata silently without prompting the user
+  ipcMain.handle('save-metadata-silently', async (event, metadataContent, filename) => {
+    try {
+      // Create directory for recordings if it doesn't exist
+      const recordingsDir = path.join(app.getPath('documents'), 'HypercoreRecordings');
+      if (!fs.existsSync(recordingsDir)) {
+        fs.mkdirSync(recordingsDir, { recursive: true });
+      }
+      
+      // Save the metadata file
+      const filePath = path.join(recordingsDir, filename);
+      fs.writeFileSync(filePath, metadataContent);
+      
+      console.log(`Metadata saved silently to: ${filePath}`);
+      return { 
+        success: true, 
+        path: filePath 
+      };
+    } catch (error) {
+      console.error('Error saving metadata silently:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to save metadata' 
+      };
+    }
+  });
 }
 
 // Transcribe audio using OpenAI
