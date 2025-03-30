@@ -3790,44 +3790,38 @@ function startVideoRecording() {
       );
       
       // Draw recent transcript for local user
-      const localUserKey = currentUser?.handle || 'You';
-      if (transcripts.has(localUserKey)) {
-        const userTranscripts = transcripts.get(localUserKey);
+      if (transcripts.has(currentUser?.handle || 'You')) {
+        const userTranscripts = transcripts.get(currentUser?.handle || 'You');
         if (userTranscripts && userTranscripts.length > 0) {
           const latestTranscript = userTranscripts[userTranscripts.length - 1];
           
-          // Only show if less than 8 seconds old to ensure visibility
+          // Only show if less than 5 seconds old
           const transcriptAge = Date.now() - new Date(latestTranscript.timestamp).getTime();
-          if (transcriptAge < 8000) {
-            // Get the transcript text with fallback
-            const transcriptText = latestTranscript.text || '';
+          if (transcriptAge < 5000) {
+            // Create transcript background
+            const maxWidth = localVideoRect.width - 20;
+            const transcriptText = latestTranscript.text;
             
-            if (transcriptText.trim().length > 0) {
-              // Create transcript background - measure text first for proper sizing
-              ctx.font = '16px Arial';
-              const maxWidth = localVideoRect.width - 20;
-              const textMetrics = ctx.measureText(transcriptText);
-              const textWidth = Math.min(maxWidth, textMetrics.width + 20); // Add padding
-              
-              // Background for transcript - more visible
-              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-              ctx.fillRect(
-                localVideoRect.x, 
-                localVideoRect.y + localVideoRect.height - 65,
-                textWidth,
-                30
-              );
-              
-              // Transcript text with better contrast
-              ctx.fillStyle = '#ffffff';
-              ctx.fillText(
-                transcriptText, 
-                localVideoRect.x + 10, 
-                localVideoRect.y + localVideoRect.height - 45
-              );
-              
-              console.log(`Drawing local transcript: "${transcriptText}" at (${localVideoRect.x + 10}, ${localVideoRect.y + localVideoRect.height - 45})`);
-            }
+            ctx.font = '16px Arial';
+            const textMetrics = ctx.measureText(transcriptText);
+            const textWidth = Math.min(maxWidth, textMetrics.width);
+            
+            // Background for transcript
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(
+              localVideoRect.x, 
+              localVideoRect.y + localVideoRect.height - 60,
+              textWidth + 20,
+              30
+            );
+            
+            // Transcript text
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(
+              transcriptText, 
+              localVideoRect.x + 10, 
+              localVideoRect.y + localVideoRect.height - 40
+            );
           }
         }
       }
@@ -4329,69 +4323,43 @@ function saveRecordedVideo(videoBlob) {
       videoBlob = new Blob([videoBlob], { type: 'video/webm' });
     }
     
-    // Important: Use Electron's API to save the file to avoid browser compatibility issues
-    // This requires a renderer-to-main process communication
+    // Save metadata as JSON - create and save the file separately to avoid confusion
+    const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
+    const metadataUrl = URL.createObjectURL(metadataBlob);
+    const metadataLink = document.createElement('a');
+    metadataLink.href = metadataUrl;
+    metadataLink.download = `meeting-metadata-${roomName}-${timestamp}.json`;
     
-    // First save the video file
-    const videoFileName = `meeting-recording-${roomName}-${timestamp}.webm`;
-    
-    // Create a temporary URL for the video blob
+    // Save video - ensure it has .webm extension and is downloaded first
     const videoUrl = URL.createObjectURL(videoBlob);
+    const videoLink = document.createElement('a');
+    videoLink.href = videoUrl;
     
-    // Use Electron's IPC to save the file with explicit file extension
-    window.electronAPI.saveFile({
-      title: 'Save Video Recording',
-      defaultPath: videoFileName,
-      filters: [
-        { name: 'WebM Files', extensions: ['webm'] }
-      ],
-      data: videoUrl,
-      type: 'video'
-    })
-    .then(result => {
-      if (result.success) {
-        console.log('Video saved successfully at:', result.filePath);
-        
-        // Now save the metadata after a delay
-        setTimeout(() => {
-          // Convert metadata to JSON blob
-          const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
-          const metadataUrl = URL.createObjectURL(metadataBlob);
-          
-          // Save metadata file
-          window.electronAPI.saveFile({
-            title: 'Save Meeting Metadata',
-            defaultPath: `meeting-metadata-${roomName}-${timestamp}.json`,
-            filters: [
-              { name: 'JSON Files', extensions: ['json'] }
-            ],
-            data: metadataUrl,
-            type: 'json'
-          })
-          .then(metaResult => {
-            if (metaResult.success) {
-              console.log('Metadata saved successfully at:', metaResult.filePath);
-            } else {
-              console.warn('User cancelled metadata save or error occurred');
-            }
-            
-            // Clean up URLs
-            URL.revokeObjectURL(metadataUrl);
-            URL.revokeObjectURL(videoUrl);
-          });
-        }, 1000); // Wait 1 second before prompting for metadata save
-        
-        addSystemMessage('Video recording saved successfully.');
-      } else {
-        console.warn('User cancelled save or error occurred');
-        URL.revokeObjectURL(videoUrl);
-      }
-    })
-    .catch(error => {
-      console.error('Error saving recording:', error);
-      addSystemMessage(`Error saving recording: ${error.message}`);
+    // Ensure the filename has the .webm extension
+    let videoFilename = `meeting-recording-${roomName}-${timestamp}.webm`;
+    // Double-check that the extension is included
+    if (!videoFilename.toLowerCase().endsWith('.webm')) {
+      videoFilename += '.webm';
+    }
+    videoLink.download = videoFilename;
+    
+    // Trigger video download first
+    document.body.appendChild(videoLink);
+    videoLink.click();
+    document.body.removeChild(videoLink);
+    
+    // Short delay before triggering metadata download to avoid confusion
+    setTimeout(() => {
+      document.body.appendChild(metadataLink);
+      metadataLink.click();
+      document.body.removeChild(metadataLink);
+      
+      // Clean up URLs
       URL.revokeObjectURL(videoUrl);
-    });
+      URL.revokeObjectURL(metadataUrl);
+    }, 1000);
+    
+    addSystemMessage('Video recording saved successfully.');
   } catch (error) {
     console.error('Error saving video recording:', error);
     addSystemMessage(`Error saving recording: ${error.message}`);
@@ -5412,13 +5380,13 @@ async function handleLeaveRoom() {
     loginScreen.insertBefore(successMessage, loginScreen.firstChild);
     
     // Remove the message after 10 seconds
-          setTimeout(() => {
+    setTimeout(() => {
       successMessage.remove();
     }, 10000);
     
     // Clear the input fields
     messageInput.value = '';
-      } catch (error) {
+  } catch (error) {
     console.error('Error leaving room:', error);
     alert(`Error leaving room: ${error.message}`);
   }
@@ -5792,7 +5760,7 @@ function renderFrame() {
       const textX = chatAreaX + 10 + usernameWidth;
       
       // Simple word wrap
-      const words = transcript.text.split(' ');
+      const words = transcript.content.split(' ');
       let line = '';
       let lineY = transcriptY;
       

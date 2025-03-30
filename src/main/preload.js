@@ -204,34 +204,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Send vote to all peers via Hypercore
   sendVote: (taskId, vote) => {
-    logEvent('sendVote', `Sending vote ${vote} for task ${taskId}`);
+    logEvent('sendVote', `Sending vote ${vote} for task ${taskId} to all peers via Hypercore`);
     return ipcRenderer.invoke('send-vote', taskId, vote);
   },
   
-  // Listen for new tasks
+  // Receive new tasks
   onNewTask: (callback) => {
     console.log('[Preload] Setting up onNewTask listener');
-    ipcRenderer.on('new-task', (event, message) => {
-      logEvent('received new-task', message);
-      callback(message);
+    ipcRenderer.on('new-task', (event, task) => {
+      logEvent('received new-task', task);
+      callback(task);
     });
     
-    // Return a cleanup function
     return () => {
       console.log('[Preload] Cleaning up onNewTask listener');
       ipcRenderer.removeAllListeners('new-task');
     };
   },
   
-  // Listen for new votes
+  // Receive votes
   onNewVote: (callback) => {
     console.log('[Preload] Setting up onNewVote listener');
-    ipcRenderer.on('new-vote', (event, message) => {
-      logEvent('received new-vote', message);
-      callback(message);
+    ipcRenderer.on('new-vote', (event, vote) => {
+      logEvent('received new-vote', vote);
+      callback(vote);
     });
     
-    // Return a cleanup function
     return () => {
       console.log('[Preload] Cleaning up onNewVote listener');
       ipcRenderer.removeAllListeners('new-vote');
@@ -285,12 +283,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startScreenShare: (sourceId) => {
     logEvent('startScreenShare', `Starting screen share with source ID: ${sourceId}`);
     return ipcRenderer.invoke('start-screen-share', sourceId);
-  },
-  
-  // Save file to disk (for video recordings and metadata)
-  saveFile: (options) => {
-    logEvent('saveFile', `Saving ${options.type} file with default path: ${options.defaultPath}`);
-    return ipcRenderer.invoke('save-file', options);
   }
 });
 
