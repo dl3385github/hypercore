@@ -284,6 +284,18 @@
           </div>
           
           <div class="setting-item">
+            <label for="transcription-model">Transcription Model:</label>
+            <select id="transcription-model">
+              <option value="whisper-1">Whisper-1 (Default)</option>
+              <option value="gpt-4o-mini-transcribe">GPT-4o Mini Transcribe</option>
+              <option value="gpt-4o-transcribe">GPT-4o Transcribe</option>
+            </select>
+          </div>
+          <div class="setting-description">
+            Choose the AI model for transcription. GPT-4o models may provide higher accuracy but may use a different API format.
+          </div>
+          
+          <div class="setting-item">
             <label for="microphone-select">Microphone:</label>
             <select id="microphone-select">
               <option value="">Loading microphones...</option>

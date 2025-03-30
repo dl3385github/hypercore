@@ -29,6 +29,7 @@ const audioThresholdSlider = document.getElementById('audio-threshold');
 const thresholdValueDisplay = document.getElementById('threshold-value');
 const transcriptionThresholdSlider = document.getElementById('transcription-threshold');
 const transcriptionThresholdValueDisplay = document.getElementById('transcription-threshold-value');
+const transcriptionModelSelect = document.getElementById('transcription-model');
 const microphoneSelect = document.getElementById('microphone-select');
 const speakerSelect = document.getElementById('speaker-select');
 const webcamSelect = document.getElementById('webcam-select');
@@ -131,6 +132,7 @@ let availableDevices = {
 const appSettings = {
   audioThreshold: 0.05, // Default microphone threshold
   transcriptionThreshold: 0.05, // Default transcription threshold
+  transcriptionModel: 'whisper-1', // Default transcription model
 };
 
 // Save settings to localStorage
@@ -167,6 +169,10 @@ function loadSettings() {
         appSettings.transcriptionThreshold = parsedSettings.transcriptionThreshold;
       }
       
+      if (parsedSettings.transcriptionModel) {
+        appSettings.transcriptionModel = parsedSettings.transcriptionModel;
+      }
+      
       // Restore device selections
       if (parsedSettings.selectedMicrophone) {
         selectedMicrophoneId = parsedSettings.selectedMicrophone;
@@ -195,6 +201,17 @@ function updateTranscriptionThreshold(value) {
     })
     .catch(error => {
       console.error('Error updating transcription threshold:', error);
+    });
+}
+
+// Function to update transcription model on the main process
+function updateTranscriptionModel(model) {
+  window.electronAPI.updateTranscriptionModel(model)
+    .then(() => {
+      console.log(`Transcription model updated to ${model}`);
+    })
+    .catch(error => {
+      console.error('Error updating transcription model:', error);
     });
 }
 
@@ -346,6 +363,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize transcription threshold slider
   transcriptionThresholdSlider.value = appSettings.transcriptionThreshold;
   transcriptionThresholdValueDisplay.textContent = appSettings.transcriptionThreshold;
+  
+  // Initialize transcription model selector
+  if (transcriptionModelSelect) {
+    transcriptionModelSelect.value = appSettings.transcriptionModel || 'whisper-1';
+    
+    transcriptionModelSelect.addEventListener('change', (e) => {
+      const selectedModel = e.target.value;
+      console.log(`Selected transcription model: ${selectedModel}`);
+      appSettings.transcriptionModel = selectedModel;
+      updateTranscriptionModel(selectedModel);
+      saveSettings();
+    });
+  }
   
   audioThresholdSlider.addEventListener('input', (e) => {
     const newValue = parseFloat(e.target.value);
@@ -1114,60 +1144,59 @@ function sendMediaStateViaDataChannel(dataChannel) {
 
 // Handle messages received via data channel
 function handleDataChannelMessage(peerId, message) {
-  console.log(`Received data channel message from ${peerId}:`, message);
-  
-  if (message.type === 'media-state') {
-    // Update remote media state UI
-    updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
-  } else if (message.type === 'transcript') {
-    // Handle transcript message from peer
-    // Get the speaker from the message or use the peer's username
-    const speaker = message.speaker || getPeerUsername(peerId) || `Peer ${peerId.substring(0, 6)}`;
-    console.log(`Received transcript message from ${speaker}: "${message.text}"`);
-    
-    // Make sure we store this username for the peer if we don't have it already
-    if (!peerUsernames.has(peerId) && speaker !== `Peer ${peerId.substring(0, 6)}`) {
-      peerUsernames.set(peerId, speaker);
+  // Check message type and handle accordingly
+  try {
+    switch (message.type) {
+      case 'media-state':
+        if (message.username && typeof message.videoEnabled === 'boolean' && typeof message.audioEnabled === 'boolean') {
+          updateRemoteMediaState(peerId, message.username, message.videoEnabled, message.audioEnabled);
+        }
+        break;
+        
+      case 'chat-message':
+        if (message.username && message.text) {
+          addMessageToUI({
+            username: message.username,
+            message: message.text
+          });
+        }
+        break;
+        
+      case 'transcript':
+        if (message.username && message.text) {
+          updateTranscription(message.username, message.text);
+        }
+        break;
+        
+      case 'new-task':
+        if (message.task) {
+          handleNewTask(message.task, peerId);
+        }
+        break;
+        
+      case 'task-vote':
+        if (message.taskId && message.vote && message.peerId && message.username) {
+          handleReceivedVote(message);
+          addSystemMessage(`${message.username} voted to ${message.vote} the task.`);
+        }
+        break;
+        
+      case 'system-message':
+        if (message.text) {
+          addSystemMessage(message.text);
+        }
+        break;
+        
+      default:
+        console.log(`Received unknown message type via data channel from ${peerId}:`, message);
     }
-    
-    // Skip empty or very short transcriptions
-    if (!message.text || message.text.trim().length < 3) {
-      console.log(`Ignoring short transcript from ${speaker}: "${message.text}"`);
-      return;
+  } catch (err) {
+    // Check if process is defined before logging to console
+    if (typeof process !== 'undefined') {
+      console.error(`Error handling data channel message from ${peerId}:`, err);
+    } else {
+      console.error(`Error handling data channel message from ${peerId}: ${err.message}`);
     }
-    
-    // Update UI with the transcript
-    updateTranscription(speaker, message.text);
-    
-    // No need to add to transcript map again since updateTranscription already does this
-  } else if (message.type === 'screen-share-started') {
-    console.log(`Peer ${peerId} started screen sharing: ${message.sourceName}`);
-    addSystemMessage(`${message.username} started sharing their screen: ${message.sourceName}`);
-    
-    // Update active screen sharer
-    activeScreenSharePeerId = peerId;
-    
-    // No longer stopping our own share - we support multiple simultaneous shares
-  } else if (message.type === 'screen-share-stopped') {
-    console.log(`Peer ${peerId} stopped screen sharing`);
-    addSystemMessage(`${message.username} stopped sharing their screen`);
-    
-    // Remove the screen share from grid
-    const screenContainer = document.getElementById(`screen-share-${peerId}`);
-    if (screenContainer) {
-      screenContainer.remove();
-    }
-    
-    // Clear active screen sharer only if it was this peer
-    if (activeScreenSharePeerId === peerId) {
-      activeScreenSharePeerId = null;
-    }
-  } else if (message.type === 'new-task') {
-    // Handle new task from peer
-    handleNewTask(message.task, peerId);
-  } else if (message.type === 'task-vote') {
-    // Handle task vote from peer
-    handleTaskVote(message.taskId, message.username, message.vote, peerId);
   }
 }
 
@@ -4075,14 +4104,14 @@ function startVideoRecording() {
         ctx.fillText('No transcripts yet', chatAreaX + 20, canvas.height / 2 + 40);
       }
       
-      // Add To-Do List to the recording if there are accepted tasks
-      if (acceptedTasks.length > 0) {
-        // Title for the to-do list section
-        const todoY = Math.min(canvas.height - 250, (canvas.height / 2) + 300);
-        ctx.fillStyle = '#ff9800'; // Orange color for to-do section
-        ctx.font = 'bold 22px Arial';
-        ctx.fillText('To-Do List', chatAreaX + 20, todoY);
-        
+      // Draw To-Do List section (always show this section)
+      const todoY = Math.min(canvas.height - 250, (canvas.height / 2) + 300);
+      ctx.fillStyle = '#FFC107'; // Yellow color for to-do section
+      ctx.font = 'bold 22px Arial';
+      ctx.fillText('To-Do List', chatAreaX + 20, todoY);
+      
+      // Get accepted tasks
+      if (acceptedTasks && acceptedTasks.length > 0) {
         // Draw each to-do item
         ctx.font = '16px Arial';
         acceptedTasks.forEach((task, index) => {
@@ -4118,34 +4147,39 @@ function startVideoRecording() {
           ctx.fillStyle = '#bbbbbb';
           ctx.font = '12px Arial';
           ctx.fillText(`Added by ${task.createdBy} at ${new Date(task.createdAt).toLocaleTimeString()}`, 
-                       textX, lineY + 20);
+                      textX, lineY + 20);
         });
+      } else {
+        // Show "No tasks" message
+        ctx.fillStyle = '#bbbbbb';
+        ctx.font = '16px Arial';
+        ctx.fillText('No tasks accepted yet', chatAreaX + 20, todoY + 40);
       }
       
       // Draw pending task card if there is one
       if (isPendingTask && currentPendingTask) {
         const task = currentPendingTask;
-        const taskCardY = 80; // Position it right after chat messages title
+        const taskCardY = todoY + 200; // Position it below the to-do list
         
         // Draw card background
         ctx.fillStyle = 'rgba(40, 40, 40, 0.9)';
-        ctx.fillRect(chatAreaX + 10, taskCardY + 250, chatAreaWidth - 20, 160);
+        ctx.fillRect(chatAreaX + 10, taskCardY, chatAreaWidth - 20, 160);
         
         // Draw card border
-        ctx.strokeStyle = '#4a69bd';
+        ctx.strokeStyle = '#FFC107'; // Yellow border
         ctx.lineWidth = 2;
-        ctx.strokeRect(chatAreaX + 10, taskCardY + 250, chatAreaWidth - 20, 160);
+        ctx.strokeRect(chatAreaX + 10, taskCardY, chatAreaWidth - 20, 160);
         
         // Draw task header
-        ctx.fillStyle = '#4a69bd';
+        ctx.fillStyle = '#FFC107'; // Yellow color
         ctx.font = 'bold 18px Arial';
-        ctx.fillText('Current Task Proposal', chatAreaX + 20, taskCardY + 25 + 250);
+        ctx.fillText('Current Task Proposal', chatAreaX + 20, taskCardY + 25);
         
         // Draw task creator and time
         ctx.fillStyle = '#aaaaaa';
         ctx.font = '14px Arial';
         ctx.fillText(`Proposed by ${task.createdBy} at ${new Date(task.createdAt).toLocaleTimeString()}`, 
-                     chatAreaX + 20, taskCardY + 45 + 250);
+                     chatAreaX + 20, taskCardY + 45);
         
         // Draw task content
         ctx.fillStyle = '#ffffff';
@@ -4156,7 +4190,7 @@ function startVideoRecording() {
         const textX = chatAreaX + 20;
         const words = task.text.split(' ');
         let line = '';
-        let lineY = taskCardY + 75 + 250;
+        let lineY = taskCardY + 75;
         
         words.forEach(word => {
           const testLine = line + (line ? ' ' : '') + word;
@@ -4179,10 +4213,11 @@ function startVideoRecording() {
           const voteCount = votes.size;
           const totalParticipants = peers.size + 1; // Include self
           const acceptVotes = Array.from(votes.values()).filter(v => v.vote === 'accept').length;
+          const rejectVotes = Array.from(votes.values()).filter(v => v.vote === 'reject').length;
           
           ctx.fillStyle = '#aaaaaa';
           ctx.font = '14px Arial';
-          ctx.fillText(`Votes: ${voteCount}/${totalParticipants} (${acceptVotes} accept)`, 
+          ctx.fillText(`Votes: ${voteCount}/${totalParticipants} (${acceptVotes} accept, ${rejectVotes} reject)`, 
                        textX, lineY + 30);
         }
       }
@@ -5454,244 +5489,355 @@ function addFullscreenButtonToContainer(container, stream, peerId) {
 
 // Function to render a frame of the video recording
 function renderFrame() {
-  // If not recording, exit early
   if (!isVideoRecording) return;
   
-  const videoCanvas = document.createElement('canvas');
-  videoCanvas.width = 1280;
-  videoCanvas.height = 720;
-  const ctx = videoCanvas.getContext('2d');
-  
-  // Fill background
+  // Clear canvas
   ctx.fillStyle = '#1a1a1a';
-  ctx.fillRect(0, 0, videoCanvas.width, videoCanvas.height);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   
-  // Calculate sizes for grid layout
-  // Main video area takes 70% of width, chat takes 30%
-  const videoAreaWidth = Math.floor(videoCanvas.width * 0.7);
+  // NEW LAYOUT: 
+  // - Videos grid on the left (70% width)
+  // - Chat and transcript on the right (30% width)
+  const videoAreaWidth = Math.floor(canvas.width * 0.7);
   const chatAreaX = videoAreaWidth;
-  const chatAreaWidth = videoCanvas.width - videoAreaWidth;
+  const chatAreaWidth = canvas.width - videoAreaWidth;
   
-  // Draw separation line
-  ctx.strokeStyle = '#444';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(videoAreaWidth, 0);
-  ctx.lineTo(videoAreaWidth, videoCanvas.height);
-  ctx.stroke();
+  // Draw local video - position at the top left of the video area
+  const localVideoRect = { 
+    x: 10, 
+    y: 10, 
+    width: Math.floor(videoAreaWidth * 0.45),
+    height: Math.floor(canvas.height * 0.3)
+  };
   
-  // Draw timestamp
-  const timestamp = new Date().toLocaleTimeString();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '16px Arial';
-  ctx.textAlign = 'left';
-  ctx.fillText(timestamp, 10, 30);
+  const localVideoIsActive = localVideo.srcObject && 
+                             localVideo.videoWidth > 0 && 
+                             isVideoEnabled;
   
-  // Draw room ID
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '16px Arial';
-  ctx.textAlign = 'right';
-  ctx.fillText(`Room: ${currentRoomSpan.textContent}`, videoAreaWidth - 10, 30);
-  
-  // Draw local video
-  if (localVideo.srcObject && localVideo.srcObject.getVideoTracks().length > 0 && localVideo.videoWidth > 0) {
-    ctx.save();
-    
-    // Position in bottom right of video area
+  if (localVideoIsActive) {
+    // Calculate aspect ratio preserving dimensions
     const aspectRatio = localVideo.videoWidth / localVideo.videoHeight;
-    const width = Math.min(320, videoAreaWidth * 0.3);
-    const height = width / aspectRatio;
-    const x = videoAreaWidth - width - 20;
-    const y = videoCanvas.height - height - 20;
     
-    // Draw a border
-    ctx.strokeStyle = '#3f51b5';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x, y, width, height);
+    // Calculate dimensions that preserve aspect ratio
+    let width = localVideoRect.width;
+    let height = width / aspectRatio;
+    
+    // If height exceeds max height, adjust width accordingly
+    if (height > localVideoRect.height) {
+      height = localVideoRect.height;
+      width = height * aspectRatio;
+    }
+    
+    // Center in allocated space
+    const x = localVideoRect.x + Math.floor((localVideoRect.width - width) / 2);
+    const y = localVideoRect.y + Math.floor((localVideoRect.height - height) / 2);
+    
+    // Update rect with actual dimensions
+    localVideoRect.x = x;
+    localVideoRect.y = y;
+    localVideoRect.width = width;
+    localVideoRect.height = height;
     
     // Draw the video
-    ctx.drawImage(localVideo, x, y, width, height);
+    ctx.drawImage(
+      localVideo, 
+      localVideoRect.x, 
+      localVideoRect.y, 
+      localVideoRect.width, 
+      localVideoRect.height
+    );
+  } else {
+    // Draw placeholder for disabled camera
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(
+      localVideoRect.x, 
+      localVideoRect.y, 
+      localVideoRect.width, 
+      localVideoRect.height
+    );
     
-    // Add username overlay
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    ctx.fillRect(x, y + height - 30, width, 30);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '14px Arial';
+    // Add camera off icon
+    ctx.fillStyle = '#999999';
+    ctx.font = 'bold 36px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('📷❌', 
+      localVideoRect.x + localVideoRect.width/2, 
+      localVideoRect.y + localVideoRect.height/2);
     ctx.textAlign = 'left';
-    ctx.fillText('You', x + 10, y + height - 10);
-    
-    ctx.restore();
   }
   
-  // Draw remote videos in a grid
-  const remoteVideos = document.querySelectorAll('#remote-videos video:not([id^="screen-"]):not(.fullscreen-video)');
-  if (remoteVideos.length > 0) {
-    ctx.save();
-    
-    // Calculate grid dimensions
-    const maxPerRow = Math.min(remoteVideos.length, 2);
-    const rows = Math.ceil(remoteVideos.length / maxPerRow);
-    const vidWidth = Math.floor((videoAreaWidth - 40) / maxPerRow);
-    const vidHeight = Math.floor((videoCanvas.height - 60) / rows);
-    
-    remoteVideos.forEach((video, index) => {
-      if (video.srcObject && video.srcObject.getVideoTracks().length > 0 && video.videoWidth > 0) {
-        const row = Math.floor(index / maxPerRow);
-        const col = index % maxPerRow;
-        
-        const x = 20 + col * vidWidth;
-        const y = 60 + row * vidHeight;
-        
-        // Get peer username from container
-        const container = video.closest('.remote-video-container');
-        let username = 'Peer';
-        if (container && container.dataset.peerUsername) {
-          username = container.dataset.peerUsername;
-        }
-        
-        // Draw border
-        ctx.strokeStyle = '#4caf50';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(x, y, vidWidth - 10, vidHeight - 10);
-        
-        // Draw video
-        ctx.drawImage(video, x, y, vidWidth - 10, vidHeight - 10);
-        
-        // Add username overlay
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.fillRect(x, y + vidHeight - 40, vidWidth - 10, 30);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '14px Arial';
-        ctx.textAlign = 'left';
-        ctx.fillText(username, x + 10, y + vidHeight - 20);
-      }
-    });
-    
-    ctx.restore();
-  }
+  // Add border
+  ctx.strokeStyle = '#2196f3';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(
+    localVideoRect.x, 
+    localVideoRect.y, 
+    localVideoRect.width, 
+    localVideoRect.height
+  );
   
-  // Draw chat messages
-  ctx.save();
+  // Add username with better visibility
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(
+    localVideoRect.x, 
+    localVideoRect.y + localVideoRect.height - 30,
+    localVideoRect.width,
+    30
+  );
   
-  // Chat area header
-  ctx.fillStyle = '#333333';
-  ctx.fillRect(chatAreaX, 0, chatAreaWidth, 40);
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 18px Arial';
-  ctx.textAlign = 'center';
-  ctx.fillText('Chat', chatAreaX + chatAreaWidth / 2, 25);
+  ctx.fillText(
+    currentUser ? currentUser.handle : 'You', 
+    localVideoRect.x + 10, 
+    localVideoRect.y + localVideoRect.height - 10
+  );
   
-  // Draw chat messages
-  const messageY = 60;
-  const messageHeight = 20;
-  const maxMessages = Math.floor((videoCanvas.height - messageY) / messageHeight);
-  
-  let displayMessages = [];
-  
-  // If recording in progress, use the recorded messages
-  if (recordedChatMessages.length > 0) {
-    displayMessages = [...recordedChatMessages];
-  }
-  
-  // Only show the last 'maxMessages' messages
-  if (displayMessages.length > maxMessages) {
-    displayMessages = displayMessages.slice(displayMessages.length - maxMessages);
-  }
-  
-  displayMessages.forEach((msg, index) => {
-    const y = messageY + index * messageHeight;
-    
-    ctx.font = '14px Arial';
-    ctx.textAlign = 'left';
-    
-    // Calculate width of username for proper spacing
-    ctx.font = 'bold 14px Arial';
-    const usernameWidth = ctx.measureText(msg.username + ':').width + 10; // Add some spacing
-
-    // Draw username in bold
-    ctx.fillStyle = msg.isSystem ? '#ffeb3b' : '#4fc3f7';
-    ctx.fillText(msg.username + ':', chatAreaX + 10, y);
-    
-    // Draw message content after username with proper spacing
-    ctx.font = '14px Arial';
-    ctx.fillStyle = '#ffffff';
-    
-    // Calculate max width for the text (with some margin)
-    const maxWidth = chatAreaWidth - 20 - usernameWidth;
-    const textX = chatAreaX + 10 + usernameWidth;
-    
-    // Simple word wrap for message content
-    const words = msg.content.split(' ');
-    let line = '';
-    let lineY = y;
-    
-    words.forEach(word => {
-      const testLine = line + (line ? ' ' : '') + word;
-      const testWidth = ctx.measureText(testLine).width;
+  // Draw recent transcript for local user
+  if (transcripts.has(currentUser?.handle || 'You')) {
+    const userTranscripts = transcripts.get(currentUser?.handle || 'You');
+    if (userTranscripts && userTranscripts.length > 0) {
+      const latestTranscript = userTranscripts[userTranscripts.length - 1];
       
-      if (testWidth > maxWidth && line !== '') {
-        // Draw the current line
-        ctx.fillText(line, textX, lineY);
-        // Start a new line
-        line = word;
-        lineY += messageHeight;
+      // Only show if less than 5 seconds old
+      const transcriptAge = Date.now() - new Date(latestTranscript.timestamp).getTime();
+      if (transcriptAge < 5000) {
+        // Create transcript background
+        const maxWidth = localVideoRect.width - 20;
+        const transcriptText = latestTranscript.text;
+        
+        ctx.font = '16px Arial';
+        const textMetrics = ctx.measureText(transcriptText);
+        const textWidth = Math.min(maxWidth, textMetrics.width);
+        
+        // Background for transcript
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(
+          localVideoRect.x, 
+          localVideoRect.y + localVideoRect.height - 60,
+          textWidth + 20,
+          30
+        );
+        
+        // Transcript text
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(
+          transcriptText, 
+          localVideoRect.x + 10, 
+          localVideoRect.y + localVideoRect.height - 40
+        );
+      }
+    }
+  }
+  
+  // Draw remote video feeds in a grid layout
+  // Calculate grid layout for remaining peers
+  const remotePeers = Array.from(peerUsernames.keys());
+  
+  if (remotePeers.length > 0) {
+    // Create a grid layout (always starts at the top right)
+    const gridStartX = localVideoRect.x + localVideoRect.width + 20; // Right of local video
+    let gridX = gridStartX;
+    let gridY = 10;
+    const gridItemWidth = Math.floor((videoAreaWidth - gridStartX - 10) / 2); // 2 columns max
+    const gridItemHeight = Math.floor((canvas.height - 20) / 3); // 3 rows max
+    let colCounter = 0;
+    
+    // Draw each remote peer
+    remotePeers.forEach(peerId => {
+      // Get username
+      const username = peerUsernames.get(peerId) || `Peer ${peerId.substring(0, 6)}`;
+      
+      // Calculate position
+      const remoteRect = {
+        x: gridX,
+        y: gridY,
+        width: gridItemWidth,
+        height: gridItemHeight
+      };
+      
+      // Find the video element for this peer
+      const peerContainer = document.querySelector(`.remote-video-container[data-peer-id="${peerId}"]`);
+      const remoteVideo = peerContainer ? peerContainer.querySelector('video') : null;
+      const videoHasContent = remoteVideo && remoteVideo.videoWidth > 0;
+      
+      // Check if we have a valid video feed to display
+      if (videoHasContent) {
+        // Calculate aspect ratio preserving dimensions
+        const aspectRatio = remoteVideo.videoWidth / remoteVideo.videoHeight;
+        
+        // Calculate dimensions that preserve aspect ratio
+        let width = remoteRect.width;
+        let height = width / aspectRatio;
+        
+        // If height exceeds max height, adjust width accordingly
+        if (height > remoteRect.height) {
+          height = remoteRect.height;
+          width = height * aspectRatio;
+        }
+        
+        // Center in allocated space
+        const x = remoteRect.x + Math.floor((remoteRect.width - width) / 2);
+        const y = remoteRect.y + Math.floor((remoteRect.height - height) / 2);
+        
+        // Update rect with actual dimensions
+        remoteRect.x = x;
+        remoteRect.y = y;
+        remoteRect.width = width;
+        remoteRect.height = height;
+        
+        // Draw the video
+        ctx.drawImage(
+          remoteVideo, 
+          remoteRect.x, 
+          remoteRect.y, 
+          remoteRect.width, 
+          remoteRect.height
+        );
       } else {
-        line = testLine;
+        // Draw placeholder for video-off or not yet connected
+        ctx.fillStyle = '#2a2a2a';
+        ctx.fillRect(
+          remoteRect.x, 
+          remoteRect.y, 
+          remoteRect.width, 
+          remoteRect.height
+        );
+        
+        // Add camera off icon
+        ctx.fillStyle = '#999999';
+        ctx.font = 'bold 36px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('📷❌', 
+          remoteRect.x + remoteRect.width/2, 
+          remoteRect.y + remoteRect.height/2);
+        ctx.textAlign = 'left';
+      }
+      
+      // Add border
+      ctx.strokeStyle = '#4CAF50';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(
+        remoteRect.x, 
+        remoteRect.y, 
+        remoteRect.width, 
+        remoteRect.height
+      );
+      
+      // Add username with better visibility
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(
+        remoteRect.x, 
+        remoteRect.y + remoteRect.height - 30,
+        remoteRect.width,
+        30
+      );
+      
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 18px Arial';
+      ctx.fillText(
+        username, 
+        remoteRect.x + 10, 
+        remoteRect.y + remoteRect.height - 10
+      );
+      
+      // Draw recent transcript for this user if available
+      if (transcripts.has(username)) {
+        const peerTranscripts = transcripts.get(username);
+        if (peerTranscripts && peerTranscripts.length > 0) {
+          const latestTranscript = peerTranscripts[peerTranscripts.length - 1];
+          
+          // Only show if less than 5 seconds old
+          const transcriptAge = Date.now() - new Date(latestTranscript.timestamp).getTime();
+          if (transcriptAge < 5000) {
+            // Create transcript background
+            const maxWidth = remoteRect.width - 20;
+            const transcriptText = latestTranscript.text;
+            
+            ctx.font = '16px Arial';
+            const textMetrics = ctx.measureText(transcriptText);
+            const textWidth = Math.min(maxWidth, textMetrics.width);
+            
+            // Background for transcript
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(
+              remoteRect.x, 
+              remoteRect.y + remoteRect.height - 60,
+              textWidth + 20,
+              30
+            );
+            
+            // Transcript text
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(
+              transcriptText, 
+              remoteRect.x + 10, 
+              remoteRect.y + remoteRect.height - 40
+            );
+          }
+        }
+      }
+      
+      // Move to next grid position
+      colCounter++;
+      if (colCounter % 2 === 0) {
+        // Move to next row
+        gridX = gridStartX;
+        gridY += gridItemHeight + 10;
+      } else {
+        // Move to next column
+        gridX += gridItemWidth + 10;
       }
     });
-    
-    // Draw the last line
-    if (line) {
-      ctx.fillText(line, textX, lineY);
-    }
-  });
+  }
   
-  // Draw transcripts if they are recorded and not empty
-  if (recordedTranscripts.length > 0) {
-    // Draw transcripts header
-    const transcriptHeaderY = Math.min(videoCanvas.height - 120, messageY + displayMessages.length * messageHeight + 40);
-    ctx.fillStyle = '#333333';
-    ctx.fillRect(chatAreaX, transcriptHeaderY, chatAreaWidth, 30);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 16px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('Transcripts', chatAreaX + chatAreaWidth / 2, transcriptHeaderY + 20);
+  // Draw chat & transcript area with background
+  ctx.fillStyle = 'rgba(30, 30, 30, 0.8)';
+  ctx.fillRect(chatAreaX, 0, chatAreaWidth, canvas.height);
+  
+  // Title for the chat section
+  ctx.fillStyle = '#4CAF50';
+  ctx.font = 'bold 22px Arial';
+  ctx.fillText('Chat Messages', chatAreaX + 20, 40);
+  
+  // Draw chat messages vertically on the right side
+  const messagesToShow = [...recordedChatMessages].sort((a, b) => 
+    b.timestamp - a.timestamp
+  ).slice(0, 10).reverse();
+  
+  if (messagesToShow.length > 0) {
+    ctx.font = '16px Arial';
     
-    // Draw transcript content
-    let transcriptY = transcriptHeaderY + 40;
-    
-    // Only show a few recent transcripts to not overcrowd
-    const maxTranscripts = 3;
-    const recentTranscripts = recordedTranscripts.slice(-maxTranscripts);
-    
-    recentTranscripts.forEach(transcript => {
-      // Calculate username width for proper spacing
-      ctx.font = 'bold 14px Arial';
-      const usernameWidth = ctx.measureText(transcript.username + ':').width + 10;
+    messagesToShow.forEach((msg, index) => {
+      const y = 80 + (index * 45);
+      const date = new Date(msg.timestamp);
+      const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      // Draw time
+      ctx.fillStyle = '#999999';
+      ctx.fillText(timeStr, chatAreaX + 20, y);
       
       // Draw username
-      ctx.fillStyle = '#26a69a';
-      ctx.textAlign = 'left';
-      ctx.fillText(transcript.username + ':', chatAreaX + 10, transcriptY);
+      ctx.fillStyle = '#4db6ac';
+      ctx.font = 'bold 16px Arial';
+      ctx.fillText(`${msg.username}:`, chatAreaX + 20, y + 20);
       
-      // Draw transcript content
-      ctx.font = '14px Arial';
+      // Draw message with word wrap
       ctx.fillStyle = '#ffffff';
+      ctx.font = '16px Arial';
       
-      // Draw transcript with simple word wrap
-      const maxWidth = chatAreaWidth - 20 - usernameWidth;
-      const textX = chatAreaX + 10 + usernameWidth;
-      
-      // Simple word wrap
-      const words = transcript.content.split(' ');
+      const usernameWidth = ctx.measureText(`${msg.username}:`).width + 40; // Add extra spacing
+      const maxWidth = chatAreaWidth - 40 - usernameWidth;
+      const textX = chatAreaX + 20 + usernameWidth;
+      const words = msg.text.split(' ');
       let line = '';
-      let lineY = transcriptY;
+      let lineY = y + 20;
       
       words.forEach(word => {
         const testLine = line + (line ? ' ' : '') + word;
-        const testWidth = ctx.measureText(testLine).width;
+        const metrics = ctx.measureText(testLine);
         
-        if (testWidth > maxWidth && line !== '') {
+        if (metrics.width > maxWidth && line !== '') {
           ctx.fillText(line, textX, lineY);
           line = word;
           lineY += 20;
@@ -5700,19 +5846,197 @@ function renderFrame() {
         }
       });
       
-      if (line) {
-        ctx.fillText(line, textX, lineY);
-      }
-      
-      transcriptY = lineY + 30;
+      ctx.fillText(line, textX, lineY);
     });
+  } else {
+    ctx.fillStyle = '#999999';
+    ctx.font = '16px Arial';
+    ctx.fillText('No chat messages yet', chatAreaX + 20, 80);
   }
   
-  ctx.restore();
+  // Title for the transcript section
+  ctx.fillStyle = '#2196F3';
+  ctx.font = 'bold 22px Arial';
+  ctx.fillText('Recent Transcripts', chatAreaX + 20, canvas.height / 2);
   
-  // Store canvas data for recording
-  videoCanvas._lastFrameTime = Date.now();
-  return videoCanvas;
+  // Draw recent transcripts
+  const recentTranscripts = [...recordedTranscripts]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 5)
+    .reverse();
+  
+  if (recentTranscripts.length > 0) {
+    ctx.font = '16px Arial';
+    
+    recentTranscripts.forEach((transcript, index) => {
+      const y = (canvas.height / 2) + 40 + (index * 60);
+      const date = new Date(transcript.timestamp);
+      const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      
+      // Skip if transcript is just noise (less than 3 characters)
+      if (transcript.text.trim().length < 3) return;
+      
+      // Draw time
+      ctx.fillStyle = '#999999';
+      ctx.fillText(timeStr, chatAreaX + 20, y);
+      
+      // Draw username
+      ctx.fillStyle = '#64b5f6';
+      ctx.font = 'bold 16px Arial';
+      ctx.fillText(`${transcript.username}:`, chatAreaX + 20, y + 20);
+      
+      // Draw transcript with word wrap
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '16px Arial';
+      
+      const usernameWidth = ctx.measureText(`${transcript.username}:`).width + 20; // Add space after username
+      const maxWidth = chatAreaWidth - 40 - usernameWidth;
+      const textX = chatAreaX + 20 + usernameWidth;
+      const words = transcript.text.split(' ');
+      let line = '';
+      let lineY = y + 20;
+      
+      words.forEach(word => {
+        const testLine = line + (line ? ' ' : '') + word;
+        const metrics = ctx.measureText(testLine);
+        
+        if (metrics.width > maxWidth && line !== '') {
+          ctx.fillText(line, textX, lineY);
+          line = word;
+          lineY += 20;
+        } else {
+          line = testLine;
+        }
+      });
+      
+      ctx.fillText(line, textX, lineY);
+    });
+  } else {
+    ctx.fillStyle = '#999999';
+    ctx.font = '16px Arial';
+    ctx.fillText('No transcripts yet', chatAreaX + 20, canvas.height / 2 + 40);
+  }
+  
+  // Draw To-Do List section (always show this section)
+  const todoY = Math.min(canvas.height - 250, (canvas.height / 2) + 300);
+  ctx.fillStyle = '#FFC107'; // Yellow color for to-do section
+  ctx.font = 'bold 22px Arial';
+  ctx.fillText('To-Do List', chatAreaX + 20, todoY);
+  
+  // Get accepted tasks
+  if (acceptedTasks && acceptedTasks.length > 0) {
+    // Draw each to-do item
+    ctx.font = '16px Arial';
+    acceptedTasks.forEach((task, index) => {
+      const y = todoY + 40 + (index * 60);
+      
+      // Draw task content
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 16px Arial';
+      
+      // Draw task text with word wrap
+      const maxWidth = chatAreaWidth - 40;
+      const textX = chatAreaX + 20;
+      const words = task.text.split(' ');
+      let line = '';
+      let lineY = y;
+      
+      words.forEach(word => {
+        const testLine = line + (line ? ' ' : '') + word;
+        const metrics = ctx.measureText(testLine);
+        
+        if (metrics.width > maxWidth && line !== '') {
+          ctx.fillText(line, textX, lineY);
+          line = word;
+          lineY += 20;
+        } else {
+          line = testLine;
+        }
+      });
+      
+      ctx.fillText(line, textX, lineY);
+      
+      // Draw task creator and time
+      ctx.fillStyle = '#bbbbbb';
+      ctx.font = '12px Arial';
+      ctx.fillText(`Added by ${task.createdBy} at ${new Date(task.createdAt).toLocaleTimeString()}`, 
+                  textX, lineY + 20);
+    });
+  } else {
+    // Show "No tasks" message
+    ctx.fillStyle = '#bbbbbb';
+    ctx.font = '16px Arial';
+    ctx.fillText('No tasks accepted yet', chatAreaX + 20, todoY + 40);
+  }
+  
+  // Draw pending task card if there is one
+  if (isPendingTask && currentPendingTask) {
+    const task = currentPendingTask;
+    const taskCardY = todoY + 200; // Position it below the to-do list
+    
+    // Draw card background
+    ctx.fillStyle = 'rgba(40, 40, 40, 0.9)';
+    ctx.fillRect(chatAreaX + 10, taskCardY, chatAreaWidth - 20, 160);
+    
+    // Draw card border
+    ctx.strokeStyle = '#FFC107'; // Yellow border
+    ctx.lineWidth = 2;
+    ctx.strokeRect(chatAreaX + 10, taskCardY, chatAreaWidth - 20, 160);
+    
+    // Draw task header
+    ctx.fillStyle = '#FFC107'; // Yellow color
+    ctx.font = 'bold 18px Arial';
+    ctx.fillText('Current Task Proposal', chatAreaX + 20, taskCardY + 25);
+    
+    // Draw task creator and time
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = '14px Arial';
+    ctx.fillText(`Proposed by ${task.createdBy} at ${new Date(task.createdAt).toLocaleTimeString()}`, 
+                 chatAreaX + 20, taskCardY + 45);
+    
+    // Draw task content
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '16px Arial';
+    
+    // Draw task text with word wrap
+    const maxWidth = chatAreaWidth - 40;
+    const textX = chatAreaX + 20;
+    const words = task.text.split(' ');
+    let line = '';
+    let lineY = taskCardY + 75;
+    
+    words.forEach(word => {
+      const testLine = line + (line ? ' ' : '') + word;
+      const metrics = ctx.measureText(testLine);
+      
+      if (metrics.width > maxWidth && line !== '') {
+        ctx.fillText(line, textX, lineY);
+        line = word;
+        lineY += 20;
+      } else {
+        line = testLine;
+      }
+    });
+    
+    ctx.fillText(line, textX, lineY);
+    
+    // Draw voting status
+    const votes = taskVotes.get(task.id);
+    if (votes) {
+      const voteCount = votes.size;
+      const totalParticipants = peers.size + 1; // Include self
+      const acceptVotes = Array.from(votes.values()).filter(v => v.vote === 'accept').length;
+      const rejectVotes = Array.from(votes.values()).filter(v => v.vote === 'reject').length;
+      
+      ctx.fillStyle = '#aaaaaa';
+      ctx.font = '14px Arial';
+      ctx.fillText(`Votes: ${voteCount}/${totalParticipants} (${acceptVotes} accept, ${rejectVotes} reject)`, 
+                   textX, lineY + 30);
+    }
+  }
+  
+  // Record this frame
+  requestAnimationFrame(renderFrame);
 }
 
 // Task management functions
@@ -6209,6 +6533,15 @@ function broadcastVote(taskId, voteType) {
       } catch (err) {
         console.error(`Error sending vote to peer ${peerId}:`, err);
       }
+    } else if (dataChannels.has(peerId) && dataChannels.get(peerId).readyState === 'open') {
+      // Try sending via data channel if available
+      try {
+        dataChannels.get(peerId).send(JSON.stringify(voteMsg));
+        console.log(`Sharing vote with peer ${peerId} via data channel`);
+        broadcastCount++;
+      } catch (err) {
+        console.error(`Error sending vote to peer ${peerId} via data channel:`, err);
+      }
     } else {
       console.warn(`Cannot send vote to peer ${peerId}: connection not open`);
     }
@@ -6649,6 +6982,15 @@ function broadcastNewTask(task) {
         broadcastCount++;
       } catch (err) {
         console.error(`Error sending task to peer ${peerId}:`, err);
+      }
+    } else if (dataChannels.has(peerId) && dataChannels.get(peerId).readyState === 'open') {
+      // Try sending via data channel if available
+      try {
+        dataChannels.get(peerId).send(JSON.stringify(taskMsg));
+        console.log(`Sharing new task with peer ${peerId} via data channel`);
+        broadcastCount++;
+      } catch (err) {
+        console.error(`Error sending task to peer ${peerId} via data channel:`, err);
       }
     } else {
       console.warn(`Cannot send task to peer ${peerId}: connection not open`);
