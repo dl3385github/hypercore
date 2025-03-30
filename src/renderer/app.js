@@ -1164,10 +1164,77 @@ function handleDataChannelMessage(peerId, message) {
     }
   } else if (message.type === 'new-task') {
     // Handle new task from peer
-    handleNewTask(message.task, peerId);
+    if (message.task) {
+      console.log(`Received new task via data channel from peer ${peerId}:`, message.task);
+      
+      // Use the same handler as in handlePeerData to ensure consistent processing
+      // But first check if we already have this task
+      const existingTaskIndex = tasks.findIndex(t => t.id === message.task.id);
+      if (existingTaskIndex !== -1) {
+        console.log(`Task ${message.task.id} already exists, skipping`);
+        return;
+      }
+      
+      // Store the task
+      tasks.push(message.task);
+      
+      // Initialize vote tracking
+      if (!taskVotes.has(message.task.id)) {
+        taskVotes.set(message.task.id, new Map());
+      }
+      
+      // If this is an accepted task, add it to the to-do list
+      if (message.task.status === 'accepted') {
+        addTaskToTodoList(message.task);
+        addSystemMessage(`Task added to to-do list: "${message.task.text}"`);
+      } else if (message.task.status === 'pending') {
+        // Set as current pending task if we don't have one already
+        if (!isPendingTask || !currentPendingTask) {
+          console.log(`Setting task ${message.task.id} as current pending task`);
+          currentPendingTask = message.task;
+          isPendingTask = true;
+          
+          // Create and show the task card
+          createTaskCard(message.task);
+          
+          // Display notification
+          const peerUsername = peerUsernames.get(peerId) || message.task.createdBy;
+          addSystemMessage(`New task from ${peerUsername}: "${message.task.text}". Please vote to accept or reject.`);
+        } else {
+          console.log(`Already have a pending task ${currentPendingTask.id}, storing new task ${message.task.id} for later`);
+          // Still add it to tasks array for tracking
+          addSystemMessage(`New task received but will be shown after current task is resolved.`);
+        }
+      }
+      
+      // Update last task timestamp for next task creation
+      if (message.task.toTimestamp > lastTaskTimestamp) {
+        lastTaskTimestamp = message.task.toTimestamp;
+      }
+    } else {
+      console.error('Received malformed task object via data channel:', message);
+    }
   } else if (message.type === 'task-vote') {
     // Handle task vote from peer
-    handleTaskVote(message.taskId, message.username, message.vote, peerId);
+    if (message.taskId !== undefined && message.vote && message.peerId && message.username) {
+      // Process the vote
+      handleReceivedVote(message);
+      console.log(`Received vote from ${message.username} via data channel: ${message.vote} for task ${message.taskId}`);
+      
+      // Show message about the vote
+      addSystemMessage(`${message.username} voted to ${message.vote} the task.`);
+    } else {
+      console.error('Received malformed vote object via data channel:', message);
+    }
+  } else {
+    console.log(`Received unknown message type from ${peerId} via data channel:`, message);
+    
+    // Process message using main handler as a fallback
+    try {
+      handlePeerData(peerId, JSON.stringify(message));
+    } catch (err) {
+      console.error(`Error forwarding data channel message to peer data handler:`, err);
+    }
   }
 }
 
@@ -4085,12 +4152,18 @@ function startVideoRecording() {
         
         // Draw background rectangle for to-do list
         ctx.fillStyle = 'rgba(45, 45, 45, 0.7)'; // Match todo-list-container background
-        ctx.fillRect(chatAreaX + 10, todoY + 10, chatAreaWidth - 20, Math.min(200, 50 * acceptedTasks.length));
+        ctx.fillRect(chatAreaX + 10, todoY + 10, chatAreaWidth - 20, Math.min(250, 70 * acceptedTasks.length));
+        
+        // Debug info about accepted tasks
+        console.log(`Drawing ${acceptedTasks.length} accepted tasks in video recording:`);
+        acceptedTasks.forEach((task, i) => {
+          console.log(`Task ${i+1}: ${task.text.substring(0, 30)}... (ID: ${task.id})`);
+        });
         
         // Draw each to-do item
         ctx.font = '16px Arial';
         acceptedTasks.forEach((task, index) => {
-          const itemY = todoY + 40 + (index * 60);
+          const itemY = todoY + 40 + (index * 70);
           
           // Draw a separator line between tasks (except before the first one)
           if (index > 0) {
@@ -4134,6 +4207,8 @@ function startVideoRecording() {
           ctx.fillText(`Added by ${task.createdBy} at ${new Date(task.createdAt).toLocaleTimeString()}`, 
                        textX, lineY + 20);
         });
+      } else {
+        console.log('No to-do list items to display in video recording');
       }
       
       // Draw pending task card if there is one
@@ -5697,7 +5772,7 @@ function renderFrame() {
       const textX = chatAreaX + 10 + usernameWidth;
       
       // Simple word wrap
-      const words = transcript.content.split(' ');
+      const words = transcript.text.split(' ');
       let line = '';
       let lineY = transcriptY;
       
@@ -6240,21 +6315,62 @@ function broadcastVote(taskId, voteType) {
   
   // Broadcast to all peers
   let broadcastCount = 0;
+  let failCount = 0;
+  
+  if (peers.size === 0) {
+    console.warn('No peers connected to broadcast vote to');
+    return;
+  }
+  
+  // Log peer connections for debugging
+  console.log('Current peer connections for vote broadcast:');
   peers.forEach((peer, peerId) => {
-    if (peer.connection && peer.connection.open) {
+    console.log(`Peer ${peerId}: connection ${peer.connection ? 'exists' : 'missing'}, open: ${peer.connection?.open}`);
+    console.log(`Peer ${peerId}: data channel ${dataChannels.has(peerId) ? 'exists' : 'missing'}, state: ${dataChannels.get(peerId)?.readyState || 'N/A'}`);
+  });
+  
+  peers.forEach((peer, peerId) => {
+    // Try to send via data channel first (more reliable)
+    const dataChannel = dataChannels.get(peerId);
+    let sentSuccessfully = false;
+    
+    // 1. Try data channel first if available and open
+    if (dataChannel && dataChannel.readyState === 'open') {
+      try {
+        dataChannel.send(JSON.stringify(voteMsg));
+        console.log(`Sent vote to peer ${peerId} via data channel`);
+        broadcastCount++;
+        sentSuccessfully = true;
+      } catch (err) {
+        console.error(`Failed to send vote via data channel to peer ${peerId}:`, err);
+      }
+    }
+    
+    // 2. Try peer connection send if data channel failed or not available
+    if (!sentSuccessfully && peer.connection && peer.connection.open) {
       try {
         peer.connection.send(JSON.stringify(voteMsg));
-        console.log(`Sharing vote with peer ${peerId}`);
+        console.log(`Sent vote to peer ${peerId} via peer connection`);
         broadcastCount++;
+        sentSuccessfully = true;
       } catch (err) {
-        console.error(`Error sending vote to peer ${peerId}:`, err);
+        console.error(`Failed to send vote via peer connection to peer ${peerId}:`, err);
       }
-    } else {
-      console.warn(`Cannot send vote to peer ${peerId}: connection not open`);
+    }
+    
+    // Track failures
+    if (!sentSuccessfully) {
+      failCount++;
+      console.warn(`Could not send vote to peer ${peerId}: all methods failed`);
     }
   });
   
-  console.log(`Broadcast vote to ${broadcastCount} peers out of ${peers.size} total peers`);
+  console.log(`Broadcast vote to ${broadcastCount} peers out of ${peers.size} total peers. Failed: ${failCount}`);
+  
+  if (failCount > 0 && broadcastCount === 0) {
+    // If all broadcasts failed, show an error
+    addSystemMessage('Warning: Could not share your vote with other participants due to connection issues.');
+  }
 }
 
 // Handle a vote received from a peer
@@ -6704,21 +6820,71 @@ function broadcastNewTask(task) {
   
   // Broadcast to all peers
   let broadcastCount = 0;
+  let failCount = 0;
+  
+  if (peers.size === 0) {
+    console.warn('No peers connected to broadcast task to');
+    addSystemMessage('No other participants are connected to share this task with');
+    return;
+  }
+  
+  // Log all peer connections for debugging
+  console.log('Current peer connections:');
+  peers.forEach((peer, peerId) => {
+    console.log(`Peer ${peerId}: connection ${peer.connection ? 'exists' : 'missing'}, open: ${peer.connection?.open}`);
+  });
+  
   peers.forEach((peer, peerId) => {
     if (peer.connection && peer.connection.open) {
       try {
-        peer.connection.send(JSON.stringify(taskMsg));
-        console.log(`Sharing new task with peer ${peerId}`);
-        broadcastCount++;
+        // Try to send via data channel first (more reliable)
+        const dataChannel = dataChannels.get(peerId);
+        if (dataChannel && dataChannel.readyState === 'open') {
+          dataChannel.send(JSON.stringify(taskMsg));
+          console.log(`Sharing new task with peer ${peerId} via data channel`);
+          broadcastCount++;
+        } 
+        // Fallback to peer connection
+        else if (peer.connection.send) {
+          peer.connection.send(JSON.stringify(taskMsg));
+          console.log(`Sharing new task with peer ${peerId} via peer connection`);
+          broadcastCount++;
+        } else {
+          console.error(`No way to send task to peer ${peerId}: data channel not open and connection doesn't support send`);
+          failCount++;
+        }
       } catch (err) {
         console.error(`Error sending task to peer ${peerId}:`, err);
+        failCount++;
+        
+        // Try alternative method if first one failed
+        try {
+          const dataChannel = dataChannels.get(peerId);
+          if (!dataChannel && peer.connection.send) {
+            peer.connection.send(JSON.stringify(taskMsg));
+            console.log(`Retried sharing new task with peer ${peerId} via peer connection`);
+            broadcastCount++;
+            failCount--; // Reduce fail count since we succeeded on retry
+          }
+        } catch (retryErr) {
+          console.error(`Retry error sending task to peer ${peerId}:`, retryErr);
+        }
       }
     } else {
       console.warn(`Cannot send task to peer ${peerId}: connection not open`);
+      failCount++;
     }
   });
   
-  console.log(`Broadcast task to ${broadcastCount} peers out of ${peers.size} total peers`);
+  const message = `Broadcast task to ${broadcastCount} peers out of ${peers.size} total peers. Failed: ${failCount}`;
+  console.log(message);
+  
+  if (failCount > 0 && broadcastCount === 0) {
+    // If all broadcasts failed, show an error
+    addSystemMessage('Warning: Could not share task with other participants due to connection issues.');
+  } else if (broadcastCount > 0) {
+    addSystemMessage(`Task shared with ${broadcastCount} participants.`);
+  }
 }
 
 // Add debug UI for easier testing
