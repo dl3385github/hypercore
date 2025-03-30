@@ -196,6 +196,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('generate-task-from-conversation', conversationData);
   },
   
+  // Send task to all peers via Hypercore
+  sendTask: (task) => {
+    logEvent('sendTask', 'Sending task to all peers via Hypercore', task);
+    return ipcRenderer.invoke('send-task', task);
+  },
+  
+  // Send vote to all peers via Hypercore
+  sendVote: (taskId, vote) => {
+    logEvent('sendVote', `Sending vote ${vote} for task ${taskId} to all peers via Hypercore`);
+    return ipcRenderer.invoke('send-vote', taskId, vote);
+  },
+  
+  // Receive new tasks
+  onNewTask: (callback) => {
+    console.log('[Preload] Setting up onNewTask listener');
+    ipcRenderer.on('new-task', (event, task) => {
+      logEvent('received new-task', task);
+      callback(task);
+    });
+    
+    return () => {
+      console.log('[Preload] Cleaning up onNewTask listener');
+      ipcRenderer.removeAllListeners('new-task');
+    };
+  },
+  
+  // Receive votes
+  onNewVote: (callback) => {
+    console.log('[Preload] Setting up onNewVote listener');
+    ipcRenderer.on('new-vote', (event, vote) => {
+      logEvent('received new-vote', vote);
+      callback(vote);
+    });
+    
+    return () => {
+      console.log('[Preload] Cleaning up onNewVote listener');
+      ipcRenderer.removeAllListeners('new-vote');
+    };
+  },
+  
   // Listen for summary generation request
   onGenerateSummary: (callback) => {
     console.log('[Preload] Setting up onGenerateSummary listener');

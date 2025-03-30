@@ -807,6 +807,88 @@ function setupIpcHandlers() {
       };
     }
   });
+
+  // Handle task creation and broadcast
+  ipcMain.handle('send-task', async (event, task) => {
+    try {
+      console.log(`Sending task via Hypercore: ${task.text}`);
+      
+      if (!activeSwarm) {
+        throw new Error('Not connected to any room');
+      }
+      
+      const taskMessage = {
+        type: 'new-task',
+        task: task,
+        lastTaskTimestamp: task.toTimestamp,
+        timestamp: Date.now()
+      };
+      
+      // Broadcast to all peers using the same channel as chat messages
+      for (const conn of activeConnections.values()) {
+        conn.write(JSON.stringify(taskMessage));
+      }
+      
+      // Also send to UI so the user's own UI updates
+      mainWindow.webContents.send('new-task', taskMessage);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error sending task:', error);
+      
+      // Notify renderer of error
+      mainWindow.webContents.send('network-error', {
+        message: `Failed to send task: ${error.message}`
+      });
+      
+      return { 
+        success: false, 
+        error: error.message || 'Failed to send task'
+      };
+    }
+  });
+
+  // Handle vote broadcast
+  ipcMain.handle('send-vote', async (event, taskId, vote) => {
+    try {
+      console.log(`Sending vote via Hypercore: ${vote} for task ${taskId}`);
+      
+      if (!activeSwarm) {
+        throw new Error('Not connected to any room');
+      }
+      
+      const voteMessage = {
+        type: 'task-vote',
+        taskId: taskId,
+        vote: vote,
+        peerId: activeSwarm.keyPair.publicKey.toString('hex'),
+        username: username,
+        timestamp: Date.now()
+      };
+      
+      // Broadcast to all peers using the same channel as chat messages
+      for (const conn of activeConnections.values()) {
+        conn.write(JSON.stringify(voteMessage));
+      }
+      
+      // Also send to UI so the user's own UI updates
+      mainWindow.webContents.send('new-vote', voteMessage);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error sending vote:', error);
+      
+      // Notify renderer of error
+      mainWindow.webContents.send('network-error', {
+        message: `Failed to send vote: ${error.message}`
+      });
+      
+      return { 
+        success: false, 
+        error: error.message || 'Failed to send vote'
+      };
+    }
+  });
 }
 
 // Transcribe audio using OpenAI
@@ -917,6 +999,16 @@ function handleConnection(conn, info) {
               signal: message.signal,
               from: message.from
             });
+          }
+        } else if (message.type === 'new-task') {
+          if (mainWindow) {
+            console.log(`Received task from peer ${peerId}:`, message.task);
+            mainWindow.webContents.send('new-task', message);
+          }
+        } else if (message.type === 'task-vote') {
+          if (mainWindow) {
+            console.log(`Received vote from peer ${peerId}: ${message.vote} for task ${message.taskId}`);
+            mainWindow.webContents.send('new-vote', message);
           }
         }
         

@@ -397,6 +397,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     addMessageToUI(message);
   });
   
+  // Set up task receiving
+  window.electronAPI.onNewTask((message) => {
+    console.log('Received task via Hypercore:', message);
+    // Handle the task from peer
+    if (message.task) {
+      // Use the existing handlePeerData function to process the task message
+      // This will create the task card and handle it properly
+      handlePeerData(message.task.createdBy, JSON.stringify(message));
+    }
+  });
+  
+  // Set up vote receiving
+  window.electronAPI.onNewVote((message) => {
+    console.log('Received vote via Hypercore:', message);
+    // Handle the vote from peer
+    if (message.taskId && message.vote) {
+      // Use the existing handleReceivedVote function
+      handleReceivedVote(message);
+    }
+  });
+  
   // Track peers
   window.electronAPI.onPeerConnected((data) => {
     peers.add(data.id);
@@ -6088,7 +6109,7 @@ function handleVote(taskId, voteType) {
     vote: voteType
   };
   
-  // Store the vote
+  // Store the vote locally
   if (!taskVotes.has(taskId)) {
     taskVotes.set(taskId, new Map());
   }
@@ -6114,7 +6135,7 @@ function handleVote(taskId, voteType) {
   // Show a message that the user has voted
   addSystemMessage(`You voted to ${voteType} the task: "${task.text}"`);
   
-  // Broadcast the vote to all peers
+  // Broadcast the vote to all peers via Hypercore
   broadcastVote(taskId, voteType);
   
   // Check if task is resolved (accepted or rejected)
@@ -6268,7 +6289,7 @@ function updateTaskCardUI(task) {
 
 // Broadcast a new task to all peers
 function broadcastNewTask(task) {
-  console.log(`Broadcasting new task to ${peers.size} peers:`, task);
+  console.log(`Broadcasting new task to all peers:`, task);
   
   // Make sure required fields are present
   const requiredFields = ['id', 'text', 'createdAt', 'createdBy', 'status', 'fromTimestamp', 'toTimestamp'];
@@ -6279,28 +6300,21 @@ function broadcastNewTask(task) {
     }
   }
   
-  // Create task message with global lastTaskTimestamp update
-  const taskMsg = {
-    type: 'new-task',
-    task: task,
-    lastTaskTimestamp: task.toTimestamp  // Share the new global lastTaskTimestamp
-  };
-  
-  // Broadcast to all peers
-  let broadcastCount = 0;
-  peers.forEach((peer, peerId) => {
-    if (peer.connection && peer.connection.open) {
-      try {
-        peer.connection.send(JSON.stringify(taskMsg));
-        console.log(`Sharing new task with peer ${peerId}`);
-        broadcastCount++;
-      } catch (err) {
-        console.error(`Error sending task to peer ${peerId}:`, err);
+  // Send task via Hypercore instead of directly via data channels
+  // This ensures all peers receive the task through the reliable Hypercore protocol
+  window.electronAPI.sendTask(task)
+    .then(result => {
+      if (result.success) {
+        console.log('Task sent successfully via Hypercore');
+      } else {
+        console.error('Failed to send task via Hypercore:', result.error);
+        addSystemMessage(`Error: Failed to send task (${result.error})`);
       }
-    } else {
-      console.warn(`Cannot send task to peer ${peerId}: connection not open`);
-    }
-  });
+    })
+    .catch(err => {
+      console.error('Error sending task via Hypercore:', err);
+      addSystemMessage(`Error: Failed to send task (${err.message || 'Unknown error'})`);
+    });
   
   // Disable the Create Task button since there's now a pending task
   const createTaskBtn = document.getElementById('create-task-btn');
@@ -6308,8 +6322,6 @@ function broadcastNewTask(task) {
     createTaskBtn.disabled = true;
     createTaskBtn.title = "Cannot create a new task while there's a pending task";
   }
-  
-  console.log(`Broadcast task to ${broadcastCount} peers out of ${peers.size} total peers`);
 }
 
 // Add debug UI for easier testing
@@ -6386,32 +6398,21 @@ document.addEventListener('DOMContentLoaded', () => {
 function broadcastVote(taskId, voteType) {
   console.log(`Broadcasting vote on task ${taskId} to all peers: ${voteType}`);
   
-  // Create vote message
-  const voteMsg = {
-    type: 'task-vote',
-    taskId: taskId,
-    vote: voteType,
-    peerId: ownPeerId,
-    username: usernameInput.value.trim() || 'You'
-  };
-  
-  // Broadcast to all peers
-  let broadcastCount = 0;
-  peers.forEach((peer, peerId) => {
-    if (peer.connection && peer.connection.open) {
-      try {
-        peer.connection.send(JSON.stringify(voteMsg));
-        console.log(`Sharing vote with peer ${peerId}`);
-        broadcastCount++;
-      } catch (err) {
-        console.error(`Error sending vote to peer ${peerId}:`, err);
+  // Send vote via Hypercore instead of directly via data channels
+  // This ensures all peers receive the vote through the reliable Hypercore protocol
+  window.electronAPI.sendVote(taskId, voteType)
+    .then(result => {
+      if (result.success) {
+        console.log('Vote sent successfully via Hypercore');
+      } else {
+        console.error('Failed to send vote via Hypercore:', result.error);
+        addSystemMessage(`Error: Failed to send vote (${result.error})`);
       }
-    } else {
-      console.warn(`Cannot send vote to peer ${peerId}: connection not open`);
-    }
-  });
-  
-  console.log(`Broadcast vote to ${broadcastCount} peers out of ${peers.size} total peers`);
+    })
+    .catch(err => {
+      console.error('Error sending vote via Hypercore:', err);
+      addSystemMessage(`Error: Failed to send vote (${err.message || 'Unknown error'})`);
+    });
 }
 
 // Handle a vote received from a peer
