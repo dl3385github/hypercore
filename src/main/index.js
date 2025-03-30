@@ -869,17 +869,17 @@ async function transcribeAudio(filePath) {
       console.log(`Valid transcription: "${transcription.text}"`);
       return transcription.text;
     } else if (TRANSCRIPTION_MODEL === 'gpt-4o-mini-transcribe' || TRANSCRIPTION_MODEL === 'gpt-4o-transcribe') {
-      // Use the gpt-4o transcription API format
-      transcription = await openai.audio.speech.transcriptions.create({
+      // Use the gpt-4o transcription API format - FIXED to use audio.transcriptions.create instead of audio.speech.transcriptions.create
+      transcription = await openai.audio.transcriptions.create({
         file: fs.createReadStream(filePath),
         model: TRANSCRIPTION_MODEL,
         language: "en",
+        response_format: "json" // Required for gpt-4o models
       });
       
       console.log(`OpenAI GPT-4o transcription returned:`, transcription);
       
       // Extract text from GPT-4o transcription result
-      // The actual structure depends on the API response format
       const transcribedText = transcription.text || '';
       
       // Validation
