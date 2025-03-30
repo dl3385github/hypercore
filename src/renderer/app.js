@@ -3790,74 +3790,45 @@ function startVideoRecording() {
       );
       
       // Draw recent transcript for local user
-      const localUsername = currentUser?.handle || 'You';
-      
-      // Try multiple ways to find the local user's transcript
-      const findLocalTranscript = () => {
-        // Method 1: Direct lookup by username
-        if (transcripts.has(localUsername)) {
-          return transcripts.get(localUsername);
-        }
-        
-        // Method 2: Try to find "You" if the user is logged in with a different name
-        if (transcripts.has('You')) {
-          return transcripts.get('You');
-        }
-        
-        // Method 3: Check in array of transcripts for any that match the local user
-        for (const [username, userTranscripts] of transcripts.entries()) {
-          if (username.toLowerCase() === localUsername.toLowerCase() || 
-              username.toLowerCase().includes(localUsername.toLowerCase())) {
-            return userTranscripts;
+      const localUserKey = currentUser?.handle || 'You';
+      if (transcripts.has(localUserKey)) {
+        const userTranscripts = transcripts.get(localUserKey);
+        if (userTranscripts && userTranscripts.length > 0) {
+          const latestTranscript = userTranscripts[userTranscripts.length - 1];
+          
+          // Only show if less than 8 seconds old to ensure visibility
+          const transcriptAge = Date.now() - new Date(latestTranscript.timestamp).getTime();
+          if (transcriptAge < 8000) {
+            // Get the transcript text with fallback
+            const transcriptText = latestTranscript.text || '';
+            
+            if (transcriptText.trim().length > 0) {
+              // Create transcript background - measure text first for proper sizing
+              ctx.font = '16px Arial';
+              const maxWidth = localVideoRect.width - 20;
+              const textMetrics = ctx.measureText(transcriptText);
+              const textWidth = Math.min(maxWidth, textMetrics.width + 20); // Add padding
+              
+              // Background for transcript - more visible
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+              ctx.fillRect(
+                localVideoRect.x, 
+                localVideoRect.y + localVideoRect.height - 65,
+                textWidth,
+                30
+              );
+              
+              // Transcript text with better contrast
+              ctx.fillStyle = '#ffffff';
+              ctx.fillText(
+                transcriptText, 
+                localVideoRect.x + 10, 
+                localVideoRect.y + localVideoRect.height - 45
+              );
+              
+              console.log(`Drawing local transcript: "${transcriptText}" at (${localVideoRect.x + 10}, ${localVideoRect.y + localVideoRect.height - 45})`);
+            }
           }
-        }
-        
-        // Method 4: Look for anything that has local in it
-        for (const [username, userTranscripts] of transcripts.entries()) {
-          if (username.toLowerCase().includes('local') || 
-              username.toLowerCase().includes('you') ||
-              username.toLowerCase().includes('self')) {
-            return userTranscripts;
-          }
-        }
-        
-        // Nothing found
-        return null;
-      };
-      
-      const userTranscripts = findLocalTranscript();
-      console.log(`Local user transcripts for recording: found ${userTranscripts?.length || 0} entries for ${localUsername}`);
-      
-      if (userTranscripts && userTranscripts.length > 0) {
-        const latestTranscript = userTranscripts[userTranscripts.length - 1];
-        
-        // Only show if less than 5 seconds old
-        const transcriptAge = Date.now() - new Date(latestTranscript.timestamp).getTime();
-        if (transcriptAge < 5000) {
-          // Create transcript background
-          const maxWidth = localVideoRect.width - 20;
-          const transcriptText = latestTranscript.text;
-          
-          ctx.font = '16px Arial';
-          const textMetrics = ctx.measureText(transcriptText);
-          const textWidth = Math.min(maxWidth, textMetrics.width);
-          
-          // Background for transcript
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-          ctx.fillRect(
-            localVideoRect.x, 
-            localVideoRect.y + localVideoRect.height - 60,
-            textWidth + 20,
-            30
-          );
-          
-          // Transcript text
-          ctx.fillStyle = '#ffffff';
-          ctx.fillText(
-            transcriptText, 
-            localVideoRect.x + 10, 
-            localVideoRect.y + localVideoRect.height - 40
-          );
         }
       }
       
@@ -4358,41 +4329,69 @@ function saveRecordedVideo(videoBlob) {
       videoBlob = new Blob([videoBlob], { type: 'video/webm' });
     }
     
-    // Create a single video file with embedded metadata instead of separate files
-    // This prevents the Windows issue where both files try to save
-    console.log('Saving video with embedded metadata');
+    // Important: Use Electron's API to save the file to avoid browser compatibility issues
+    // This requires a renderer-to-main process communication
     
-    // Save video with .webm extension
+    // First save the video file
+    const videoFileName = `meeting-recording-${roomName}-${timestamp}.webm`;
+    
+    // Create a temporary URL for the video blob
     const videoUrl = URL.createObjectURL(videoBlob);
-    const videoLink = document.createElement('a');
-    videoLink.href = videoUrl;
     
-    // Ensure the filename has the .webm extension
-    let videoFilename = `meeting-recording-${roomName}-${timestamp}.webm`;
-    // Double-check that the extension is included
-    if (!videoFilename.toLowerCase().endsWith('.webm')) {
-      videoFilename += '.webm';
-    }
-    videoLink.download = videoFilename;
-    
-    // Trigger video download
-    document.body.appendChild(videoLink);
-    videoLink.click();
-    document.body.removeChild(videoLink);
-    
-    // Clean up URLs
-    URL.revokeObjectURL(videoUrl);
-    
-    // Save metadata separately in background after a delay (if needed for debugging)
-    if (window.electronAPI.saveMetadataWithRecording) {
-      // Ask electron to save the metadata quietly in the background
-      window.electronAPI.saveMetadataWithRecording(
-        JSON.stringify(metadata, null, 2),
-        `meeting-metadata-${roomName}-${timestamp}.json`
-      ).catch(err => console.error('Error saving background metadata:', err));
-    }
-    
-    addSystemMessage('Video recording saved successfully.');
+    // Use Electron's IPC to save the file with explicit file extension
+    window.electronAPI.saveFile({
+      title: 'Save Video Recording',
+      defaultPath: videoFileName,
+      filters: [
+        { name: 'WebM Files', extensions: ['webm'] }
+      ],
+      data: videoUrl,
+      type: 'video'
+    })
+    .then(result => {
+      if (result.success) {
+        console.log('Video saved successfully at:', result.filePath);
+        
+        // Now save the metadata after a delay
+        setTimeout(() => {
+          // Convert metadata to JSON blob
+          const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
+          const metadataUrl = URL.createObjectURL(metadataBlob);
+          
+          // Save metadata file
+          window.electronAPI.saveFile({
+            title: 'Save Meeting Metadata',
+            defaultPath: `meeting-metadata-${roomName}-${timestamp}.json`,
+            filters: [
+              { name: 'JSON Files', extensions: ['json'] }
+            ],
+            data: metadataUrl,
+            type: 'json'
+          })
+          .then(metaResult => {
+            if (metaResult.success) {
+              console.log('Metadata saved successfully at:', metaResult.filePath);
+            } else {
+              console.warn('User cancelled metadata save or error occurred');
+            }
+            
+            // Clean up URLs
+            URL.revokeObjectURL(metadataUrl);
+            URL.revokeObjectURL(videoUrl);
+          });
+        }, 1000); // Wait 1 second before prompting for metadata save
+        
+        addSystemMessage('Video recording saved successfully.');
+      } else {
+        console.warn('User cancelled save or error occurred');
+        URL.revokeObjectURL(videoUrl);
+      }
+    })
+    .catch(error => {
+      console.error('Error saving recording:', error);
+      addSystemMessage(`Error saving recording: ${error.message}`);
+      URL.revokeObjectURL(videoUrl);
+    });
   } catch (error) {
     console.error('Error saving video recording:', error);
     addSystemMessage(`Error saving recording: ${error.message}`);
@@ -5413,13 +5412,13 @@ async function handleLeaveRoom() {
     loginScreen.insertBefore(successMessage, loginScreen.firstChild);
     
     // Remove the message after 10 seconds
-    setTimeout(() => {
+          setTimeout(() => {
       successMessage.remove();
     }, 10000);
     
     // Clear the input fields
     messageInput.value = '';
-  } catch (error) {
+      } catch (error) {
     console.error('Error leaving room:', error);
     alert(`Error leaving room: ${error.message}`);
   }
@@ -5793,7 +5792,7 @@ function renderFrame() {
       const textX = chatAreaX + 10 + usernameWidth;
       
       // Simple word wrap
-      const words = transcript.content.split(' ');
+      const words = transcript.text.split(' ');
       let line = '';
       let lineY = transcriptY;
       
@@ -5835,36 +5834,14 @@ async function createTask() {
       return;
     }
     
-    // Check if there's already a truly pending task in the room
-    if (isTaskTrulyPending()) {
+    // Check if there's already a pending task in the room
+    if (isPendingTask && currentPendingTask) {
       console.log('There is already a pending task waiting for votes');
       alert('There is already a task waiting for votes. Please vote on the current task first.');
       return;
     }
     
-    // If isPendingTask is true but isTaskTrulyPending() returned false,
-    // we need to fix the state as it's out of sync
-    if (isPendingTask) {
-      console.log('Found stale pending task flag, resetting task state');
-      isPendingTask = false;
-      currentPendingTask = null;
-      
-      // Clean up the UI if needed
-      const taskCardContainer = document.getElementById('task-card-container');
-      if (taskCardContainer) {
-        taskCardContainer.remove();
-      }
-      
-      // Re-enable the Create Task button
-      const createTaskBtn = document.getElementById('create-task-btn');
-      if (createTaskBtn) {
-        createTaskBtn.disabled = false;
-        createTaskBtn.title = "Create a task from the conversation";
-      }
-    }
-    
     isCreatingTask = true;
-    // Continue with the rest of the task creation process...
     
     // Get our own peer ID from the main process
     const peerId = await window.electronAPI.getOwnId();
@@ -6282,10 +6259,7 @@ function checkTaskResolution(taskId) {
   });
   
   // Calculate total participants (peers + self)
-  const totalParticipants = peerConnections.size + 1;
-  
-  // Debug log to help track resolution issues
-  console.log(`Task ${taskId} vote status: ${acceptCount} accept, ${rejectCount} reject, total participants: ${totalParticipants}`);
+  const totalParticipants = peers.size + 1;
   
   // Check if we have enough votes to make a decision
   const hasEnoughVotes = (acceptCount + rejectCount) >= totalParticipants;
@@ -6295,56 +6269,11 @@ function checkTaskResolution(taskId) {
   // Task is accepted if majority votes to accept
   if (hasMajorityAccept || (hasEnoughVotes && acceptCount > rejectCount)) {
     resolveTask(task, 'accepted');
-    // Broadcast a system message to ensure everyone knows the task is resolved
-    addSystemMessage(`Task "${task.text}" has been accepted by majority vote.`);
   }
   // Task is rejected if majority votes to reject
   else if (hasMajorityReject || (hasEnoughVotes && rejectCount >= acceptCount)) {
     resolveTask(task, 'rejected');
-    // Broadcast a system message to ensure everyone knows the task is resolved
-    addSystemMessage(`Task "${task.text}" has been rejected by majority vote.`);
   }
-}
-
-// Helper function to check if a task is truly pending
-function isTaskTrulyPending() {
-  // If we don't think there's a pending task, return false immediately
-  if (!isPendingTask || !currentPendingTask) {
-    return false;
-  }
-  
-  // If the task has been removed from the tasks array or marked as resolved, it's not truly pending
-  const task = tasks.find(t => t.id === currentPendingTask.id);
-  if (!task || task.status !== 'pending') {
-    console.log(`Task ${currentPendingTask.id} found in global state but is not pending anymore`);
-    return false;
-  }
-  
-  // Check if the task has enough votes to be resolved already
-  const votes = taskVotes.get(currentPendingTask.id);
-  if (votes) {
-    // Count votes
-    let acceptCount = 0;
-    let rejectCount = 0;
-    votes.forEach(vote => {
-      if (vote.vote === 'accept') acceptCount++;
-      else if (vote.vote === 'reject') rejectCount++;
-    });
-    
-    // Calculate total participants (peers + self)
-    const totalParticipants = peerConnections.size + 1;
-    const hasMajorityAccept = acceptCount > totalParticipants / 2;
-    const hasMajorityReject = rejectCount > totalParticipants / 2;
-    
-    // If there's a majority in either direction, the task is effectively resolved
-    if (hasMajorityAccept || hasMajorityReject) {
-      console.log(`Task ${currentPendingTask.id} has a resolution majority but hasn't been updated yet`);
-      return false;
-    }
-  }
-  
-  // Otherwise, it's truly pending
-  return true;
 }
 
 // Resolve a task (accept or reject)

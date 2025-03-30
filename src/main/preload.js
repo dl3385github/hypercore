@@ -204,32 +204,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Send vote to all peers via Hypercore
   sendVote: (taskId, vote) => {
-    logEvent('sendVote', `Sending vote ${vote} for task ${taskId} to all peers via Hypercore`);
+    logEvent('sendVote', `Sending vote ${vote} for task ${taskId}`);
     return ipcRenderer.invoke('send-vote', taskId, vote);
   },
   
-  // Receive new tasks
+  // Listen for new tasks
   onNewTask: (callback) => {
     console.log('[Preload] Setting up onNewTask listener');
-    ipcRenderer.on('new-task', (event, task) => {
-      logEvent('received new-task', task);
-      callback(task);
+    ipcRenderer.on('new-task', (event, message) => {
+      logEvent('received new-task', message);
+      callback(message);
     });
     
+    // Return a cleanup function
     return () => {
       console.log('[Preload] Cleaning up onNewTask listener');
       ipcRenderer.removeAllListeners('new-task');
     };
   },
   
-  // Receive votes
+  // Listen for new votes
   onNewVote: (callback) => {
     console.log('[Preload] Setting up onNewVote listener');
-    ipcRenderer.on('new-vote', (event, vote) => {
-      logEvent('received new-vote', vote);
-      callback(vote);
+    ipcRenderer.on('new-vote', (event, message) => {
+      logEvent('received new-vote', message);
+      callback(message);
     });
     
+    // Return a cleanup function
     return () => {
       console.log('[Preload] Cleaning up onNewVote listener');
       ipcRenderer.removeAllListeners('new-vote');
@@ -285,9 +287,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('start-screen-share', sourceId);
   },
   
-  // Save metadata with recording in background
-  saveMetadataWithRecording: async (metadataContent, filename) => {
-    return ipcRenderer.invoke('save-metadata-silently', metadataContent, filename);
+  // Save file to disk (for video recordings and metadata)
+  saveFile: (options) => {
+    logEvent('saveFile', `Saving ${options.type} file with default path: ${options.defaultPath}`);
+    return ipcRenderer.invoke('save-file', options);
   }
 });
 

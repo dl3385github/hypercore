@@ -890,30 +890,68 @@ function setupIpcHandlers() {
     }
   });
 
-  // Save metadata silently without prompting the user
-  ipcMain.handle('save-metadata-silently', async (event, metadataContent, filename) => {
+  // Handle file saving (for recordings and metadata)
+  ipcMain.handle('save-file', async (event, options) => {
     try {
-      // Create directory for recordings if it doesn't exist
-      const recordingsDir = path.join(app.getPath('documents'), 'HypercoreRecordings');
-      if (!fs.existsSync(recordingsDir)) {
-        fs.mkdirSync(recordingsDir, { recursive: true });
+      console.log(`Handling save-file request for ${options.type} file`);
+      
+      const { dialog } = require('electron');
+      const fs = require('fs');
+      const { net } = require('electron');
+      
+      // Show save dialog
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: options.title || 'Save File',
+        defaultPath: options.defaultPath,
+        filters: options.filters || [
+          { name: 'All Files', extensions: ['*'] }
+        ],
+        properties: ['createDirectory', 'showOverwriteConfirmation']
+      });
+      
+      if (result.canceled) {
+        console.log('User cancelled file save dialog');
+        return { success: false, canceled: true };
       }
       
-      // Save the metadata file
-      const filePath = path.join(recordingsDir, filename);
-      fs.writeFileSync(filePath, metadataContent);
-      
-      console.log(`Metadata saved silently to: ${filePath}`);
-      return { 
-        success: true, 
-        path: filePath 
-      };
+      // Download the blob using Electron's net module
+      return new Promise((resolve) => {
+        const request = net.request(options.data);
+        request.on('response', (response) => {
+          const chunks = [];
+          
+          response.on('data', (chunk) => {
+            chunks.push(chunk);
+          });
+          
+          response.on('end', async () => {
+            try {
+              const buffer = Buffer.concat(chunks);
+              fs.writeFileSync(result.filePath, buffer);
+              console.log(`File saved successfully to ${result.filePath}`);
+              resolve({ success: true, filePath: result.filePath });
+            } catch (error) {
+              console.error('Error writing file:', error);
+              resolve({ success: false, error: error.message });
+            }
+          });
+          
+          response.on('error', (error) => {
+            console.error('Error downloading file:', error);
+            resolve({ success: false, error: error.message });
+          });
+        });
+        
+        request.on('error', (error) => {
+          console.error('Error making request:', error);
+          resolve({ success: false, error: error.message });
+        });
+        
+        request.end();
+      });
     } catch (error) {
-      console.error('Error saving metadata silently:', error);
-      return { 
-        success: false, 
-        error: error.message || 'Failed to save metadata' 
-      };
+      console.error('Error in save-file handler:', error);
+      return { success: false, error: error.message };
     }
   });
 }
@@ -1019,6 +1057,13 @@ function handleConnection(conn, info) {
           if (mainWindow) {
             mainWindow.webContents.send('new-message', message);
           }
+          
+          // Forward chat messages to all other peers
+          for (const [otherPeerId, otherConn] of activeConnections.entries()) {
+            if (otherPeerId !== peerId) {
+              otherConn.write(data);
+            }
+          }
         } else if (message.type === 'rtc-signal') {
           if (mainWindow) {
             mainWindow.webContents.send('signal-received', {
@@ -1031,11 +1076,27 @@ function handleConnection(conn, info) {
           if (mainWindow) {
             console.log(`Received task from peer ${peerId}:`, message.task);
             mainWindow.webContents.send('new-task', message);
+            
+            // Forward task messages to all other peers to ensure propagation
+            for (const [otherPeerId, otherConn] of activeConnections.entries()) {
+              if (otherPeerId !== peerId) {
+                console.log(`Forwarding task from ${peerId} to ${otherPeerId}`);
+                otherConn.write(data);
+              }
+            }
           }
         } else if (message.type === 'task-vote') {
           if (mainWindow) {
             console.log(`Received vote from peer ${peerId}: ${message.vote} for task ${message.taskId}`);
             mainWindow.webContents.send('new-vote', message);
+            
+            // Forward vote messages to all other peers to ensure propagation
+            for (const [otherPeerId, otherConn] of activeConnections.entries()) {
+              if (otherPeerId !== peerId) {
+                console.log(`Forwarding vote from ${peerId} to ${otherPeerId}`);
+                otherConn.write(data);
+              }
+            }
           }
         }
         
