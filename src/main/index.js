@@ -1003,12 +1003,34 @@ function handleConnection(conn, info) {
         } else if (message.type === 'new-task') {
           if (mainWindow) {
             console.log(`Received task from peer ${peerId}:`, message.task);
+            
+            // Forward to UI
             mainWindow.webContents.send('new-task', message);
+            
+            // IMPORTANT: Rebroadcast to all other peers to ensure task propagation
+            for (const [otherPeerId, otherConn] of activeConnections.entries()) {
+              // Don't send back to the original sender
+              if (otherPeerId !== peerId) {
+                console.log(`Rebroadcasting task to peer ${otherPeerId}`);
+                otherConn.write(data); // Use original data to preserve exact format
+              }
+            }
           }
         } else if (message.type === 'task-vote') {
           if (mainWindow) {
             console.log(`Received vote from peer ${peerId}: ${message.vote} for task ${message.taskId}`);
+            
+            // Forward to UI
             mainWindow.webContents.send('new-vote', message);
+            
+            // IMPORTANT: Rebroadcast to all other peers to ensure vote propagation
+            for (const [otherPeerId, otherConn] of activeConnections.entries()) {
+              // Don't send back to the original sender
+              if (otherPeerId !== peerId) {
+                console.log(`Rebroadcasting vote to peer ${otherPeerId}`);
+                otherConn.write(data); // Use original data to preserve exact format
+              }
+            }
           }
         }
         
