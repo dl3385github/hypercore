@@ -109,7 +109,6 @@ const peerVolumes = new Map();
 
 // Global variables for task management
 let tasks = []; // Array of task objects
-let currentTaskId = 1; // Counter for task IDs
 let lastTaskTimestamp = 0; // Timestamp of the last accepted task
 let taskVotes = new Map(); // Map of task ID to votes (Map of peer ID to vote)
 let acceptedTasks = []; // Array of accepted task objects
@@ -5963,7 +5962,7 @@ async function createTask() {
     }
     
     // Create a new task object
-    const taskId = currentTaskId++;
+    const taskId = generateUniqueTaskId();
     const task = {
       id: taskId,
       text: result.task,
@@ -6756,4 +6755,10 @@ function addTaskToTodoList(task) {
   todoListContainer.style.display = 'block';
   
   return todoListContainer;
+}
+
+// Generate unique task IDs that work across all peers
+function generateUniqueTaskId() {
+  // Combine timestamp and random value for uniqueness
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
