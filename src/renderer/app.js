@@ -411,7 +411,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.electronAPI.onNewVote((message) => {
     console.log('Received vote via Hypercore:', message);
     // Handle the vote from peer
-    if (message.taskId && message.vote) {
+    if (message.taskId && message.vote && message.peerId) {
+      // Check for duplicate votes before processing
+      const isDuplicateVote = taskVotes.has(message.taskId) && 
+                             taskVotes.get(message.taskId).has(message.peerId) &&
+                             taskVotes.get(message.taskId).get(message.peerId).vote === message.vote;
+      
+      if (isDuplicateVote) {
+        console.log(`Skipping duplicate Hypercore vote from ${message.username || message.peerId}: ${message.vote}`);
+        return;
+      }
+      
       // Use the existing handleReceivedVote function
       handleReceivedVote(message);
     }
@@ -6466,6 +6476,17 @@ function handleReceivedVote(data) {
     return;
   }
   
+  // IMPORTANT: Check if we've already processed this exact vote
+  // This prevents infinite rebroadcast loops
+  if (taskVotes.has(taskId) && taskVotes.get(taskId).has(peerId)) {
+    const existingVote = taskVotes.get(taskId).get(peerId);
+    if (existingVote.vote === vote) {
+      // Skip processing if this is the same vote we already have
+      console.log(`Skipping duplicate vote from ${username} (${peerId}) for task ${taskId}: ${vote}`);
+      return;
+    }
+  }
+  
   console.log(`Processing vote from ${username} (${peerId}) for task ${taskId}: ${vote}`);
   
   // Check if we have this task
@@ -6634,6 +6655,16 @@ function handlePeerData(peerId, data) {
       case 'task-vote':
         // Handle received vote
         if (message.taskId !== undefined && message.vote && message.peerId && message.username) {
+          // Check for duplicate votes before processing
+          const isDuplicateVote = taskVotes.has(message.taskId) && 
+                                 taskVotes.get(message.taskId).has(message.peerId) &&
+                                 taskVotes.get(message.taskId).get(message.peerId).vote === message.vote;
+          
+          if (isDuplicateVote) {
+            console.log(`Skipping duplicate WebRTC vote from ${message.username}: ${message.vote}`);
+            return;
+          }
+          
           // Process the vote
           handleReceivedVote(message);
           console.log(`Received vote from ${message.username}: ${message.vote}`);
