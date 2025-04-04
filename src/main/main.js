@@ -1,3 +1,7 @@
+const { app, BrowserWindow, ipcMain } = require('electron');
+const path = require('path');
+const atProtocol = require('./atProtocol');
+
 // Generate a task from conversation using GPT
 ipcMain.handle('generate-task-from-conversation', async (event, prompt) => {
   try {
@@ -36,4 +40,33 @@ ipcMain.handle('generate-task-from-conversation', async (event, prompt) => {
       error: error.message || 'Unknown error generating task' 
     };
   }
+});
+
+// AT Protocol Handlers
+ipcMain.handle('auth-sign-in', async (event, identifier, password) => {
+  return await atProtocol.login(identifier, password);
+});
+
+ipcMain.handle('auth-sign-out', async () => {
+  return await atProtocol.logout();
+});
+
+ipcMain.handle('getPosts', async () => {
+  return await atProtocol.getPosts();
+});
+
+ipcMain.handle('createPost', async (event, content) => {
+  return await atProtocol.createPost(content);
+});
+
+ipcMain.handle('createComment', async (event, postUri, content) => {
+  return await atProtocol.createComment(postUri, content);
+});
+
+ipcMain.handle('performPostAction', async (event, postUri, action) => {
+  return await atProtocol.performPostAction(postUri, action);
+});
+
+ipcMain.handle('getPostDetail', async (event, postUri) => {
+  return await atProtocol.getPostDetail(postUri);
 }); 

@@ -283,7 +283,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startScreenShare: (sourceId) => {
     logEvent('startScreenShare', `Starting screen share with source ID: ${sourceId}`);
     return ipcRenderer.invoke('start-screen-share', sourceId);
-  }
+  },
+  
+  // AT Protocol functions
+  getPosts: () => {
+    logEvent('getPosts');
+    return ipcRenderer.invoke('getPosts');
+  },
+  
+  createPost: (content) => {
+    logEvent('createPost', content);
+    return ipcRenderer.invoke('createPost', content);
+  },
+  
+  createComment: (postUri, content) => {
+    logEvent('createComment', postUri, content);
+    return ipcRenderer.invoke('createComment', postUri, content);
+  },
+  
+  performPostAction: (postUri, action) => {
+    logEvent('performPostAction', postUri, action);
+    return ipcRenderer.invoke('performPostAction', postUri, action);
+  },
+  
+  getPostDetail: (postUri) => {
+    logEvent('getPostDetail', postUri);
+    return ipcRenderer.invoke('getPostDetail', postUri);
+  },
 });
 
 console.log('Preload script completed initialization'); 

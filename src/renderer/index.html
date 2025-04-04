@@ -174,10 +174,54 @@
           <p>This is a placeholder for the P2P chat features.</p>
         </div>
 
-        <!-- Social Page (Placeholder) -->
+        <!-- Social Page -->
         <div id="social-page" class="app-page">
-          <h2>Social Page</h2>
-          <p>This is a placeholder for the AT Protocol social features.</p>
+          <div class="social-container">
+            <!-- Social Header -->
+            <div class="social-header">
+              <h2>Social Feed</h2>
+              <button id="create-post-btn" class="action-btn">
+                <span class="icon">✏️</span>
+                Create Post
+              </button>
+            </div>
+
+            <!-- Post List -->
+            <div id="post-list" class="post-list">
+              <!-- Posts will be dynamically added here -->
+            </div>
+
+            <!-- Post Detail View (Hidden by default) -->
+            <div id="post-detail" class="post-detail hidden">
+              <div class="post-detail-header">
+                <button id="back-to-feed" class="action-btn">
+                  <span class="icon">←</span>
+                  Back to Feed
+                </button>
+                <h3>Post Details</h3>
+              </div>
+              <div id="post-detail-content" class="post-detail-content">
+                <!-- Post detail content will be dynamically added here -->
+              </div>
+            </div>
+
+            <!-- Create Post Modal (Hidden by default) -->
+            <div id="create-post-modal" class="modal hidden">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <h3>Create New Post</h3>
+                  <button id="close-modal" class="close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                  <textarea id="post-content" placeholder="What's on your mind?" maxlength="300"></textarea>
+                  <div class="post-actions">
+                    <button id="post-submit" class="action-btn">Post</button>
+                    <span id="post-char-count" class="char-count">0/300</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Gatekeeper Page (Placeholder) -->

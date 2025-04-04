@@ -304,6 +304,16 @@ function setupIpcHandlers() {
       // Set the user state if sign in was successful
       if (result.success) {
         updateAuthState(result.user);
+        
+        // Initialize AT Protocol service with the same credentials
+        try {
+          const atProtocol = require('./atProtocol');
+          await atProtocol.login(identifier, password);
+          console.log('AT Protocol service initialized successfully');
+        } catch (atError) {
+          console.error('Error initializing AT Protocol service:', atError);
+          // Continue execution even if AT Protocol initialization fails
+        }
       }
       
       return result;
@@ -886,6 +896,77 @@ function setupIpcHandlers() {
       return { 
         success: false, 
         error: error.message || 'Failed to send vote'
+      };
+    }
+  });
+
+  // AT Protocol Handlers
+  ipcMain.handle('getPosts', async () => {
+    console.log('Handling getPosts request');
+    try {
+      const atProtocol = require('./atProtocol');
+      return await atProtocol.getPosts();
+    } catch (error) {
+      console.error('Error handling getPosts:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to get posts' 
+      };
+    }
+  });
+
+  ipcMain.handle('createPost', async (event, content) => {
+    console.log('Handling createPost request:', content);
+    try {
+      const atProtocol = require('./atProtocol');
+      return await atProtocol.createPost(content);
+    } catch (error) {
+      console.error('Error handling createPost:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to create post' 
+      };
+    }
+  });
+
+  ipcMain.handle('createComment', async (event, postUri, content) => {
+    console.log('Handling createComment request:', postUri, content);
+    try {
+      const atProtocol = require('./atProtocol');
+      return await atProtocol.createComment(postUri, content);
+    } catch (error) {
+      console.error('Error handling createComment:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to create comment' 
+      };
+    }
+  });
+
+  ipcMain.handle('performPostAction', async (event, postUri, action) => {
+    console.log('Handling performPostAction request:', postUri, action);
+    try {
+      const atProtocol = require('./atProtocol');
+      return await atProtocol.performPostAction(postUri, action);
+    } catch (error) {
+      console.error('Error handling performPostAction:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to perform post action' 
+      };
+    }
+  });
+
+  ipcMain.handle('getPostDetail', async (event, postUri) => {
+    console.log('Handling getPostDetail request:', postUri);
+    try {
+      const atProtocol = require('./atProtocol');
+      return await atProtocol.getPostDetail(postUri);
+    } catch (error) {
+      console.error('Error handling getPostDetail:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to get post detail' 
       };
     }
   });

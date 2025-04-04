@@ -6762,3 +6762,264 @@ function generateUniqueTaskId() {
   // Combine timestamp and random value for uniqueness
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
+
+// Social Page Functionality
+let currentPosts = [];
+let currentPostDetail = null;
+
+// Initialize social page
+function initializeSocialPage() {
+  const createPostBtn = document.getElementById('create-post-btn');
+  const createPostModal = document.getElementById('create-post-modal');
+  const closeModalBtn = document.getElementById('close-modal');
+  const postContent = document.getElementById('post-content');
+  const postCharCount = document.getElementById('post-char-count');
+  const postSubmitBtn = document.getElementById('post-submit');
+  const backToFeedBtn = document.getElementById('back-to-feed');
+
+  // Event listeners
+  createPostBtn.addEventListener('click', () => {
+    createPostModal.classList.remove('hidden');
+  });
+
+  closeModalBtn.addEventListener('click', () => {
+    createPostModal.classList.add('hidden');
+    postContent.value = '';
+    postCharCount.textContent = '0/300';
+  });
+
+  postContent.addEventListener('input', () => {
+    const length = postContent.value.length;
+    postCharCount.textContent = `${length}/300`;
+    postSubmitBtn.disabled = length === 0;
+  });
+
+  postSubmitBtn.addEventListener('click', handleCreatePost);
+  backToFeedBtn.addEventListener('click', () => {
+    document.getElementById('post-detail').classList.add('hidden');
+    document.getElementById('post-list').classList.remove('hidden');
+  });
+
+  // Load initial posts
+  loadPosts();
+}
+
+// Load posts from PDS
+async function loadPosts() {
+  try {
+    const response = await window.electronAPI.getPosts();
+    if (response.success) {
+      currentPosts = response.posts;
+      renderPosts();
+    } else {
+      console.error('Failed to load posts:', response.error);
+    }
+  } catch (error) {
+    console.error('Error loading posts:', error);
+  }
+}
+
+// Render posts in the list
+function renderPosts() {
+  const postList = document.getElementById('post-list');
+  postList.innerHTML = '';
+
+  currentPosts.forEach(post => {
+    const postElement = createPostElement(post);
+    postList.appendChild(postElement);
+  });
+}
+
+// Create a post element
+function createPostElement(post) {
+  const div = document.createElement('div');
+  div.className = 'post-card';
+  div.dataset.postId = post.uri;
+
+  const content = post.record.text;
+  const truncatedContent = content.length > 300 
+    ? content.substring(0, 300) + '...' 
+    : content;
+
+  div.innerHTML = `
+    <div class="post-header">
+      <span class="post-author">${post.author.displayName || post.author.handle}</span>
+      <span class="post-timestamp">${formatTimestamp(post.indexedAt)}</span>
+    </div>
+    <div class="post-content">${truncatedContent}</div>
+    <div class="post-actions">
+      <div class="post-action like-action" data-action="like">
+        <span class="icon">❤️</span>
+        <span class="count">${post.likeCount || 0}</span>
+      </div>
+      <div class="post-action repost-action" data-action="repost">
+        <span class="icon">🔄</span>
+        <span class="count">${post.repostCount || 0}</span>
+      </div>
+      <div class="post-action comment-action" data-action="comment">
+        <span class="icon">💬</span>
+        <span class="count">${post.replyCount || 0}</span>
+      </div>
+    </div>
+  `;
+
+  // Add click handlers
+  div.addEventListener('click', (e) => {
+    if (!e.target.closest('.post-action')) {
+      showPostDetail(post);
+    }
+  });
+
+  // Add action handlers
+  div.querySelectorAll('.post-action').forEach(action => {
+    action.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handlePostAction(post, action.dataset.action);
+    });
+  });
+
+  return div;
+}
+
+// Show post detail
+function showPostDetail(post) {
+  currentPostDetail = post;
+  const postDetail = document.getElementById('post-detail');
+  const postDetailContent = document.getElementById('post-detail-content');
+  
+  postDetailContent.innerHTML = `
+    <div class="post-card">
+      <div class="post-header">
+        <span class="post-author">${post.author.displayName || post.author.handle}</span>
+        <span class="post-timestamp">${formatTimestamp(post.indexedAt)}</span>
+      </div>
+      <div class="post-content">${post.record.text}</div>
+      <div class="post-actions">
+        <div class="post-action like-action" data-action="like">
+          <span class="icon">❤️</span>
+          <span class="count">${post.likeCount || 0}</span>
+        </div>
+        <div class="post-action repost-action" data-action="repost">
+          <span class="icon">🔄</span>
+          <span class="count">${post.repostCount || 0}</span>
+        </div>
+        <div class="post-action comment-action" data-action="comment">
+          <span class="icon">💬</span>
+          <span class="count">${post.replyCount || 0}</span>
+        </div>
+      </div>
+    </div>
+    <div class="comments-section">
+      <h4>Comments</h4>
+      <div class="comments-list">
+        ${renderComments(post.replies || [])}
+      </div>
+      <div class="comment-input">
+        <textarea placeholder="Write a comment..." maxlength="300"></textarea>
+        <button class="action-btn">Post Comment</button>
+      </div>
+    </div>
+  `;
+
+  // Add action handlers for the detail view
+  postDetailContent.querySelectorAll('.post-action').forEach(action => {
+    action.addEventListener('click', () => {
+      handlePostAction(post, action.dataset.action);
+    });
+  });
+
+  // Add comment submission handler
+  const commentInput = postDetailContent.querySelector('.comment-input textarea');
+  const commentButton = postDetailContent.querySelector('.comment-input button');
+  commentButton.addEventListener('click', () => {
+    handleCreateComment(post, commentInput.value);
+  });
+
+  postDetail.classList.remove('hidden');
+  document.getElementById('post-list').classList.add('hidden');
+}
+
+// Render comments
+function renderComments(comments) {
+  return comments.map(comment => `
+    <div class="comment">
+      <div class="comment-header">
+        <span class="comment-author">${comment.author.displayName || comment.author.handle}</span>
+        <span class="comment-timestamp">${formatTimestamp(comment.indexedAt)}</span>
+      </div>
+      <div class="comment-content">${comment.record.text}</div>
+      <div class="comment-actions">
+        <div class="post-action like-action" data-action="like">
+          <span class="icon">❤️</span>
+          <span class="count">${comment.likeCount || 0}</span>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// Handle post actions (like, repost, comment)
+async function handlePostAction(post, action) {
+  try {
+    const response = await window.electronAPI.performPostAction(post.uri, action);
+    if (response.success) {
+      // Update UI
+      if (currentPostDetail && currentPostDetail.uri === post.uri) {
+        showPostDetail(response.updatedPost);
+      } else {
+        loadPosts(); // Refresh the list
+      }
+    } else {
+      console.error('Failed to perform action:', response.error);
+    }
+  } catch (error) {
+    console.error('Error performing action:', error);
+  }
+}
+
+// Handle creating a new post
+async function handleCreatePost() {
+  const content = document.getElementById('post-content').value.trim();
+  if (!content) return;
+
+  try {
+    const response = await window.electronAPI.createPost(content);
+    if (response.success) {
+      // Close modal and refresh posts
+      document.getElementById('create-post-modal').classList.add('hidden');
+      document.getElementById('post-content').value = '';
+      loadPosts();
+    } else {
+      console.error('Failed to create post:', response.error);
+    }
+  } catch (error) {
+    console.error('Error creating post:', error);
+  }
+}
+
+// Handle creating a comment
+async function handleCreateComment(post, content) {
+  if (!content.trim()) return;
+
+  try {
+    const response = await window.electronAPI.createComment(post.uri, content);
+    if (response.success) {
+      showPostDetail(response.updatedPost);
+    } else {
+      console.error('Failed to create comment:', response.error);
+    }
+  } catch (error) {
+    console.error('Error creating comment:', error);
+  }
+}
+
+// Format timestamp
+function formatTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+}
+
+// Initialize social page when the page becomes active
+document.querySelector('.nav-btn[data-page="social"]').addEventListener('click', () => {
+  initializeSocialPage();
+});
