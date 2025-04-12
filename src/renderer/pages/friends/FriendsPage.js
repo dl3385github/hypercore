@@ -190,6 +190,27 @@ function initializeFriendsPage() {
       addFriendMessageToUI(data.message);
     }
   });
+  
+  // FOR TESTING: Add a test friend request button in development
+  const friendsHeader = document.querySelector('.friends-header');
+  if (friendsHeader) {
+    const testButton = document.createElement('button');
+    testButton.innerText = '🧪 Test Friend Request';
+    testButton.className = 'action-btn test-btn';
+    testButton.style.marginLeft = '10px';
+    testButton.addEventListener('click', async () => {
+      try {
+        // Generate a random DID for testing
+        const randomDid = `did:plc:${Math.random().toString(36).substring(2, 15)}`;
+        console.log('Simulating friend request from:', randomDid);
+        const result = await window.electronAPI.simulateFriendRequest(randomDid);
+        console.log('Simulation result:', result);
+      } catch (error) {
+        console.error('Error simulating friend request:', error);
+      }
+    });
+    friendsHeader.appendChild(testButton);
+  }
 }
 
 // Load the friends list

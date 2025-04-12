@@ -40,23 +40,57 @@ class ATProtocolService {
         throw new Error('Not authenticated');
       }
 
-      const response = await this.agent.getTimeline();
-      return {
-        success: true,
-        posts: response.data.feed.map(post => ({
-          uri: post.post.uri,
-          author: {
-            handle: post.post.author.handle,
-            displayName: post.post.author.displayName
-          },
-          record: post.post.record,
-          indexedAt: post.post.indexedAt,
-          likeCount: post.post.likeCount,
-          repostCount: post.post.repostCount,
-          replyCount: post.post.replyCount,
-          replies: post.replies || []
-        }))
-      };
+      // Get the global feed instead of personal timeline
+      // First try to get the firehose feed if available
+      try {
+        // Use getPopular() to get trending content from the whole network
+        const response = await this.agent.getPopular({
+          limit: 50 // Get more posts for better variety
+        });
+
+        console.log('Fetched global feed with getPopular successfully');
+        
+        return {
+          success: true,
+          posts: response.data.feed.map(post => ({
+            uri: post.post.uri,
+            author: {
+              handle: post.post.author.handle,
+              displayName: post.post.author.displayName || post.post.author.handle
+            },
+            record: post.post.record,
+            indexedAt: post.post.indexedAt,
+            likeCount: post.post.likeCount || 0,
+            repostCount: post.post.repostCount || 0,
+            replyCount: post.post.replyCount || 0,
+            replies: post.replies || []
+          }))
+        };
+      } catch (err) {
+        console.log('getPopular failed, falling back to timeline:', err.message);
+        
+        // Fall back to timeline if getPopular is not available
+        const response = await this.agent.getTimeline({
+          limit: 50 // Get more posts 
+        });
+        
+        return {
+          success: true,
+          posts: response.data.feed.map(post => ({
+            uri: post.post.uri,
+            author: {
+              handle: post.post.author.handle,
+              displayName: post.post.author.displayName || post.post.author.handle
+            },
+            record: post.post.record,
+            indexedAt: post.post.indexedAt,
+            likeCount: post.post.likeCount || 0,
+            repostCount: post.post.repostCount || 0,
+            replyCount: post.post.replyCount || 0,
+            replies: post.replies || []
+          }))
+        };
+      }
     } catch (error) {
       console.error('Error fetching posts:', error);
       return {
