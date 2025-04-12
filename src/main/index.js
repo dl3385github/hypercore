@@ -997,25 +997,14 @@ function setupIpcHandlers() {
   
   ipcMain.handle('get-pending-friend-requests', async (event) => {
     try {
-      let pendingRequests = [];
-      
-      // Load pending requests from storage
-      if (fs.existsSync(FRIEND_REQUESTS_PATH)) {
-        const storedRequests = JSON.parse(fs.readFileSync(FRIEND_REQUESTS_PATH, 'utf8'));
-        
-        // Filter for pending requests (not accepted or rejected)
-        pendingRequests = storedRequests.filter(request => 
-          request.status === 'pending' || !request.status
-        );
-        
-        console.log(`Found ${pendingRequests.length} pending friend requests`);
-        return pendingRequests;
-      }
-      
-      return [];
+      console.log('Getting pending friend requests');
+      return getPendingFriendRequests();
     } catch (error) {
       console.error('Error retrieving pending friend requests:', error);
-      return [];
+      return {
+        success: false,
+        error: error.message || 'Failed to get pending friend requests'
+      };
     }
   });
   
