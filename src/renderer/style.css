@@ -2010,6 +2010,11 @@ body {
   flex: 1;
 }
 
+.request-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .request-sender {
   font-size: 0.85rem;
   font-weight: bold;
@@ -2037,6 +2042,20 @@ body {
 
 .accept-request-btn:hover {
   background: #2980b9;
+}
+
+.reject-request-btn {
+  background: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.reject-request-btn:hover {
+  background: #c0392b;
 }
 
 .no-requests {

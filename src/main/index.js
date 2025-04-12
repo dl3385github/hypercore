@@ -364,11 +364,6 @@ function setupIpcHandlers() {
   // Listen for auth state changes in the renderer
   ipcMain.on('auth-state-changed', (event, user) => {
     updateAuthState(user);
-    
-    // Load friends data when user logs in
-    if (user && user.did) {
-      loadFriendsFromStorage();
-    }
   });
 
   // Handle username setting
@@ -1038,6 +1033,21 @@ function setupIpcHandlers() {
       return { 
         success: false, 
         error: error.message || 'Failed to accept friend request' 
+      };
+    }
+  });
+  
+  // Reject a friend request
+  ipcMain.handle('reject-friend-request', async (event, requestId) => {
+    try {
+      console.log('Handling reject friend request for:', requestId);
+      const result = await rejectFriendRequest(requestId);
+      return result;
+    } catch (error) {
+      console.error('Error in reject-friend-request handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to reject friend request' 
       };
     }
   });
@@ -1738,6 +1748,9 @@ async function acceptFriendRequest(requestId) {
     // Add the user to our friends list
     await addFriend(request.from, request);
     
+    // Save the updated requests to storage
+    saveFriendRequestsToStorage();
+    
     // In a real implementation, we would notify the other user through the network
     // For now, we'll just update our local state
     
@@ -1750,6 +1763,44 @@ async function acceptFriendRequest(requestId) {
     return {
       success: false,
       error: error.message || 'Failed to accept friend request'
+    };
+  }
+}
+
+// Reject a friend request
+async function rejectFriendRequest(requestId) {
+  try {
+    console.log(`Rejecting friend request ${requestId}`);
+    
+    // Get the request
+    const request = friendRequests.get(requestId);
+    if (!request) {
+      throw new Error('Friend request not found');
+    }
+    
+    // Verify the request is for the current user
+    if (request.to !== currentUser.did) {
+      throw new Error('This request is not for you');
+    }
+    
+    // Update request status
+    request.status = 'rejected';
+    request.rejectedAt = Date.now();
+    
+    // Save the updated requests to storage
+    saveFriendRequestsToStorage();
+    
+    // In a real implementation, we would notify the other user through the network
+    // For now, we'll just update our local state
+    
+    return {
+      success: true
+    };
+  } catch (error) {
+    console.error('Error rejecting friend request:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to reject friend request'
     };
   }
 }
@@ -1895,6 +1946,12 @@ function loadFriendsFromStorage() {
     
     // Load friends and reconstruct chat feeds
     for (const friendData of friendsArray) {
+      // Skip friends with empty or test DIDs
+      if (!friendData.did || friendData.did === 'test-did' || friendData.did === 'did:plc:yhmh4j5jnvq') {
+        console.log(`Skipping test friend with DID: ${friendData.did}`);
+        continue;
+      }
+      
       const chatFeed = {
         id: crypto.randomUUID(),
         messages: [],
@@ -2061,12 +2118,12 @@ function getPendingFriendRequests() {
     
     // Filter requests where the current user is the recipient and status is pending
     const pendingRequests = Array.from(friendRequests.values())
-      .filter(request => request.to === currentUser.did && request.status === 'pending')
+      .filter(request => request.to === currentUser.did && (request.status === 'pending' || !request.status))
       .map(request => ({
         id: request.id,
         from: request.from,
         timestamp: request.timestamp,
-        status: request.status
+        status: request.status || 'pending'
       }));
     
     console.log(`Found ${pendingRequests.length} pending friend requests`);

@@ -81,9 +81,10 @@ function initializeFriendsPage() {
   });
   
   rejectRequestBtn.addEventListener('click', () => {
-    // Just hide the modal for now since we don't have a reject API yet
-    friendRequestModal.classList.add('hidden');
-    activeRequestId = null;
+    if (activeRequestId) {
+      rejectFriendRequest(activeRequestId);
+      friendRequestModal.classList.add('hidden');
+    }
   });
   
   sendFriendRequestBtn.addEventListener('click', sendFriendRequest);
@@ -145,7 +146,15 @@ async function loadPendingRequests() {
       return;
     }
     
-    pendingRequests.forEach(request => {
+    // Filter for only pending requests
+    const activePendingRequests = pendingRequests.filter(request => request.status === 'pending' || !request.status);
+    
+    if (activePendingRequests.length === 0) {
+      pendingRequestsContainer.innerHTML = '<p class="no-requests">No pending friend requests</p>';
+      return;
+    }
+    
+    activePendingRequests.forEach(request => {
       const requestElement = document.createElement('div');
       requestElement.className = 'pending-request';
       requestElement.innerHTML = `
@@ -153,12 +162,20 @@ async function loadPendingRequests() {
           <p class="request-sender">${request.from || request.senderDid}</p>
           <p class="request-time">Received: ${new Date(request.timestamp).toLocaleString()}</p>
         </div>
-        <button class="accept-request-btn" data-request-id="${request.id}">Accept</button>
+        <div class="request-actions">
+          <button class="accept-request-btn" data-request-id="${request.id}">Accept</button>
+          <button class="reject-request-btn" data-request-id="${request.id}">Reject</button>
+        </div>
       `;
       pendingRequestsContainer.appendChild(requestElement);
       
+      // Add event listeners for buttons
       requestElement.querySelector('.accept-request-btn').addEventListener('click', () => {
         acceptFriendRequest(request.id);
+      });
+      
+      requestElement.querySelector('.reject-request-btn').addEventListener('click', () => {
+        rejectFriendRequest(request.id);
       });
     });
   } catch (error) {
@@ -173,6 +190,15 @@ async function acceptFriendRequest(requestId) {
     loadFriends(); // Refresh the friends list
   } catch (error) {
     console.error('Error accepting friend request:', error);
+  }
+}
+
+async function rejectFriendRequest(requestId) {
+  try {
+    await window.electronAPI.rejectFriendRequest(requestId);
+    loadPendingRequests(); // Refresh the pending requests list
+  } catch (error) {
+    console.error('Error rejecting friend request:', error);
   }
 }
 

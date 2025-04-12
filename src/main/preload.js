@@ -108,6 +108,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('accept-friend-request', requestId);
   },
   
+  rejectFriendRequest: (requestId) => {
+    logEvent('rejectFriendRequest', requestId);
+    return ipcRenderer.invoke('reject-friend-request', requestId);
+  },
+  
   getFriendChatMessages: (friendDid) => {
     logEvent('getFriendChatMessages', friendDid);
     return ipcRenderer.invoke('get-friend-chat-messages', friendDid);
