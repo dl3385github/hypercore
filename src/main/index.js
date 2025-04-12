@@ -1101,16 +1101,50 @@ function setupIpcHandlers() {
     }
   });
   
-  // For testing only - simulate receiving a friend request
+  // Simulate receiving a friend request for testing
   ipcMain.handle('simulate-friend-request', async (event, fromDid) => {
     try {
-      console.log('Simulating friend request from:', fromDid);
-      return simulateIncomingFriendRequest(fromDid);
+      console.log(`Simulating friend request from ${fromDid} to ${currentUser.did}`);
+      
+      if (!currentUser || !currentUser.did) {
+        throw new Error('You must be logged in to receive friend requests');
+      }
+      
+      const requestId = crypto.randomUUID();
+      const timestamp = Date.now();
+      
+      // Create a request object
+      const request = {
+        id: requestId,
+        from: fromDid,
+        to: currentUser.did,
+        timestamp: timestamp,
+        status: 'pending'
+      };
+      
+      // Sign the request with a simulated key
+      request.signature = crypto.createHash('sha256').update(JSON.stringify({
+        id: request.id,
+        from: request.from,
+        to: request.to,
+        timestamp: request.timestamp,
+        status: 'pending'
+      }) + fromDid).digest('hex');
+      
+      console.log('Created simulated request:', request);
+      
+      // Process the request using the normal handler
+      handleIncomingFriendRequest(request);
+      
+      return {
+        success: true,
+        request
+      };
     } catch (error) {
-      console.error('Error in simulate-friend-request handler:', error);
-      return { 
-        success: false, 
-        error: error.message || 'Failed to simulate friend request' 
+      console.error('Error simulating friend request:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to simulate friend request'
       };
     }
   });
@@ -1651,6 +1685,9 @@ async function createFriendRequest(targetDid) {
     // Store the request
     friendRequests.set(requestId, request);
     
+    // Save the friend request to persistent storage
+    saveFriendRequestsToStorage();
+    
     // In a real implementation, we would broadcast this request to the network
     // or store it in a Hypercore feed for the target user to discover
     
@@ -1658,6 +1695,13 @@ async function createFriendRequest(targetDid) {
     // In practice, you'd use Hyperswarm discovery to locate the user's device
     
     console.log('Friend request created:', request);
+    
+    // Simulate delivering the request to the recipient if we're testing with known DIDs
+    // This is only for development testing
+    if (targetDid === 'did:plc:tkx673nqpzfx53kjt4mib4iv' || targetDid.includes('test')) {
+      console.log('Simulating delivery of friend request to test recipient');
+      simulateIncomingFriendRequest(currentUser.did);
+    }
     
     return {
       success: true,
@@ -1676,6 +1720,12 @@ async function createFriendRequest(targetDid) {
 async function handleIncomingFriendRequest(request) {
   try {
     console.log(`Handling incoming friend request from ${request.from}`);
+    console.log('Full request details:', JSON.stringify(request, null, 2));
+    
+    // Check if the request is for the current user
+    if (request.to !== currentUser.did) {
+      console.log(`WARNING: Request to ${request.to} doesn't match current user ${currentUser.did}`);
+    }
     
     // Verify the request signature
     const isValid = await verifySignature(request.from, JSON.stringify({
@@ -1687,18 +1737,25 @@ async function handleIncomingFriendRequest(request) {
     }), request.signature);
     
     if (!isValid) {
+      console.error('Signature verification failed for request:', request.id);
       throw new Error('Invalid request signature');
     }
     
+    console.log('Signature verified successfully');
+    
     // Store the request
     friendRequests.set(request.id, request);
+    console.log(`Added request ${request.id} to friendRequests collection`);
     
     // Save to persistent storage
     saveFriendRequestsToStorage();
     
     // Notify the renderer
     if (mainWindow) {
+      console.log('Sending friend-request-received event to renderer');
       mainWindow.webContents.send('friend-request-received', request);
+    } else {
+      console.warn('mainWindow not available, cannot notify renderer');
     }
     
     return {
@@ -2116,6 +2173,11 @@ function getPendingFriendRequests() {
       throw new Error('You must be logged in to view friend requests');
     }
     
+    // Debug logging to diagnose friend request issues
+    console.log('DEBUG - Current user DID:', currentUser.did);
+    console.log('DEBUG - Total friend requests in collection:', friendRequests.size);
+    console.log('DEBUG - All friend requests:', Array.from(friendRequests.entries()));
+    
     // Filter requests where the current user is the recipient and status is pending
     const pendingRequests = Array.from(friendRequests.values())
       .filter(request => request.to === currentUser.did && (request.status === 'pending' || !request.status))
@@ -2127,6 +2189,7 @@ function getPendingFriendRequests() {
       }));
     
     console.log(`Found ${pendingRequests.length} pending friend requests`);
+    console.log('DEBUG - Filtered pending requests:', pendingRequests);
     
     return {
       success: true,
@@ -2209,40 +2272,6 @@ function getFriendChatMessages(friendDid) {
     return {
       success: false,
       error: error.message || 'Failed to get chat messages'
-    };
-  }
-}
-
-// Simulate receiving a friend request for testing
-function simulateIncomingFriendRequest(fromDid) {
-  try {
-    const requestId = crypto.randomUUID();
-    const timestamp = Date.now();
-    
-    // Create a request object
-    const request = {
-      id: requestId,
-      from: fromDid,
-      to: currentUser.did,
-      timestamp: timestamp,
-      status: 'pending'
-    };
-    
-    // Sign the request with our private key (simulated)
-    request.signature = crypto.createHash('sha256').update(JSON.stringify(request) + fromDid).digest('hex');
-    
-    // Handle the incoming request
-    handleIncomingFriendRequest(request);
-    
-    return {
-      success: true,
-      request
-    };
-  } catch (error) {
-    console.error('Error simulating friend request:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to simulate friend request'
     };
   }
 }

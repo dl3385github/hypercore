@@ -11,9 +11,11 @@ function initializeFriendsPage() {
   console.log('Initializing friends page');
   loadFriends();
   loadPendingRequests();
-  
-  // Start periodic refreshing of pending requests (every 30 seconds)
-  startPeriodicRequestCheck();
+
+  // Set up an interval to refresh pending requests
+  const pendingRequestsRefreshInterval = setInterval(() => {
+    loadPendingRequests();
+  }, 10000); // Refresh every 10 seconds
 
   // DOM Elements
   const addFriendBtn = document.getElementById('add-friend-btn');
@@ -35,41 +37,7 @@ function initializeFriendsPage() {
   const myQRModal = document.getElementById('my-qr-modal');
   const closeMyQRModal = document.getElementById('close-my-qr-modal');
   const copyDIDBtn = document.getElementById('copy-did-btn');
-  
-  // Add a simulate request button for testing
-  const friendsHeader = document.querySelector('.friends-header');
-  if (friendsHeader) {
-    const simulateBtn = document.createElement('button');
-    simulateBtn.textContent = 'Test: Simulate Request';
-    simulateBtn.className = 'simulate-request-btn';
-    simulateBtn.style.marginLeft = '10px';
-    simulateBtn.style.fontSize = '12px';
-    simulateBtn.style.padding = '4px 8px';
-    simulateBtn.style.backgroundColor = '#f0f0f0';
-    simulateBtn.style.border = '1px solid #ddd';
-    simulateBtn.style.borderRadius = '4px';
-    simulateBtn.style.cursor = 'pointer';
-    
-    simulateBtn.addEventListener('click', async () => {
-      const testDid = prompt('Enter a DID to simulate receiving a friend request:', 'did:plc:test123');
-      if (testDid) {
-        try {
-          const result = await window.electronAPI.simulateFriendRequest(testDid);
-          if (result.success) {
-            console.log('Simulated friend request:', result);
-            loadPendingRequests(); // Refresh the pending requests
-          } else {
-            alert(`Failed to simulate friend request: ${result.error}`);
-          }
-        } catch (error) {
-          console.error('Error simulating friend request:', error);
-          alert(`Error: ${error.message}`);
-        }
-      }
-    });
-    
-    friendsHeader.appendChild(simulateBtn);
-  }
+  const refreshRequestsBtn = document.getElementById('refresh-requests-btn');
   
   // Tab switching in the add friend modal
   tabButtons.forEach(button => {
@@ -148,6 +116,9 @@ function initializeFriendsPage() {
     document.getElementById('request-did').textContent = `DID: ${request.from}`;
     activeRequestId = request.id;
     friendRequestModal.classList.remove('hidden');
+    
+    // Also refresh the pending requests list
+    loadPendingRequests();
   });
   
   // Listen for new friend messages
@@ -159,41 +130,46 @@ function initializeFriendsPage() {
       addFriendMessageToUI(data.message);
     }
   });
-}
 
-// Start periodic checking for new friend requests
-function startPeriodicRequestCheck() {
-  // Immediately load pending requests on page load
-  loadPendingRequests();
-  
-  // Check for new pending requests every 30 seconds
-  const checkInterval = setInterval(() => {
-    if (document.visibilityState === 'visible') {
-      console.log('Checking for new pending friend requests...');
+  // Add refresh button event listener if it exists
+  if (refreshRequestsBtn) {
+    refreshRequestsBtn.addEventListener('click', () => {
+      console.log('Manually refreshing pending requests');
       loadPendingRequests();
+    });
+  } else {
+    // Create a refresh button if it doesn't exist
+    const pendingRequestsSection = document.querySelector('.pending-requests-section');
+    if (pendingRequestsSection) {
+      const sectionHeader = pendingRequestsSection.querySelector('h3');
+      if (sectionHeader) {
+        // Create refresh button and add it to the header
+        const refreshBtn = document.createElement('button');
+        refreshBtn.id = 'refresh-requests-btn';
+        refreshBtn.innerHTML = '🔄';
+        refreshBtn.className = 'refresh-btn';
+        refreshBtn.title = 'Refresh pending requests';
+        refreshBtn.style.marginLeft = '10px';
+        refreshBtn.style.background = 'none';
+        refreshBtn.style.border = 'none';
+        refreshBtn.style.cursor = 'pointer';
+        refreshBtn.style.fontSize = '14px';
+        
+        refreshBtn.addEventListener('click', () => {
+          console.log('Manually refreshing pending requests');
+          loadPendingRequests();
+        });
+        
+        sectionHeader.appendChild(refreshBtn);
+      }
     }
-  }, 30000); // 30 seconds
-  
-  // Clear interval when page is closed/hidden
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') {
-      console.log('Page hidden, pausing friend request checks');
-    } else {
-      console.log('Page visible, resuming friend request checks');
-      loadPendingRequests(); // Refresh immediately when page becomes visible
-    }
-  });
-  
-  // Return the interval ID in case we want to clear it later
-  return checkInterval;
+  }
 }
 
 // Load and display pending friend requests
 async function loadPendingRequests() {
   try {
-    console.log('Loading pending friend requests...');
     const result = await window.electronAPI.getPendingFriendRequests();
-    console.log('Pending friend requests result:', result);
     
     const pendingRequestsContainer = document.getElementById('pending-friend-requests');
     
@@ -209,17 +185,12 @@ async function loadPendingRequests() {
     const pendingRequests = result.requests || result;
     
     if (!pendingRequests || pendingRequests.length === 0) {
-      console.log('No pending friend requests found');
       pendingRequestsContainer.innerHTML = '<p class="no-requests">No pending friend requests</p>';
       return;
     }
     
-    console.log('Requests before filtering:', pendingRequests.length);
-    
     // Filter for only pending requests
     const activePendingRequests = pendingRequests.filter(request => request.status === 'pending' || !request.status);
-    
-    console.log('Active pending requests after filtering:', activePendingRequests.length);
     
     if (activePendingRequests.length === 0) {
       pendingRequestsContainer.innerHTML = '<p class="no-requests">No pending friend requests</p>';
@@ -227,7 +198,6 @@ async function loadPendingRequests() {
     }
     
     activePendingRequests.forEach(request => {
-      console.log('Rendering pending request:', request);
       const requestElement = document.createElement('div');
       requestElement.className = 'pending-request';
       requestElement.innerHTML = `
