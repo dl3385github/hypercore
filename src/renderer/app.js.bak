@@ -7054,18 +7054,3 @@ function formatTimestamp(timestamp) {
 document.querySelector('.nav-btn[data-page="social"]').addEventListener('click', () => {
   initializeSocialPage();
 });
-
-// Initialize social page when the page becomes active
-document.querySelector('.nav-btn[data-page="social"]').addEventListener('click', () => {
-  initializeSocialPage();
-});
-
-// Initialize friends page when the chats page is selected
-document.querySelector('.nav-btn[data-page="chats"]').addEventListener('click', () => {
-  // Use the global FriendsPage object
-  if (window.FriendsPage && typeof window.FriendsPage.initializeFriendsPage === 'function') {
-    window.FriendsPage.initializeFriendsPage();
-  } else {
-    console.error('FriendsPage module not available');
-  }
-});

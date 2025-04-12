@@ -75,9 +75,52 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   
-  // Get our own peer ID (public key)
+  // Get Hypercore ID for the current user
   getOwnId: () => {
+    logEvent('getOwnId');
     return ipcRenderer.invoke('get-own-id');
+  },
+  
+  // Get current user details
+  getUser: () => {
+    logEvent('getUser');
+    return ipcRenderer.invoke('auth-get-current-user');
+  },
+  
+  // Friends functions
+  getFriends: () => {
+    logEvent('getFriends');
+    return ipcRenderer.invoke('get-friends');
+  },
+  
+  createFriendRequest: (targetDid) => {
+    logEvent('createFriendRequest', targetDid);
+    return ipcRenderer.invoke('create-friend-request', targetDid);
+  },
+  
+  acceptFriendRequest: (requestId) => {
+    logEvent('acceptFriendRequest', requestId);
+    return ipcRenderer.invoke('accept-friend-request', requestId);
+  },
+  
+  getFriendChatMessages: (friendDid) => {
+    logEvent('getFriendChatMessages', friendDid);
+    return ipcRenderer.invoke('get-friend-chat-messages', friendDid);
+  },
+  
+  sendFriendMessage: (friendDid, text) => {
+    logEvent('sendFriendMessage', friendDid);
+    return ipcRenderer.invoke('send-friend-message', friendDid, text);
+  },
+  
+  createFriendVideoCall: (friendDid) => {
+    logEvent('createFriendVideoCall', friendDid);
+    return ipcRenderer.invoke('create-friend-video-call', friendDid);
+  },
+  
+  simulateFriendRequest: (fromDid) => {
+    logEvent('simulateFriendRequest', fromDid);
+    return ipcRenderer.invoke('simulate-friend-request', fromDid);
   },
   
   // Quit the application
@@ -309,6 +352,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPostDetail: (postUri) => {
     logEvent('getPostDetail', postUri);
     return ipcRenderer.invoke('getPostDetail', postUri);
+  },
+  
+  // Listen for auth state changes
+  onAuthStateChanged: (callback) => {
+    logEvent('onAuthStateChanged');
+    ipcRenderer.on('auth-state-changed', (event, user) => {
+      callback(user);
+    });
+  },
+  
+  // Friend event listeners
+  onFriendRequestReceived: (callback) => {
+    logEvent('onFriendRequestReceived');
+    ipcRenderer.on('friend-request-received', (event, request) => {
+      callback(request);
+    });
+  },
+  
+  onNewFriendMessage: (callback) => {
+    logEvent('onNewFriendMessage');
+    ipcRenderer.on('new-friend-message', (event, data) => {
+      callback(data);
+    });
   },
 });
 

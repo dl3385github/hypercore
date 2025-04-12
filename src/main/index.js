@@ -356,9 +356,19 @@ function setupIpcHandlers() {
   
   ipcMain.handle('auth-get-current-user', (event) => {
     return { 
-      success: true,
+      success: true, 
       user: currentUser 
     };
+  });
+
+  // Listen for auth state changes in the renderer
+  ipcMain.on('auth-state-changed', (event, user) => {
+    updateAuthState(user);
+    
+    // Load friends data when user logs in
+    if (user && user.did) {
+      loadFriendsFromStorage();
+    }
   });
 
   // Handle username setting
@@ -970,6 +980,111 @@ function setupIpcHandlers() {
       };
     }
   });
+
+  // Friends handlers
+  ipcMain.handle('get-friends', async (event) => {
+    try {
+      console.log('Getting friends list');
+      return getFriends();
+    } catch (error) {
+      console.error('Error in get-friends handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to get friends' 
+      };
+    }
+  });
+  
+  ipcMain.handle('create-friend-request', async (event, targetDid) => {
+    try {
+      console.log('Handling create friend request for:', targetDid);
+      const result = await createFriendRequest(targetDid);
+      return result;
+    } catch (error) {
+      console.error('Error in create-friend-request handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to create friend request' 
+      };
+    }
+  });
+  
+  ipcMain.handle('accept-friend-request', async (event, requestId) => {
+    try {
+      console.log('Handling accept friend request for:', requestId);
+      const result = await acceptFriendRequest(requestId);
+      return result;
+    } catch (error) {
+      console.error('Error in accept-friend-request handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to accept friend request' 
+      };
+    }
+  });
+  
+  ipcMain.handle('get-friend-chat-messages', async (event, friendDid) => {
+    try {
+      console.log('Getting chat messages for friend:', friendDid);
+      return getFriendChatMessages(friendDid);
+    } catch (error) {
+      console.error('Error in get-friend-chat-messages handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to get chat messages' 
+      };
+    }
+  });
+  
+  ipcMain.handle('send-friend-message', async (event, friendDid, text) => {
+    try {
+      console.log('Handling send friend message to:', friendDid);
+      const result = await sendFriendMessage(friendDid, text);
+      
+      // If successful, notify renderer about the new message
+      if (result.success && mainWindow) {
+        mainWindow.webContents.send('new-friend-message', {
+          friendDid,
+          message: result.message
+        });
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error in send-friend-message handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to send message' 
+      };
+    }
+  });
+  
+  ipcMain.handle('create-friend-video-call', async (event, friendDid) => {
+    try {
+      console.log('Creating video call with friend:', friendDid);
+      return createFriendVideoCallRoom(friendDid);
+    } catch (error) {
+      console.error('Error in create-friend-video-call handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to create video call' 
+      };
+    }
+  });
+  
+  // For testing only - simulate receiving a friend request
+  ipcMain.handle('simulate-friend-request', async (event, fromDid) => {
+    try {
+      console.log('Simulating friend request from:', fromDid);
+      return simulateIncomingFriendRequest(fromDid);
+    } catch (error) {
+      console.error('Error in simulate-friend-request handler:', error);
+      return { 
+        success: false, 
+        error: error.message || 'Failed to simulate friend request' 
+      };
+    }
+  });
 }
 
 // Transcribe audio using OpenAI
@@ -1399,6 +1514,17 @@ function updateAuthState(user) {
     username = user.handle;
   }
   
+  // If user is logged in, load their friends
+  if (user && user.did) {
+    // Load friends data
+    loadFriendsFromStorage();
+  } else {
+    // Clear friends data when logged out
+    friends.clear();
+    friendRequests.clear();
+    friendChats.clear();
+  }
+  
   // Notify renderer of auth state change
   if (mainWindow) {
     mainWindow.webContents.send('auth-state-changed', user);
@@ -1444,4 +1570,550 @@ function checkAudioLevel(audioData) {
   
   // Check against global transcription threshold
   return rms >= TRANSCRIPTION_THRESHOLD;
+}
+
+// ====== Friends Management ======
+
+// Store friends data
+const friends = new Map(); // Map of friend DID to friend data
+const friendRequests = new Map(); // Map of request ID to request data
+const friendChats = new Map(); // Map of friend DID to chat feed
+
+// Create a new friend request
+async function createFriendRequest(targetDid) {
+  try {
+    console.log(`Creating friend request to ${targetDid}`);
+    
+    if (!currentUser || !currentUser.did) {
+      throw new Error('You must be logged in to add friends');
+    }
+    
+    // Check if already friends
+    if (friends.has(targetDid)) {
+      throw new Error('You are already friends with this user');
+    }
+    
+    // Check if there's a pending request
+    for (const [id, request] of friendRequests) {
+      if (request.to === targetDid && request.from === currentUser.did) {
+        throw new Error('You already have a pending request to this user');
+      }
+    }
+    
+    // Create a signed request
+    const requestId = crypto.randomUUID();
+    const timestamp = Date.now();
+    
+    // Create a request object
+    const request = {
+      id: requestId,
+      from: currentUser.did,
+      to: targetDid,
+      timestamp: timestamp,
+      status: 'pending'
+    };
+    
+    // Sign the request with our private key
+    const signature = await signWithUserKey(JSON.stringify(request));
+    request.signature = signature;
+    
+    // Store the request
+    friendRequests.set(requestId, request);
+    
+    // In a real implementation, we would broadcast this request to the network
+    // or store it in a Hypercore feed for the target user to discover
+    
+    // For now, we'll simulate this with a direct method call
+    // In practice, you'd use Hyperswarm discovery to locate the user's device
+    
+    console.log('Friend request created:', request);
+    
+    return {
+      success: true,
+      request
+    };
+  } catch (error) {
+    console.error('Error creating friend request:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to create friend request'
+    };
+  }
+}
+
+// Handle incoming friend request
+async function handleIncomingFriendRequest(request) {
+  try {
+    console.log(`Handling incoming friend request from ${request.from}`);
+    
+    // Verify the request signature
+    const isValid = await verifySignature(request.from, JSON.stringify({
+      id: request.id,
+      from: request.from,
+      to: request.to,
+      timestamp: request.timestamp,
+      status: 'pending'
+    }), request.signature);
+    
+    if (!isValid) {
+      throw new Error('Invalid request signature');
+    }
+    
+    // Store the request
+    friendRequests.set(request.id, request);
+    
+    // Notify the renderer
+    if (mainWindow) {
+      mainWindow.webContents.send('friend-request-received', request);
+    }
+    
+    return {
+      success: true
+    };
+  } catch (error) {
+    console.error('Error handling friend request:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to handle friend request'
+    };
+  }
+}
+
+// Accept a friend request
+async function acceptFriendRequest(requestId) {
+  try {
+    console.log(`Accepting friend request ${requestId}`);
+    
+    // Get the request
+    const request = friendRequests.get(requestId);
+    if (!request) {
+      throw new Error('Friend request not found');
+    }
+    
+    // Verify the request is for the current user
+    if (request.to !== currentUser.did) {
+      throw new Error('This request is not for you');
+    }
+    
+    // Update request status
+    request.status = 'accepted';
+    request.acceptedAt = Date.now();
+    
+    // Sign the acceptance
+    const acceptanceSignature = await signWithUserKey(JSON.stringify({
+      id: request.id,
+      from: request.from,
+      to: request.to,
+      timestamp: request.timestamp,
+      status: 'accepted',
+      acceptedAt: request.acceptedAt
+    }));
+    
+    request.acceptanceSignature = acceptanceSignature;
+    
+    // Add the user to our friends list
+    await addFriend(request.from, request);
+    
+    // In a real implementation, we would notify the other user through the network
+    // For now, we'll just update our local state
+    
+    return {
+      success: true,
+      friend: friends.get(request.from)
+    };
+  } catch (error) {
+    console.error('Error accepting friend request:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to accept friend request'
+    };
+  }
+}
+
+// Add a friend to our friends list
+async function addFriend(did, request) {
+  try {
+    console.log(`Adding friend: ${did}`);
+    
+    // Create friend entry if it doesn't exist
+    if (!friends.has(did)) {
+      // Derive a shared secret for this friendship using Diffie-Hellman
+      // In a real implementation, this would use the friend's public key and our private key
+      const sharedSecret = await deriveSharedSecret(did);
+      
+      const friend = {
+        did,
+        addedAt: Date.now(),
+        sharedSecret,
+        request: request || null,
+        chatFeed: null
+      };
+      
+      // Create a Hypercore feed for chat messages with this friend
+      const chatFeed = await createChatFeed(did, sharedSecret);
+      friend.chatFeed = chatFeed;
+      
+      // Store the friend
+      friends.set(did, friend);
+      
+      // Save friends to persistent storage
+      saveFriendsToStorage();
+      
+      console.log('Friend added successfully:', friend);
+    }
+    
+    return {
+      success: true,
+      friend: friends.get(did)
+    };
+  } catch (error) {
+    console.error('Error adding friend:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to add friend'
+    };
+  }
+}
+
+// Create a chat feed for a friend
+async function createChatFeed(friendDid, sharedSecret) {
+  try {
+    console.log(`Creating chat feed for friend: ${friendDid}`);
+    
+    // In a real implementation, we would create a Hypercore feed
+    // encrypted with the shared secret
+    
+    // For this example, we'll simulate a feed with an array
+    const chatFeed = {
+      id: crypto.randomUUID(),
+      messages: [],
+      encryptionKey: sharedSecret,
+      friendDid
+    };
+    
+    // Store the feed
+    friendChats.set(friendDid, chatFeed);
+    
+    return chatFeed;
+  } catch (error) {
+    console.error('Error creating chat feed:', error);
+    throw error;
+  }
+}
+
+// Sign data with the user's private key
+async function signWithUserKey(data) {
+  // In a real implementation, this would use the user's private key
+  // For now, we'll simulate this with a simple hash
+  const signature = crypto.createHash('sha256').update(data + currentUser.did).digest('hex');
+  return signature;
+}
+
+// Verify a signature with a public key
+async function verifySignature(publicKey, data, signature) {
+  // In a real implementation, this would verify the signature with the public key
+  // For now, we'll simulate this with a simple hash comparison
+  const expectedSignature = crypto.createHash('sha256').update(data + publicKey).digest('hex');
+  return signature === expectedSignature;
+}
+
+// Derive a shared secret using Diffie-Hellman
+async function deriveSharedSecret(friendDid) {
+  // In a real implementation, this would use Diffie-Hellman with the friend's public key
+  // For now, we'll simulate this with a simple hash
+  const sharedSecret = crypto.createHash('sha256').update(currentUser.did + friendDid).digest('hex');
+  return sharedSecret;
+}
+
+// Generate a room ID from a shared secret
+function generateRoomIdFromSharedSecret(sharedSecret) {
+  // Use the first 12 characters of the SHA-256 hash of the shared secret
+  return crypto.createHash('sha256').update(sharedSecret).digest('hex').substring(0, 12);
+}
+
+// Save friends to storage
+function saveFriendsToStorage() {
+  try {
+    // Convert friends map to an array for storage
+    const friendsArray = Array.from(friends.values()).map(friend => ({
+      did: friend.did,
+      addedAt: friend.addedAt,
+      sharedSecret: friend.sharedSecret
+    }));
+    
+    // Save to a file in the user data directory
+    const friendsPath = path.join(app.getPath('userData'), `friends_${currentUser.did}.json`);
+    fs.writeFileSync(friendsPath, JSON.stringify(friendsArray, null, 2));
+    
+    console.log('Friends saved to storage');
+  } catch (error) {
+    console.error('Error saving friends to storage:', error);
+  }
+}
+
+// Load friends from storage
+function loadFriendsFromStorage() {
+  try {
+    if (!currentUser || !currentUser.did) return;
+    
+    const friendsPath = path.join(app.getPath('userData'), `friends_${currentUser.did}.json`);
+    
+    if (!fs.existsSync(friendsPath)) {
+      console.log('No friends file found, starting with empty friends list');
+      return;
+    }
+    
+    const friendsData = fs.readFileSync(friendsPath, 'utf8');
+    const friendsArray = JSON.parse(friendsData);
+    
+    // Clear existing friends
+    friends.clear();
+    
+    // Load friends and reconstruct chat feeds
+    for (const friendData of friendsArray) {
+      const chatFeed = {
+        id: crypto.randomUUID(),
+        messages: [],
+        encryptionKey: friendData.sharedSecret,
+        friendDid: friendData.did
+      };
+      
+      const friend = {
+        did: friendData.did,
+        addedAt: friendData.addedAt,
+        sharedSecret: friendData.sharedSecret,
+        request: null,
+        chatFeed: chatFeed
+      };
+      
+      friends.set(friendData.did, friend);
+      friendChats.set(friendData.did, chatFeed);
+    }
+    
+    console.log(`Loaded ${friends.size} friends from storage`);
+    
+    // Load chat messages for each friend
+    loadFriendChatMessages();
+  } catch (error) {
+    console.error('Error loading friends from storage:', error);
+  }
+}
+
+// Load chat messages for all friends
+function loadFriendChatMessages() {
+  try {
+    if (!currentUser || !currentUser.did) return;
+    
+    for (const [friendDid, friend] of friends.entries()) {
+      const chatPath = path.join(app.getPath('userData'), `chat_${currentUser.did}_${friendDid}.json`);
+      
+      if (!fs.existsSync(chatPath)) {
+        console.log(`No chat file found for friend ${friendDid}`);
+        continue;
+      }
+      
+      const chatData = fs.readFileSync(chatPath, 'utf8');
+      const messages = JSON.parse(chatData);
+      
+      // Decrypt messages (in a real implementation)
+      // In this example, we'll just use the messages as is
+      
+      // Update the chat feed
+      friend.chatFeed.messages = messages;
+    }
+    
+    console.log('Chat messages loaded for all friends');
+  } catch (error) {
+    console.error('Error loading friend chat messages:', error);
+  }
+}
+
+// Save chat messages for a friend
+function saveFriendChatMessages(friendDid) {
+  try {
+    if (!currentUser || !currentUser.did) return;
+    
+    const chatFeed = friendChats.get(friendDid);
+    if (!chatFeed) return;
+    
+    // Encrypt messages (in a real implementation)
+    // In this example, we'll just save the messages as is
+    
+    const chatPath = path.join(app.getPath('userData'), `chat_${currentUser.did}_${friendDid}.json`);
+    fs.writeFileSync(chatPath, JSON.stringify(chatFeed.messages, null, 2));
+    
+    console.log(`Chat messages saved for friend ${friendDid}`);
+  } catch (error) {
+    console.error('Error saving friend chat messages:', error);
+  }
+}
+
+// Send a message to a friend
+async function sendFriendMessage(friendDid, text) {
+  try {
+    console.log(`Sending message to friend ${friendDid}: ${text}`);
+    
+    if (!currentUser || !currentUser.did) {
+      throw new Error('You must be logged in to send messages');
+    }
+    
+    // Check if the user is our friend
+    if (!friends.has(friendDid)) {
+      throw new Error('This user is not in your friends list');
+    }
+    
+    const friend = friends.get(friendDid);
+    const chatFeed = friend.chatFeed;
+    
+    // Create the message
+    const message = {
+      id: crypto.randomUUID(),
+      sender: currentUser.did,
+      text,
+      timestamp: Date.now(),
+      status: 'sent'
+    };
+    
+    // Sign the message
+    message.signature = await signWithUserKey(JSON.stringify({
+      id: message.id,
+      sender: message.sender,
+      text: message.text,
+      timestamp: message.timestamp
+    }));
+    
+    // In a real implementation, this would append to a Hypercore feed
+    // that both users have access to
+    
+    // Add to the chat feed
+    chatFeed.messages.push(message);
+    
+    // Save to disk
+    saveFriendChatMessages(friendDid);
+    
+    // In a real implementation, the message would be automatically shared
+    // through Hyperswarm. For now, we'll just update our local state.
+    
+    return {
+      success: true,
+      message
+    };
+  } catch (error) {
+    console.error('Error sending friend message:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to send message'
+    };
+  }
+}
+
+// Get all friends
+function getFriends() {
+  try {
+    const friendsList = Array.from(friends.values()).map(friend => ({
+      did: friend.did,
+      addedAt: friend.addedAt
+    }));
+    
+    return {
+      success: true,
+      friends: friendsList
+    };
+  } catch (error) {
+    console.error('Error getting friends:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to get friends'
+    };
+  }
+}
+
+// Get all chat messages with a friend
+function getFriendChatMessages(friendDid) {
+  try {
+    // Check if the user is our friend
+    if (!friends.has(friendDid)) {
+      throw new Error('This user is not in your friends list');
+    }
+    
+    const friend = friends.get(friendDid);
+    const chatFeed = friend.chatFeed;
+    
+    return {
+      success: true,
+      messages: chatFeed.messages
+    };
+  } catch (error) {
+    console.error('Error getting friend chat messages:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to get chat messages'
+    };
+  }
+}
+
+// Simulate receiving a friend request for testing
+function simulateIncomingFriendRequest(fromDid) {
+  try {
+    const requestId = crypto.randomUUID();
+    const timestamp = Date.now();
+    
+    // Create a request object
+    const request = {
+      id: requestId,
+      from: fromDid,
+      to: currentUser.did,
+      timestamp: timestamp,
+      status: 'pending'
+    };
+    
+    // Sign the request with our private key (simulated)
+    request.signature = crypto.createHash('sha256').update(JSON.stringify(request) + fromDid).digest('hex');
+    
+    // Handle the incoming request
+    handleIncomingFriendRequest(request);
+    
+    return {
+      success: true,
+      request
+    };
+  } catch (error) {
+    console.error('Error simulating friend request:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to simulate friend request'
+    };
+  }
+}
+
+// Create a video call room with a friend
+async function createFriendVideoCallRoom(friendDid) {
+  try {
+    console.log(`Creating video call room with friend ${friendDid}`);
+    
+    if (!currentUser || !currentUser.did) {
+      throw new Error('You must be logged in to start a video call');
+    }
+    
+    // Check if the user is our friend
+    if (!friends.has(friendDid)) {
+      throw new Error('This user is not in your friends list');
+    }
+    
+    const friend = friends.get(friendDid);
+    
+    // Generate a room ID from the shared secret
+    const roomId = generateRoomIdFromSharedSecret(friend.sharedSecret);
+    
+    return {
+      success: true,
+      roomId
+    };
+  } catch (error) {
+    console.error('Error creating friend video call room:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to create video call room'
+    };
+  }
 }

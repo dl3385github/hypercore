@@ -170,8 +170,141 @@
 
         <!-- Chats Page (Placeholder) -->
         <div id="chats-page" class="app-page">
-          <h2>Chats Page</h2>
-          <p>This is a placeholder for the P2P chat features.</p>
+          <div class="friends-container">
+            <!-- Left Sidebar: Friends List -->
+            <div class="friends-sidebar">
+              <div class="friends-header">
+                <h2>Friends</h2>
+                <button id="add-friend-btn" class="action-btn">
+                  <span class="icon">➕</span>
+                  Add Friend
+                </button>
+              </div>
+              <div class="friends-search">
+                <input type="text" id="search-friends" placeholder="Search friends...">
+              </div>
+              <div id="friends-list" class="friends-list">
+                <!-- Friends will be dynamically added here -->
+                <div class="no-friends-message">No friends added yet</div>
+              </div>
+            </div>
+            
+            <!-- Right Content: Chat or Friend Info -->
+            <div class="friends-content">
+              <!-- Default view when no chat selected -->
+              <div id="no-chat-selected" class="no-chat-selected">
+                <div class="empty-state">
+                  <div class="empty-state-icon">👋</div>
+                  <h3>Select a friend to start chatting</h3>
+                  <p>Your messages will be end-to-end encrypted and stored permanently</p>
+                </div>
+              </div>
+              
+              <!-- Chat view when a friend is selected -->
+              <div id="friend-chat" class="friend-chat hidden">
+                <div class="chat-header">
+                  <div class="chat-user-info">
+                    <span class="user-avatar">👤</span>
+                    <span id="chat-friend-name" class="user-name">Friend Name</span>
+                    <span id="chat-friend-did" class="user-did">DID:...</span>
+                  </div>
+                  <div class="chat-actions">
+                    <button id="start-video-call" class="action-btn">
+                      <span class="icon">📹</span>
+                      Video Call
+                    </button>
+                  </div>
+                </div>
+                
+                <div class="chat-messages-container">
+                  <div id="friend-messages" class="messages">
+                    <!-- Messages will be dynamically added here -->
+                  </div>
+                </div>
+                
+                <div class="message-input-container">
+                  <input 
+                    type="text" 
+                    id="friend-message-input" 
+                    placeholder="Type your message..." 
+                    maxlength="500"
+                  >
+                  <button id="friend-send-btn">Send</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Add Friend Modal -->
+          <div id="add-friend-modal" class="modal hidden">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h3>Add Friend</h3>
+                <button id="close-add-friend-modal" class="close-btn">&times;</button>
+              </div>
+              <div class="modal-body">
+                <div class="tabs">
+                  <button class="tab-btn active" data-tab="send-request">Send Request</button>
+                  <button class="tab-btn" data-tab="scan-qr">Scan QR Code</button>
+                </div>
+                
+                <div id="send-request-tab" class="tab-content active">
+                  <p>Add a friend using their Hypercore DID</p>
+                  <input type="text" id="friend-did-input" placeholder="Enter friend's DID">
+                  <div class="did-hint">Example: did:key:z6Mkw1Mpxg8VSH6Wz6oFbXwkMNP1zxAM6FpW24pwRY3V31NH</div>
+                  <button id="send-friend-request-btn" class="action-btn">Send Friend Request</button>
+                </div>
+                
+                <div id="scan-qr-tab" class="tab-content">
+                  <p>Scan your friend's QR code to add them</p>
+                  <div id="qr-scanner-container">
+                    <video id="qr-video" playsinline></video>
+                  </div>
+                  <button id="start-scan-btn" class="action-btn">Start Scanning</button>
+                  <button id="stop-scan-btn" class="action-btn hidden">Stop Scanning</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Friend Request Modal -->
+          <div id="friend-request-modal" class="modal hidden">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h3>Friend Request</h3>
+                <button id="close-friend-request-modal" class="close-btn">&times;</button>
+              </div>
+              <div class="modal-body">
+                <p>You have a friend request from:</p>
+                <div class="request-info">
+                  <div id="request-did" class="request-did">DID: did:key:z6Mk...</div>
+                </div>
+                <div class="request-actions">
+                  <button id="accept-request-btn" class="action-btn accept-btn">Accept</button>
+                  <button id="reject-request-btn" class="action-btn reject-btn">Reject</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Your DID QR Code Modal -->
+          <div id="my-qr-modal" class="modal hidden">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h3>Your Friend Code</h3>
+                <button id="close-my-qr-modal" class="close-btn">&times;</button>
+              </div>
+              <div class="modal-body">
+                <p>Share this QR code with friends to connect</p>
+                <div id="my-qr-code" class="qr-code-container"></div>
+                <div id="my-did-display" class="my-did-display">
+                  <p>Your DID:</p>
+                  <div class="did-value"></div>
+                </div>
+                <button id="copy-did-btn" class="action-btn">Copy DID</button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Social Page -->
@@ -391,6 +524,7 @@
     </div>
   </template>
 
+  <script src="pages/friends/FriendsPage.js"></script>
   <script src="app.js"></script>
 </body>
 </html> 
