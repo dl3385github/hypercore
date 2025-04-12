@@ -93,6 +93,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('get-friends');
   },
   
+  getPendingFriendRequests: () => {
+    logEvent('getPendingFriendRequests');
+    return ipcRenderer.invoke('get-pending-friend-requests');
+  },
+  
   createFriendRequest: (targetDid) => {
     logEvent('createFriendRequest', targetDid);
     return ipcRenderer.invoke('create-friend-request', targetDid);

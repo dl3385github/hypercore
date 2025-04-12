@@ -8,8 +8,10 @@ let activeRequestId = null;
 
 // Initialize friends page
 function initializeFriendsPage() {
-  console.log('Initializing friends page...');
-  
+  console.log('Initializing friends page');
+  loadFriends();
+  loadPendingRequests();
+
   // DOM Elements
   const addFriendBtn = document.getElementById('add-friend-btn');
   const closeAddFriendModal = document.getElementById('close-add-friend-modal');
@@ -70,93 +72,24 @@ function initializeFriendsPage() {
     friendRequestModal.classList.add('hidden');
   });
   
-  sendFriendRequestBtn.addEventListener('click', async () => {
-    const targetDid = friendDIDInput.value.trim();
-    if (!targetDid) {
-      alert('Please enter a valid DID');
-      return;
-    }
-    
-    try {
-      const result = await window.electronAPI.createFriendRequest(targetDid);
-      if (result.success) {
-        alert('Friend request sent successfully!');
-        addFriendModal.classList.add('hidden');
-        friendDIDInput.value = '';
-      } else {
-        alert(`Failed to send friend request: ${result.error}`);
-      }
-    } catch (error) {
-      console.error('Error sending friend request:', error);
-      alert(`Error: ${error.message}`);
-    }
-  });
-  
-  acceptRequestBtn.addEventListener('click', async () => {
-    if (!activeRequestId) {
-      alert('No request selected');
-      return;
-    }
-    
-    try {
-      const result = await window.electronAPI.acceptFriendRequest(activeRequestId);
-      if (result.success) {
-        alert('Friend request accepted!');
-        friendRequestModal.classList.add('hidden');
-        loadFriendsList();
-      } else {
-        alert(`Failed to accept friend request: ${result.error}`);
-      }
-    } catch (error) {
-      console.error('Error accepting friend request:', error);
-      alert(`Error: ${error.message}`);
+  // Accept and reject friend request buttons in the modal
+  acceptRequestBtn.addEventListener('click', () => {
+    if (activeRequestId) {
+      acceptFriendRequest(activeRequestId);
+      friendRequestModal.classList.add('hidden');
     }
   });
   
   rejectRequestBtn.addEventListener('click', () => {
-    // In a real implementation, you would reject the request
-    alert('Friend request rejected');
+    // Just hide the modal for now since we don't have a reject API yet
     friendRequestModal.classList.add('hidden');
+    activeRequestId = null;
   });
   
-  startVideoCallBtn.addEventListener('click', async () => {
-    if (!activeFriendDid) {
-      alert('No friend selected');
-      return;
-    }
-    
-    try {
-      const result = await window.electronAPI.createFriendVideoCall(activeFriendDid);
-      if (result.success) {
-        // Switch to video call page
-        const videoCallPage = document.getElementById('video-call-page');
-        const chatsPage = document.getElementById('chats-page');
-        
-        // Update nav buttons
-        document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
-        document.querySelector('.nav-btn[data-page="video-call"]').classList.add('active');
-        
-        // Switch pages
-        document.querySelectorAll('.app-page').forEach(page => page.classList.remove('active'));
-        videoCallPage.classList.add('active');
-        
-        // Set room ID and username in the form
-        document.getElementById('room-input').value = result.roomId;
-        
-        // Trigger the join button
-        document.getElementById('join-btn').click();
-      } else {
-        alert(`Failed to start video call: ${result.error}`);
-      }
-    } catch (error) {
-      console.error('Error starting video call:', error);
-      alert(`Error: ${error.message}`);
-    }
-  });
+  sendFriendRequestBtn.addEventListener('click', sendFriendRequest);
   
   friendMessageInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+    if (e.key === 'Enter') {
       sendFriendMessage();
     }
   });
@@ -167,9 +100,6 @@ function initializeFriendsPage() {
     const searchTerm = e.target.value.toLowerCase();
     filterFriendsList(searchTerm);
   });
-  
-  // Load initial data
-  loadFriendsList();
   
   // Listen for incoming friend requests
   window.electronAPI.onFriendRequestReceived((request) => {
@@ -190,27 +120,96 @@ function initializeFriendsPage() {
       addFriendMessageToUI(data.message);
     }
   });
-  
-  // FOR TESTING: Add a test friend request button in development
-  const friendsHeader = document.querySelector('.friends-header');
-  if (friendsHeader) {
-    const testButton = document.createElement('button');
-    testButton.innerText = '🧪 Test Friend Request';
-    testButton.className = 'action-btn test-btn';
-    testButton.style.marginLeft = '10px';
-    testButton.addEventListener('click', async () => {
-      try {
-        // Generate a random DID for testing
-        const randomDid = `did:plc:${Math.random().toString(36).substring(2, 15)}`;
-        console.log('Simulating friend request from:', randomDid);
-        const result = await window.electronAPI.simulateFriendRequest(randomDid);
-        console.log('Simulation result:', result);
-      } catch (error) {
-        console.error('Error simulating friend request:', error);
-      }
+}
+
+// Load and display pending friend requests
+async function loadPendingRequests() {
+  try {
+    const result = await window.electronAPI.getPendingFriendRequests();
+    
+    const pendingRequestsContainer = document.getElementById('pending-friend-requests');
+    
+    // Check if container exists before manipulating it
+    if (!pendingRequestsContainer) {
+      console.warn('Pending requests container not found in the DOM');
+      return;
+    }
+    
+    pendingRequestsContainer.innerHTML = '';
+    
+    // Handle different response formats
+    const pendingRequests = result.requests || result;
+    
+    if (!pendingRequests || pendingRequests.length === 0) {
+      pendingRequestsContainer.innerHTML = '<p class="no-requests">No pending friend requests</p>';
+      return;
+    }
+    
+    pendingRequests.forEach(request => {
+      const requestElement = document.createElement('div');
+      requestElement.className = 'pending-request';
+      requestElement.innerHTML = `
+        <div class="request-info">
+          <p class="request-sender">${request.from || request.senderDid}</p>
+          <p class="request-time">Received: ${new Date(request.timestamp).toLocaleString()}</p>
+        </div>
+        <button class="accept-request-btn" data-request-id="${request.id}">Accept</button>
+      `;
+      pendingRequestsContainer.appendChild(requestElement);
+      
+      requestElement.querySelector('.accept-request-btn').addEventListener('click', () => {
+        acceptFriendRequest(request.id);
+      });
     });
-    friendsHeader.appendChild(testButton);
+  } catch (error) {
+    console.error('Error loading pending requests:', error);
   }
+}
+
+async function acceptFriendRequest(requestId) {
+  try {
+    await window.electronAPI.acceptFriendRequest(requestId);
+    loadPendingRequests(); // Refresh the pending requests list
+    loadFriends(); // Refresh the friends list
+  } catch (error) {
+    console.error('Error accepting friend request:', error);
+  }
+}
+
+// Send a friend request to another user
+async function sendFriendRequest() {
+  try {
+    const friendDIDInput = document.getElementById('friend-did-input');
+    const targetDid = friendDIDInput.value.trim();
+    
+    if (!targetDid) {
+      alert('Please enter a valid DID to send a friend request');
+      return;
+    }
+    
+    const result = await window.electronAPI.createFriendRequest(targetDid);
+    
+    if (result.success) {
+      alert('Friend request sent successfully!');
+      
+      // Clear the input and close the modal
+      friendDIDInput.value = '';
+      const addFriendModal = document.getElementById('add-friend-modal');
+      if (addFriendModal) {
+        addFriendModal.classList.add('hidden');
+      }
+    } else {
+      alert(`Failed to send friend request: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error sending friend request:', error);
+    alert(`Error: ${error.message}`);
+  }
+}
+
+// Load friends by calling the loadFriendsList function
+async function loadFriends() {
+  await loadFriendsList();
 }
 
 // Load the friends list
@@ -231,6 +230,12 @@ async function loadFriendsList() {
 // Render the friends list in the UI
 function renderFriendsList() {
   const friendsListContainer = document.getElementById('friends-list');
+  
+  // Check if container exists
+  if (!friendsListContainer) {
+    console.warn('Friends list container not found in the DOM');
+    return;
+  }
   
   // Clear current list
   while (friendsListContainer.firstChild) {
@@ -312,16 +317,33 @@ async function openFriendChat(friendDid) {
     // Set as active friend
     activeFriendDid = friendDid;
     
+    // Check if necessary elements exist
+    const noChatSelected = document.getElementById('no-chat-selected');
+    const friendChat = document.getElementById('friend-chat');
+    const chatFriendName = document.getElementById('chat-friend-name');
+    const chatFriendDid = document.getElementById('chat-friend-did');
+    const friendMessageInput = document.getElementById('friend-message-input');
+    
+    if (!noChatSelected || !friendChat) {
+      console.error('Chat UI elements not found');
+      return;
+    }
+    
     // Show chat view, hide empty state
-    document.getElementById('no-chat-selected').classList.add('hidden');
-    document.getElementById('friend-chat').classList.remove('hidden');
+    noChatSelected.classList.add('hidden');
+    friendChat.classList.remove('hidden');
     
     // Set friend info in the header
     const friendData = friendsList.find(f => f.did === friendDid);
     const shortDid = `${friendDid.substring(0, 12)}...${friendDid.substring(friendDid.length - 6)}`;
     
-    document.getElementById('chat-friend-name').textContent = friendData?.name || 'Friend';
-    document.getElementById('chat-friend-did').textContent = shortDid;
+    if (chatFriendName) {
+      chatFriendName.textContent = friendData?.name || 'Friend';
+    }
+    
+    if (chatFriendDid) {
+      chatFriendDid.textContent = shortDid;
+    }
     
     // Load chat messages
     const messagesResult = await window.electronAPI.getFriendChatMessages(friendDid);
@@ -332,7 +354,9 @@ async function openFriendChat(friendDid) {
     }
     
     // Focus message input
-    document.getElementById('friend-message-input').focus();
+    if (friendMessageInput) {
+      friendMessageInput.focus();
+    }
   } catch (error) {
     console.error('Error opening friend chat:', error);
   }
@@ -341,6 +365,12 @@ async function openFriendChat(friendDid) {
 // Render chat messages
 function renderFriendChatMessages(messages) {
   const messagesContainer = document.getElementById('friend-messages');
+  
+  // Check if container exists
+  if (!messagesContainer) {
+    console.error('Friend messages container not found');
+    return;
+  }
   
   // Clear current messages
   messagesContainer.innerHTML = '';
@@ -368,6 +398,7 @@ function renderFriendChatMessages(messages) {
       const dateSeparator = document.createElement('div');
       dateSeparator.className = 'date-separator';
       dateSeparator.textContent = messageDate;
+      dateSeparator.setAttribute('data-date', messageDate);
       messagesContainer.appendChild(dateSeparator);
     }
     
@@ -379,28 +410,31 @@ function renderFriendChatMessages(messages) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Add a message to the UI
-function addFriendMessageToUI(message, shouldScroll = true) {
+// Modify the function that adds messages to the UI
+function addFriendMessageToUI(message, skipScroll = false) {
   const messagesContainer = document.getElementById('friend-messages');
+  if (!messagesContainer) {
+    console.error('Messages container not found');
+    return;
+  }
   
   const messageElement = document.createElement('div');
-  messageElement.className = `friend-message ${message.sender === window.currentUser?.did ? 'sent' : 'received'}`;
-  messageElement.dataset.id = message.id;
+  const isFromCurrentUser = message.fromCurrentUser;
   
-  const time = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  // Apply different classes based on who sent the message
+  messageElement.className = isFromCurrentUser ? 'chat-message user-message' : 'chat-message friend-message';
   
   messageElement.innerHTML = `
-    <div class="message-content">${message.text}</div>
-    <div class="message-meta">
-      <span class="message-time">${time}</span>
-      ${message.sender === window.currentUser?.did ? `<span class="message-status">${message.status || 'sent'}</span>` : ''}
+    <div class="message-content">
+      <div class="message-text">${message.content}</div>
+      <div class="message-time">${new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
     </div>
   `;
   
   messagesContainer.appendChild(messageElement);
   
-  // Scroll to bottom if requested
-  if (shouldScroll) {
+  // Scroll to bottom if not skipped
+  if (!skipScroll) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 }
@@ -409,6 +443,12 @@ function addFriendMessageToUI(message, shouldScroll = true) {
 async function sendFriendMessage() {
   try {
     const messageInput = document.getElementById('friend-message-input');
+    
+    if (!messageInput) {
+      console.error('Message input element not found');
+      return;
+    }
+    
     const text = messageInput.value.trim();
     
     if (!text || !activeFriendDid) return;
@@ -420,7 +460,15 @@ async function sendFriendMessage() {
     const result = await window.electronAPI.sendFriendMessage(activeFriendDid, text);
     
     if (result.success) {
-      // Message will be added to UI via the onNewFriendMessage listener
+      // Create a UI message from the server response
+      const uiMessage = {
+        content: text,
+        timestamp: Date.now(),
+        fromCurrentUser: true
+      };
+      
+      // Add to UI immediately
+      addFriendMessageToUI(uiMessage);
     } else {
       console.error('Failed to send message:', result.error);
       alert(`Failed to send message: ${result.error}`);
@@ -432,6 +480,4 @@ async function sendFriendMessage() {
 }
 
 // Make function available globally instead of using ES modules
-window.FriendsPage = {
-  initializeFriendsPage: initializeFriendsPage
-};
+window.FriendsPage = { initializeFriendsPage: initializeFriendsPage };

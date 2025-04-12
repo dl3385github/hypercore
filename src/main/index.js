@@ -995,10 +995,40 @@ function setupIpcHandlers() {
     }
   });
   
+  ipcMain.handle('get-pending-friend-requests', async (event) => {
+    try {
+      let pendingRequests = [];
+      
+      // Load pending requests from storage
+      if (fs.existsSync(FRIEND_REQUESTS_PATH)) {
+        const storedRequests = JSON.parse(fs.readFileSync(FRIEND_REQUESTS_PATH, 'utf8'));
+        
+        // Filter for pending requests (not accepted or rejected)
+        pendingRequests = storedRequests.filter(request => 
+          request.status === 'pending' || !request.status
+        );
+        
+        console.log(`Found ${pendingRequests.length} pending friend requests`);
+        return pendingRequests;
+      }
+      
+      return [];
+    } catch (error) {
+      console.error('Error retrieving pending friend requests:', error);
+      return [];
+    }
+  });
+  
   ipcMain.handle('create-friend-request', async (event, targetDid) => {
     try {
       console.log('Handling create friend request for:', targetDid);
       const result = await createFriendRequest(targetDid);
+      
+      // If the request was created successfully, save it to storage
+      if (result.success) {
+        saveFriendRequestsToStorage();
+      }
+      
       return result;
     } catch (error) {
       console.error('Error in create-friend-request handler:', error);
@@ -1518,6 +1548,8 @@ function updateAuthState(user) {
   if (user && user.did) {
     // Load friends data
     loadFriendsFromStorage();
+    // Load friend requests
+    loadFriendRequestsFromStorage();
   } else {
     // Clear friends data when logged out
     friends.clear();
@@ -1661,6 +1693,9 @@ async function handleIncomingFriendRequest(request) {
     
     // Store the request
     friendRequests.set(request.id, request);
+    
+    // Save to persistent storage
+    saveFriendRequestsToStorage();
     
     // Notify the renderer
     if (mainWindow) {
@@ -2025,6 +2060,86 @@ function getFriends() {
       success: false,
       error: error.message || 'Failed to get friends'
     };
+  }
+}
+
+// Get all pending friend requests for the current user
+function getPendingFriendRequests() {
+  try {
+    if (!currentUser || !currentUser.did) {
+      throw new Error('You must be logged in to view friend requests');
+    }
+    
+    // Filter requests where the current user is the recipient and status is pending
+    const pendingRequests = Array.from(friendRequests.values())
+      .filter(request => request.to === currentUser.did && request.status === 'pending')
+      .map(request => ({
+        id: request.id,
+        from: request.from,
+        timestamp: request.timestamp,
+        status: request.status
+      }));
+    
+    console.log(`Found ${pendingRequests.length} pending friend requests`);
+    
+    return {
+      success: true,
+      requests: pendingRequests
+    };
+  } catch (error) {
+    console.error('Error getting pending friend requests:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to get friend requests'
+    };
+  }
+}
+
+// Save friend requests to storage
+function saveFriendRequestsToStorage() {
+  try {
+    if (!currentUser || !currentUser.did) return;
+    
+    // Convert friendRequests map to an array for storage
+    const requestsArray = Array.from(friendRequests.values())
+      .filter(request => request.to === currentUser.did || request.from === currentUser.did);
+    
+    // Save to a file in the user data directory
+    const requestsPath = path.join(app.getPath('userData'), `friend_requests_${currentUser.did}.json`);
+    fs.writeFileSync(requestsPath, JSON.stringify(requestsArray, null, 2));
+    
+    console.log('Friend requests saved to storage');
+  } catch (error) {
+    console.error('Error saving friend requests to storage:', error);
+  }
+}
+
+// Load friend requests from storage
+function loadFriendRequestsFromStorage() {
+  try {
+    if (!currentUser || !currentUser.did) return;
+    
+    const requestsPath = path.join(app.getPath('userData'), `friend_requests_${currentUser.did}.json`);
+    
+    if (!fs.existsSync(requestsPath)) {
+      console.log('No friend requests file found, starting with empty requests list');
+      return;
+    }
+    
+    const requestsData = fs.readFileSync(requestsPath, 'utf8');
+    const requestsArray = JSON.parse(requestsData);
+    
+    // Clear existing requests
+    friendRequests.clear();
+    
+    // Load requests
+    for (const request of requestsArray) {
+      friendRequests.set(request.id, request);
+    }
+    
+    console.log(`Loaded ${friendRequests.size} friend requests from storage`);
+  } catch (error) {
+    console.error('Error loading friend requests from storage:', error);
   }
 }
 
